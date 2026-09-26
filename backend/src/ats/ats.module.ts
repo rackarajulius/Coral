@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AtsController, CandidateOffersController } from './ats.controller';
 import { CandidateNotesService } from './candidate-notes.service';
+import { CandidateReactionsService } from './candidate-reactions.service';
 import { OffersService } from './offers.service';
 import { OfferSignalsService } from './offer-signals.service';
 import { EmailTemplatesService } from './email-templates.service';
@@ -16,7 +17,14 @@ import { EmailModule } from '../services/email/email.module';
 @Module({
   imports: [NotificationsModule, EmailModule],
   controllers: [AtsController, CandidateOffersController],
-  providers: [CandidateNotesService, OffersService, OfferSignalsService, EmailTemplatesService, ScorecardsService],
-  exports: [OffersService],
+  providers: [
+    CandidateNotesService,
+    CandidateReactionsService,
+    OffersService,
+    OfferSignalsService,
+    EmailTemplatesService,
+    ScorecardsService,
+  ],
+  exports: [OffersService, CandidateReactionsService],
 })
 export class AtsModule {}

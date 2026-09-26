@@ -20,8 +20,9 @@ import { CandidatesListView } from "@/components/employer-dashboard/candidates/C
 import { CandidateKanbanView } from "@/components/employer-dashboard/candidates/CandidateKanbanView";
 import { cn } from "@/lib/utils";
 import { STAGES, STAGES_BEFORE_INTERVIEW, type Candidate, type Stage } from "@/data/employer/Candidates/types";
-import { useCandidateStore } from "@/stores/candidateStore";
+import { useCandidateStore, setStagePersistedListener } from "@/stores/candidateStore";
 import { useMySeat } from "@/hooks/useMySeat";
+import { useBoardSync } from "@/hooks/useBoardSync";
 import { getPipelineBoard } from "@/lib/api/employerCandidates";
 import { getTagsInUse } from "@/lib/api/ats";
 import { DRAWER_CLOSE_MS } from "@/components/employer-dashboard/candidates/candidateUtils";
@@ -44,6 +45,25 @@ export default function Candidates() {
    */
   const { can } = useMySeat();
   const canMove = can("candidates:write");
+
+  /**
+   * Keeps this board in step with the rest of the team.
+   *
+   * Two recruiters and a hiring manager work the same pipeline, and a move
+   * one of them made used to be invisible to the others until a refresh — so
+   * two people would pick up the same candidate, or argue with a board that
+   * had already changed.
+   */
+  const { announce } = useBoardSync();
+
+  /**
+   * Announce a stage move once the server has it, not when the card moves.
+   * The store calls this from the one place every stage write funnels through.
+   */
+  useEffect(() => {
+    setStagePersistedListener(() => announce("pipeline"));
+    return () => setStagePersistedListener(null);
+  }, [announce]);
 
   // ── Local UI state ────────────────────────────────────────────────────────
   const [drawerOpen, setDrawerOpen] = useState(false);

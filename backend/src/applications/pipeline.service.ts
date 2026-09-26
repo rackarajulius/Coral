@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PipelineStage, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
+import { CandidateReactionsService } from '../ats/candidate-reactions.service';
 import { User } from '../common/types/user.types';
 import {
   PIPELINE_LADDER,
@@ -54,6 +55,7 @@ export class PipelineService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly companyContext: CompanyContextService,
+    private readonly reactions: CandidateReactionsService,
   ) {}
 
   async list(actor: User, query: PipelineQueryDto = {}) {
@@ -199,7 +201,7 @@ export class PipelineService {
     ]);
 
     const total = counted[0]?.total ?? 0;
-    const candidates = await this.hydrate(keys, companyId);
+    const candidates = await this.hydrate(keys, companyId, actor.id);
 
     return {
       candidates,
@@ -324,7 +326,7 @@ export class PipelineService {
   }
 
   /** Fills in the page's rows from whichever table each one came from. */
-  private async hydrate(keys: PipelineKey[], companyId: string | null) {
+  private async hydrate(keys: PipelineKey[], companyId: string | null, viewerId: string) {
     const appliedIds = keys.filter((k) => k.source === 'applied').map((k) => k.id);
     const sourcedIds = keys.filter((k) => k.source === 'sourced').map((k) => k.id);
 
@@ -380,9 +382,28 @@ export class PipelineService {
     const tagsFor = new Map<string, string[]>();
     for (const t of tagRows) tagsFor.set(t.candidateId, [...(tagsFor.get(t.candidateId) ?? []), t.label]);
 
+    /**
+     * The team's quick verdicts, for the same reason as the tags: one query
+     * for the page, because a badge meant to be glanced at cannot cost a
+     * request per card.
+     */
+    const reactionsFor = companyId
+      ? await this.reactions.forCandidates(companyId, people, viewerId)
+      : {};
+
     const byId = new Map<string, unknown>();
-    for (const a of applications) byId.set(a.id, { ...this.shapeApplied(a), tags: tagsFor.get(a.applicant.id) ?? [] });
-    for (const i of items) byId.set(i.id, { ...this.shapeSourced(i), tags: tagsFor.get(i.candidateId) ?? [] });
+    for (const a of applications)
+      byId.set(a.id, {
+        ...this.shapeApplied(a),
+        tags: tagsFor.get(a.applicant.id) ?? [],
+        reactions: reactionsFor[a.applicant.id] ?? null,
+      });
+    for (const i of items)
+      byId.set(i.id, {
+        ...this.shapeSourced(i),
+        tags: tagsFor.get(i.candidateId) ?? [],
+        reactions: reactionsFor[i.candidateId] ?? null,
+      });
 
     // Kept in the order the union decided, not the order the fetches returned.
     return keys.map((k) => byId.get(k.id)).filter(Boolean);

@@ -75,6 +75,11 @@ export interface MySeat {
   /** Null for a platform admin, who is not a company member at all. */
   role: CompanyRole | null;
   status: string | null;
+  /**
+   * Their own company, so the browser can join the right board channel.
+   * Null for a platform admin or a sole operator with no company.
+   */
+  companyId: string | null;
   capabilities: string[];
 }
 

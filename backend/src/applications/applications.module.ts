@@ -7,9 +7,12 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { StorageModule } from '../storage/storage.module';
 // For SlackService: a new application posts to the company's channel.
 import { IntegrationsModule } from '../integrations/integrations.module';
+// For CandidateReactionsService: the board shows the team's quick verdicts
+// alongside each candidate.
+import { AtsModule } from '../ats/ats.module';
 
 @Module({
-  imports: [NotificationsModule, StorageModule, IntegrationsModule],
+  imports: [NotificationsModule, StorageModule, IntegrationsModule, AtsModule],
   controllers: [ApplicationsController],
   providers: [ApplicationsService, MatchScoreService, PipelineService],
   exports: [ApplicationsService, MatchScoreService, PipelineService],

@@ -27,6 +27,23 @@ const isSourced = (id: string) => id.startsWith(SOURCED_PREFIX);
  * lives on their shortlist card. When the two are linked the server moves both,
  * so it does not matter which board the recruiter was looking at.
  */
+/**
+ * Told when a stage write has actually landed on the server.
+ *
+ * The board tells the rest of the team a move happened, and it has to do that
+ * **after** the write resolves. Announcing optimistically would have the other
+ * browsers refetch before the write arrived, read the old stage, and then sit
+ * on it — a sync that reliably shows stale data is worse than none.
+ *
+ * A module-level hook rather than a store field: this store is used outside
+ * React too, and every stage write already funnels through one function.
+ */
+let onStagePersisted: (() => void) | null = null;
+
+export function setStagePersistedListener(fn: (() => void) | null) {
+  onStagePersisted = fn;
+}
+
 function persistStage(id: string, stage: Stage) {
   // The server's reason when it gave one — "Your role (Viewer) does not allow
   // this" is an answer; "didn't persist" sends people looking for a bug.
@@ -36,13 +53,17 @@ function persistStage(id: string, stage: Stage) {
         (e instanceof Error && e.message) || "The move is shown locally but didn't persist.",
     });
 
+  const landed = () => onStagePersisted?.();
+
   if (isSourced(id)) {
     // WITHDRAWN is the candidate's own act; the server refuses it here.
     if (stage === "Withdrawn") return;
-    moveShortlistItemStage(id.slice(SOURCED_PREFIX.length), stage.toUpperCase() as ShortlistStage).catch(failed);
+    moveShortlistItemStage(id.slice(SOURCED_PREFIX.length), stage.toUpperCase() as ShortlistStage)
+      .then(landed)
+      .catch(failed);
     return;
   }
-  updateApplicantStage(id, stage).catch(failed);
+  updateApplicantStage(id, stage).then(landed).catch(failed);
 }
 
 /*

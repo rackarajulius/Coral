@@ -33,3 +33,10 @@ dist-ssr
 .env.local
 .env.*.local
 !.env.example
+
+# TypeScript incremental build cache
+#
+# Machine-local and rewritten by every typecheck. It also survives deleteOutDir,
+# so a committed one can make a fresh clone build from someone else's stale
+# cache — which has produced a mysteriously empty dist here before.
+*.tsbuildinfo

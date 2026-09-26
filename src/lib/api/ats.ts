@@ -65,6 +65,36 @@ export const addCandidateTag = (candidateId: string, label: string) =>
 export const removeCandidateTag = (tagId: string) =>
   req<{ id: string }>(`/tags/${tagId}`, { method: "DELETE" });
 
+/* -------------------------------- reactions ------------------------------- */
+
+export type ReactionValue = 'UP' | 'DOWN';
+
+/**
+ * The team's quick verdicts on one candidate.
+ *
+ * Counts and names, never a total. Who thought what is the useful part — "4
+ * up, 1 down" only means something once you know the one down was the engineer
+ * who ran the technical round.
+ */
+export interface CandidateReactions {
+  up: number;
+  down: number;
+  upBy: string[];
+  downBy: string[];
+  /** This viewer's own reaction, so the UI can show it as chosen. */
+  mine: ReactionValue | null;
+}
+
+export const getCandidateReactions = (candidateId: string) =>
+  req<CandidateReactions>(`/candidates/${candidateId}/reactions`);
+
+/** `null` takes the reaction back. One per person, so this replaces. */
+export const setCandidateReaction = (candidateId: string, value: ReactionValue | null) =>
+  req<CandidateReactions>(`/candidates/${candidateId}/reaction`, {
+    method: 'PUT',
+    body: JSON.stringify({ value }),
+  });
+
 /** Labels the company already uses, most-used first — for autocomplete. */
 export const getTagsInUse = () => req<{ label: string; count: number }[]>("/tags");
 

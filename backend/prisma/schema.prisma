@@ -113,6 +113,8 @@ model User {
   candidateNotes      CandidateNote[] @relation("CandidateNotes")
   authoredNotes       CandidateNote[] @relation("CandidateNoteAuthor")
   candidateTags       CandidateTag[]  @relation("CandidateTags")
+  candidateReactions  CandidateReaction[] @relation("CandidateReactions")
+  givenReactions      CandidateReaction[] @relation("CandidateReactionAuthor")
   spaceMemberships    SpaceMember[]   @relation("SpaceMemberships")
   /// How this person appears to someone whose profile they viewed:
   /// 'named' | 'company' | 'private'. Null means the role's default —
@@ -996,6 +998,7 @@ model Company {
   candidateNotes CandidateNote[]
   profileImpressions ProfileImpression[]
   candidateTags  CandidateTag[]
+  candidateReactions CandidateReaction[]
   posts          Post[]
   tides          Tide[]
   offers         Offer[]
@@ -2169,6 +2172,45 @@ model CandidateTag {
   @@unique([companyId, candidateId, label])
   @@index([companyId, label])
   @@map("candidate_tags")
+}
+
+/// A team member's quick verdict on a candidate: thumbs up or down.
+///
+/// For triage. A hiring manager looking at twenty cards can say "this one" and
+/// "not this one" faster than they can write a sentence, and a recruiter can see
+/// the shape of the team's opinion at a glance.
+///
+/// One per person per candidate, changeable and removable — it is a current
+/// opinion, not a log of what someone once thought. Company-scoped like notes
+/// and tags, and never shown to the candidate.
+///
+/// Deleted with the person who gave it (Cascade, unlike CandidateNote which
+/// keeps an author's name): a note's content still means something after its
+/// author leaves, but a tally should not count votes from people who are gone.
+model CandidateReaction {
+  id          String   @id @default(uuid())
+  companyId   String   @map("company_id")
+  candidateId String   @map("candidate_id")
+  userId      String   @map("user_id")
+  value       CandidateReactionValue
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  candidate User    @relation("CandidateReactions", fields: [candidateId], references: [id], onDelete: Cascade)
+  user      User    @relation("CandidateReactionAuthor", fields: [userId], references: [id], onDelete: Cascade)
+
+  /// One current opinion per person, which is what makes this a vote rather
+  /// than a comment thread.
+  @@unique([companyId, candidateId, userId])
+  @@index([companyId, candidateId])
+  @@map("candidate_reactions")
+}
+
+/// Two values, deliberately. A middle option is where triage goes to die.
+enum CandidateReactionValue {
+  UP
+  DOWN
 }
 
 /// An offer of employment.

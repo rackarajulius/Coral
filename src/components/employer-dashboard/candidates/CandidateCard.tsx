@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Eye, MessageSquare, X, Sparkles, Calendar } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ReactionButtons } from "./ReactionButtons";
 import type { Candidate } from "@/data/employer/Candidates/types";
 import { formatRelative, matchTone } from "./candidateUtils";
 
@@ -82,6 +83,12 @@ export function CandidateCard({
           <Calendar className="h-3 w-3" /> {formatRelative(c.appliedDate)}
         </span>
         <span className="truncate">{c.location}</span>
+      </div>
+
+      {/* Triage, where the triage happens. Counts come with the board, so
+          showing them costs no request. */}
+      <div className="mt-2 flex justify-end">
+        <ReactionButtons candidateId={c.applicantId ?? c.id} initial={c.reactions} size="xs" />
       </div>
 
       {/* Hover quick actions */}

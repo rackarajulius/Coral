@@ -59,6 +59,19 @@ export interface Candidate {
    * goes through the platform.
    */
   source?: "applied" | "sourced";
+  /**
+   * The team's quick verdicts, fetched with the board rather than per card.
+   *
+   * Counts and names, never a total — an average would launder a handful of
+   * opinions into something that reads like a measurement.
+   */
+  reactions?: {
+    up: number;
+    down: number;
+    upBy: string[];
+    downBy: string[];
+    mine: "UP" | "DOWN" | null;
+  } | null;
   /** Applicant's userId — present for real applicants; powers "View full profile". */
   applicantId?: string;
   /**

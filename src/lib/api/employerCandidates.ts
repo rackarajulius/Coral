@@ -225,6 +225,8 @@ interface BackendPipelineRow {
   resumeUrl?: string;
   /** The company's tags on this person. Absent from older servers. */
   tags?: string[];
+  /** The team's quick verdicts, counted with the board. */
+  reactions?: Candidate["reactions"];
 }
 
 export interface PipelineQuery {
@@ -286,8 +288,9 @@ const stageToId = (stage: Stage): string => stage.toUpperCase();
 function toPipelineCandidate(r: BackendPipelineRow): Candidate {
   return {
     ...r,
-    // The company's own tags, as the server sent them.
+    // The company's own tags and quick verdicts, as the server sent them.
     tags: r.tags ?? [],
+    reactions: r.reactions ?? null,
     // Not sent by the server, and not invented here. The drawer has honest
     // empty states for all of these; filling them with guesses is how a board
     // starts asserting things nobody measured.

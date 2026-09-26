@@ -7,6 +7,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -34,6 +35,8 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { User } from '../common/types/user.types';
 import { CompanyCapabilityGuard, RequiresCapability } from '../company/company-capability.guard';
 import { CandidateNotesService } from './candidate-notes.service';
+import { CandidateReactionsService } from './candidate-reactions.service';
+import { ReactionDto } from './dto/reaction.dto';
 import { OffersService } from './offers.service';
 import { OfferSignalsService } from './offer-signals.service';
 import { EmailTemplatesService } from './email-templates.service';
@@ -197,6 +200,7 @@ export class BulkSendDto {
 export class AtsController {
   constructor(
     private readonly notes: CandidateNotesService,
+    private readonly reactions: CandidateReactionsService,
     private readonly offers: OffersService,
     private readonly offerSignals: OfferSignalsService,
     private readonly templates: EmailTemplatesService,
@@ -239,6 +243,31 @@ export class AtsController {
   @Delete('notes/:noteId')
   async deleteNote(@CurrentUser() user: User, @Param('noteId', ParseUUIDPipe) id: string) {
     return { success: true, data: await this.notes.remove(user, id) };
+  }
+
+  /* -------------------------------- reactions ----------------------------- */
+
+  @RequiresCapability('candidates:read')
+  @Get('candidates/:candidateId/reactions')
+  async listReactions(@CurrentUser() user: User, @Param('candidateId', ParseUUIDPipe) id: string) {
+    return { success: true, data: await this.reactions.forCandidate(user, id) };
+  }
+
+  /**
+   * A thumbs up or down, or null to take it back.
+   *
+   * Takes `candidates:comment`, not `candidates:write` — a reaction is an
+   * opinion offered, which is exactly what the comment-only seat is for. PUT
+   * because there is one per person: reacting again replaces.
+   */
+  @RequiresCapability('candidates:comment')
+  @Put('candidates/:candidateId/reaction')
+  async setReaction(
+    @CurrentUser() user: User,
+    @Param('candidateId', ParseUUIDPipe) id: string,
+    @Body() dto: ReactionDto,
+  ) {
+    return { success: true, data: await this.reactions.set(user, id, dto.value ?? null) };
   }
 
   /* ---------------------------------- tags -------------------------------- */

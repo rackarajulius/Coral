@@ -73,20 +73,38 @@ export class CompanyMembersService {
    */
   async mySeat(user: User) {
     if (user.role === UserRole.ADMIN) {
-      return { role: null, status: null, capabilities: [...CAPABILITIES] };
+      return { role: null, status: null, companyId: null, capabilities: [...CAPABILITIES] };
     }
 
     const membership = await this.companyContext.membershipFor(user.id);
     if (!membership) {
-      return { role: CompanyRole.OWNER, status: CompanyMemberStatus.ACTIVE, capabilities: [...CAPABILITIES] };
+      return {
+        role: CompanyRole.OWNER,
+        status: CompanyMemberStatus.ACTIVE,
+        companyId: null,
+        capabilities: [...CAPABILITIES],
+      };
     }
     if (membership.status !== CompanyMemberStatus.ACTIVE) {
       // Suspended or removed: the guard refuses everything, so offer nothing.
-      return { role: membership.role, status: membership.status, capabilities: [] };
+      return {
+        role: membership.role,
+        status: membership.status,
+        companyId: null,
+        capabilities: [],
+      };
     }
     return {
       role: membership.role,
       status: membership.status,
+      /**
+       * Their own company, so the browser can join the right board channel.
+       *
+       * Not a secret — it is the company they are a member of — and the
+       * channel it names carries no candidate data, only "something
+       * changed, refetch".
+       */
+      companyId: membership.companyId,
       capabilities: ROLE_CAPABILITIES[membership.role],
     };
   }

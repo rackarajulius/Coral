@@ -11,6 +11,7 @@ import { AccommodationNotes, IntegrityNotes, ScreenScorecard } from "./ScreenSco
 import { InterviewScorecardBlock } from "./InterviewScorecardBlock";
 import { CandidateNotesPanel } from "./CandidateNotesPanel";
 import { OutreachHistoryBlock } from "./OutreachHistoryBlock";
+import { ReactionButtons } from "./ReactionButtons";
 import { OfferBlock } from "./OfferBlock";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -179,6 +180,15 @@ export function CandidateDetailPanel({
             <span className="flex items-center gap-1.5 truncate"><Building2 className="h-3.5 w-3.5" /> {c.currentRole} · {c.currentCompany}</span>
             <span className="flex items-center gap-1.5 truncate"><MapPin className="h-3.5 w-3.5" /> {c.location}</span>
           </div>
+
+          {/* The team's quick verdicts, and this reviewer's own. Hovering
+              names who thought what, which is the part that helps. */}
+          {c.applicantId && (
+            <div className="mt-4 flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">Team read:</span>
+              <ReactionButtons candidateId={c.applicantId} initial={c.reactions} />
+            </div>
+          )}
 
           {/* Quick actions */}
           <div className="mt-4 flex flex-wrap gap-2">
