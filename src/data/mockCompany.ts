@@ -1,0 +1,115 @@
+export const mockCompany = {
+  name: "NovaPay Technologies",
+  tagline: "Building the future of fintech payments",
+  industry: "Financial Technology",
+  size: "500–1,000 employees",
+  headquarters: "San Francisco, CA",
+  website: "https://novapay.io",
+  founded: 2017,
+  rating: 4.4,
+  reviewCount: 328,
+  growthRate: "45%",
+  officeCount: 6,
+  overview: `NovaPay Technologies is a leading fintech company revolutionizing the way businesses and consumers handle digital payments. Founded in 2017, we've grown from a small startup to a global force processing over $12 billion in transactions annually across 40+ countries.
+
+Our platform combines cutting-edge AI, blockchain technology, and intuitive design to create seamless payment experiences that empower businesses of all sizes to thrive in the digital economy.`,
+  mission: "To democratize financial technology and make seamless, secure payments accessible to every business on the planet.",
+  vision: "A world where financial barriers no longer limit business potential.",
+  values: [
+    { title: "Innovation First", description: "We push boundaries and challenge the status quo every day." },
+    { title: "Customer Obsession", description: "Every decision starts with how it impacts our customers." },
+    { title: "Radical Transparency", description: "We share openly, communicate honestly, and build trust." },
+    { title: "Inclusive Growth", description: "We grow together, ensuring every voice is heard and valued." },
+  ],
+  benefits: {
+    "Health & Wellness": [
+      { icon: "Heart", label: "Premium medical, dental & vision" },
+      { icon: "Brain", label: "Mental health programs & therapy stipend" },
+      { icon: "Dumbbell", label: "Gym membership & wellness allowance" },
+    ],
+    "Work Flexibility": [
+      { icon: "Home", label: "Remote-first culture" },
+      { icon: "Clock", label: "Flexible working hours" },
+      { icon: "Plane", label: "Work from anywhere — 4 weeks/year" },
+    ],
+    "Financial": [
+      { icon: "DollarSign", label: "Competitive salary & bonuses" },
+      { icon: "TrendingUp", label: "Equity & stock options" },
+      { icon: "PiggyBank", label: "401(k) with 6% match" },
+    ],
+    "Growth": [
+      { icon: "GraduationCap", label: "$5,000 annual learning budget" },
+      { icon: "Mic", label: "Conference attendance & speaking" },
+      { icon: "Users", label: "Internal mentorship program" },
+    ],
+  },
+  evp: [
+    { icon: "Rocket", title: "Innovation-Driven Culture", description: "Ship fast, experiment often, and build products that redefine industries." },
+    { icon: "TrendingUp", title: "Fast Career Growth", description: "Clear promotion paths with bi-annual reviews and stretch opportunities." },
+    { icon: "Globe", title: "Global Impact", description: "Your work touches millions of users across 40+ countries worldwide." },
+    { icon: "Home", title: "Remote-Friendly", description: "Work from anywhere with async-first collaboration and flexible schedules." },
+    { icon: "GraduationCap", title: "Learning & Development", description: "$5K annual stipend, internal tech talks, and conference sponsorships." },
+    { icon: "Heart", title: "People-First Culture", description: "Genuine care for well-being with comprehensive benefits and support." },
+  ],
+  culture: {
+    description: "At NovaPay, culture isn't just a page on our website — it's how we build, collaborate, and grow together. We believe diverse perspectives fuel better products.",
+    philosophy: "We operate with high autonomy and high accountability. Teams own their outcomes end-to-end, with the freedom to innovate and the responsibility to deliver.",
+    collaboration: "Cross-functional squads, weekly demos, monthly hackathons, and quarterly offsites keep our teams aligned and inspired.",
+  },
+  testimonials: [
+    {
+      name: "Sarah Chen",
+      role: "Senior Software Engineer",
+      tenure: "3 years",
+      quote: "Working at NovaPay accelerated my growth faster than any company I've joined. The engineering culture here is world-class — you're surrounded by brilliant people who genuinely want to help you succeed.",
+      avatar: "SC",
+    },
+    {
+      name: "Marcus Johnson",
+      role: "Product Manager",
+      tenure: "2 years",
+      quote: "The autonomy and trust leadership gives us is incredible. I've launched three major products in two years and my ideas are always valued, regardless of seniority.",
+      avatar: "MJ",
+    },
+    {
+      name: "Priya Patel",
+      role: "Design Lead",
+      tenure: "4 years",
+      quote: "NovaPay truly puts design at the center of product development. I've never worked at a company where designers have this much influence on strategy.",
+      avatar: "PP",
+    },
+  ],
+  diversity: {
+    stats: [
+      { value: "35%", label: "Women in engineering" },
+      { value: "40", label: "Nationalities represented" },
+      { value: "6", label: "Employee resource groups" },
+      { value: "4", label: "Global offices" },
+    ],
+    commitment: "We're committed to building a workforce that reflects the diversity of the communities we serve. Our D&I initiatives include unconscious bias training, inclusive hiring practices, and active employee resource groups.",
+  },
+  ratings: {
+    overall: 4.4,
+    categories: [
+      { label: "Work-Life Balance", score: 4.3 },
+      { label: "Compensation & Benefits", score: 4.5 },
+      { label: "Career Growth", score: 4.6 },
+      { label: "Management", score: 4.1 },
+      { label: "Culture & Values", score: 4.7 },
+    ],
+  },
+  jobs: [
+    { title: "Senior Backend Engineer", location: "Toronto, Canada", type: "Full-time", salary: "$150K – $200K", posted: "2 days ago", department: "Engineering" },
+    { title: "Product Designer", location: "Remote", type: "Full-time", salary: "$120K – $160K", posted: "5 days ago", department: "Design" },
+    { title: "Data Scientist", location: "San Francisco, CA", type: "Full-time", salary: "$140K – $190K", posted: "1 week ago", department: "Data" },
+    { title: "DevOps Engineer", location: "London, UK", type: "Full-time", salary: "£80K – £110K", posted: "3 days ago", department: "Infrastructure" },
+    { title: "Marketing Manager", location: "New York, NY", type: "Full-time", salary: "$110K – $145K", posted: "1 day ago", department: "Marketing" },
+  ],
+  similarCompanies: [
+    { name: "Stripe", industry: "Fintech", jobs: 42 },
+    { name: "Square", industry: "Fintech", jobs: 38 },
+    { name: "Plaid", industry: "Fintech", jobs: 25 },
+    { name: "Wise", industry: "Fintech", jobs: 31 },
+    { name: "Adyen", industry: "Payments", jobs: 19 },
+  ],
+};

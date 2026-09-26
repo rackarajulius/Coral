@@ -1,0 +1,11 @@
+-- A removed member is recorded, not deleted.
+--
+-- Records stay keyed to the user who created them, so a company's visibility is
+-- the union of its members' ids. Hard-deleting a membership therefore had two
+-- effects nobody would want: the company lost the jobs, threads and interviews
+-- that person had created, and the person kept them — their own id is still the
+-- fallback scope once they belong to no company.
+--
+-- Keeping the row as REMOVED lets the company retain everything the person did
+-- on its behalf, without granting them any further access.
+ALTER TYPE "CompanyMemberStatus" ADD VALUE IF NOT EXISTS 'REMOVED';

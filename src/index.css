@@ -1,0 +1,517 @@
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ================================
+   Animations
+================================ */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* ================================
+   Base Layer – Design Tokens
+================================ */
+@layer base {
+  html {
+    scrollbar-gutter: stable;
+  }
+  /* While a Radix dialog locks scroll (body[data-scroll-locked]), release the
+     reserved gutter so the modal dim spans the full width. With `stable`,
+     react-remove-scroll adds no body padding, so no "scrollbar space" strip
+     appears when the modal opens. */
+  html:has(body[data-scroll-locked]) {
+    scrollbar-gutter: auto;
+  }
+  :root {
+    /* Core colors */
+    /* Pure white page background in light mode (product rule: no grey pages). */
+    --background: 0 0% 100%;
+    --foreground: 220 40% 13%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 40% 13%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 40% 13%;
+
+    --primary: 220 45% 18%; /* Navy */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 20% 96%;
+    --secondary-foreground: 220 40% 13%;
+
+    --muted: 210 15% 94%;
+    --muted-foreground: 220 10% 45%;
+
+    --accent: 6 85% 67%; /* Coral */
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 220 15% 90%;
+    --input: 220 15% 90%;
+    --ring: 220 45% 18%;
+
+    --radius: 0.75rem;
+
+    --primary-soft: 220 45% 90%;
+
+    /* Auth tokens */
+    --auth-bg: 210 20% 95%;
+    --auth-surface: 0 0% 100%;
+    --auth-input: 210 20% 98%;
+    --auth-border: 214 32% 91%;
+    --auth-shadow: 0 8px 32px -8px hsl(222 47% 11% / 0.08), 0 2px 8px -2px hsl(222 47% 11% / 0.04);
+
+    /* Brand tokens */
+    --coral: 6 85% 67%;
+    --coral-light: 6 85% 75%;
+    --coral-dark: 6 85% 55%;
+
+    /**
+     * Links, hashtags and mentions — blue.
+     *
+     * Deliberately not the brand coral. Coral is what this product uses for
+     * the thing to press: buttons, the active nav row, the Join pill. A link
+     * inside a sentence is a different promise, and painting both the same
+     * made ordinary body text read as a row of buttons. Blue is also the one
+     * colour readers already take to mean "link" without being told.
+     *
+     * 5.98:1 on white, past the 4.5:1 body-size text needs.
+     */
+    --link: 217 91% 45%;
+
+    --navy: 220 45% 18%;
+    --navy-light: 220 35% 30%;
+    --navy-dark: 220 50% 12%;
+
+    /* Gradients */
+    --gradient-hero: linear-gradient(
+      135deg,
+      hsl(var(--navy)) 0%,
+      hsl(var(--navy-light)) 100%
+    );
+
+    --gradient-accent: linear-gradient(
+      135deg,
+      hsl(var(--coral)) 0%,
+      hsl(var(--coral-dark)) 100%
+    );
+
+    /* Shadows */
+    --shadow-soft: 0 4px 20px -4px hsl(var(--navy) / 0.08);
+    --shadow-card: 0 2px 12px -2px hsl(var(--navy) / 0.06);
+    --shadow-elevated: 0 12px 40px -8px hsl(var(--navy) / 0.12);
+
+    /* Optional neumorphism */
+    --neumorphic-light: 0 0% 100%;
+    --neumorphic-dark: 220 15% 85%;
+
+    /* Typography */
+    --font-display: 'IBM Plex Sans', sans-serif;
+    --font-body: 'IBM Plex Sans', sans-serif;
+
+    --auth-bg: 222 47% 4%;
+    --auth-surface: 222 47% 8%;
+    --auth-input: 222 47% 10%;
+    --auth-border: 217 33% 15%;
+    --auth-shadow: 0 8px 32px -8px hsl(0 0% 0% / 0.3), 0 2px 8px -2px hsl(0 0% 0% / 0.2);
+
+    /* Sidebar */
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  /* Dark mode — warm neutral palette inspired by Claude's workspace */
+  .dark {
+    --background: 30 8% 11%;
+    --foreground: 40 18% 92%;
+
+    --card: 32 8% 15%;
+    --card-foreground: 40 18% 92%;
+
+    --popover: 32 8% 15%;
+    --popover-foreground: 40 18% 92%;
+
+    --primary: 6 85% 67%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 32 7% 20%;
+    --secondary-foreground: 40 18% 92%;
+
+    --muted: 32 7% 17%;
+    --muted-foreground: 36 10% 64%;
+
+    /* Lifted on a dark ground, where the light-mode blue reads as murky
+       navy: this one measures 6.72:1 against the page. */
+    --link: 213 94% 68%;
+
+    --accent: 6 85% 67%;
+    --accent-foreground: 0 0% 100%;
+
+    --border: 32 8% 22%;
+    --input: 32 8% 22%;
+    --ring: 6 85% 67%;
+
+    /* Sidebar (shadcn sidebar token set) — warm dark to match */
+    --sidebar-background: 30 8% 9%;
+    --sidebar-foreground: 40 16% 88%;
+    --sidebar-primary: 6 85% 67%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 32 7% 18%;
+    --sidebar-accent-foreground: 40 18% 92%;
+    --sidebar-border: 32 8% 20%;
+    --sidebar-ring: 6 85% 67%;
+  }
+
+  /* Global resets */
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--font-body);
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+  }
+}
+
+/* ================================
+   Employer Dashboard overrides
+================================ */
+[data-employer] {
+  --primary: 25 95% 61%;
+  --primary-foreground: 0 0% 100%;
+  --ring: 25 95% 61%;
+}
+
+[data-employer] button,
+[data-employer] a[class*="inline-flex"] {
+  border-radius: 9999px !important;
+}
+
+/* A button that is a list row, not a control.
+ *
+ * The pill rule above is `!important` at specificity (0,1,1), so no Tailwind
+ * utility can turn it off — not even `!rounded-none`, which is only (0,1,0).
+ * This is (0,2,0), so it wins.
+ *
+ * The radius applies at rest too, but nothing is drawn there — no border, no
+ * background — so it is only visible once hover paints the panel. */
+[data-employer] .row-tile {
+  border-radius: 0.625rem !important;
+}
+
+/* ================================
+   Components
+================================ */
+@layer components {
+  .nav-link {
+    @apply relative font-medium text-muted-foreground transition-colors hover:text-foreground;
+  }
+
+  .nav-link::after {
+    content: "";
+    @apply absolute left-0 -bottom-1 h-0.5 w-0 bg-accent transition-all duration-300;
+  }
+
+  .nav-link:hover::after {
+    @apply w-full;
+  }
+
+  /* Legal page styles */
+  .legal-section {
+    @apply mb-10 pb-10 border-b border-border last:border-b-0;
+  }
+
+  .legal-heading {
+    @apply font-semibold tracking-tight;
+  }
+
+  .legal-body {
+    @apply leading-relaxed;
+  }
+
+  .legal-highlight-box {
+    @apply p-4 bg-secondary rounded-lg border border-border;
+  }
+
+  .legal-toc-item {
+    @apply px-3 py-2 rounded-md text-sm transition-all duration-200;
+  }
+
+  .legal-toc-item.active {
+    @apply bg-coral text-primary-foreground font-medium;
+  }
+
+  .legal-toc-item:not(.active):hover {
+    @apply bg-coral/5;
+  }
+
+   .auth-input {
+    @apply h-11 w-full rounded-xl bg-card border border-gray-300 px-4 text-foreground
+     placeholder:text-muted-foreground transition-all duration-200 outline-none;
+  }
+
+   .auth-cta {
+    @apply h-[45px] w-full rounded-full bg-coral text-primary-foreground font-medium text-base
+     transition-all duration-150 cursor-pointer border-0;
+  }
+
+  .glass-card {
+    @apply backdrop-blur-xl border rounded-2xl;
+    background: hsl(var(--glass-bg) / 0.6);
+    border-color: hsl(var(--glass-border) / 0.08);
+  }
+
+  .glass-card-hover {
+    @apply glass-card transition-all duration-500;
+  }
+
+  .glass-card-hover:hover {
+    border-color: hsl(var(--glass-border) / 0.15);
+    background: hsl(var(--glass-bg) / 0.8);
+    transform: translateY(-4px);
+    box-shadow: 0 20px 40px -12px hsl(var(--glow-primary) / 0.15);
+  }
+
+  .glow-primary {
+    box-shadow: 0 0 30px hsl(var(--glow-primary) / 0.2),
+                0 0 60px hsl(var(--glow-primary) / 0.1);
+  }
+
+  .glow-pulse {
+    animation: glow-pulse 3s ease-in-out infinite;
+  }
+
+  .icon-squircle {
+    @apply flex items-center justify-center rounded-2xl p-3;
+    background: hsl(var(--glow-primary) / 0.1);
+    box-shadow: 0 0 20px hsl(var(--glow-primary) / 0.08);
+  }
+
+  .icon-squircle-accent {
+    @apply flex items-center justify-center rounded-2xl p-3;
+    background: hsl(var(--glow-accent) / 0.1);
+    box-shadow: 0 0 20px hsl(var(--glow-accent) / 0.08);
+  }
+
+  .text-gradient-primary {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, hsl(var(--glow-primary)), hsl(var(--glow-accent)));
+  }
+
+  .bg-grid {
+    background-image: 
+      linear-gradient(hsl(var(--glass-border) / 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--glass-border) / 0.04) 1px, transparent 1px);
+    background-size: 60px 60px;
+  }
+
+  .bg-radial-glow {
+    background: radial-gradient(ellipse 80% 50% at 50% -20%, hsl(var(--glow-primary) / 0.15), transparent);
+  }
+
+  .float-animation {
+    animation: float 6s ease-in-out infinite;
+  }
+
+  .metric-chip {
+    @apply glass-card px-4 py-2 text-sm font-medium inline-flex items-center gap-2;
+  } 
+}
+
+/* ================================
+   Utilities
+================================ */
+@layer utilities {
+  /* Softens the cut where a scrolling list meets fixed chrome, so rows dissolve
+     into the header/footer instead of being sliced off mid-row. Applied only on
+     the edge that actually has content beyond it — a permanent fade would dim
+     the first and last rows of a list that isn't scrolling at all. */
+  .nav-mask-top {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 28px);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 28px);
+  }
+  .nav-mask-bottom {
+    -webkit-mask-image: linear-gradient(to top, transparent 0, #000 28px);
+    mask-image: linear-gradient(to top, transparent 0, #000 28px);
+  }
+  .nav-mask-both {
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      transparent 0,
+      #000 28px,
+      #000 calc(100% - 28px),
+      transparent 100%
+    );
+    mask-image: linear-gradient(
+      to bottom,
+      transparent 0,
+      #000 28px,
+      #000 calc(100% - 28px),
+      transparent 100%
+    );
+  }
+
+  .font-display {
+    font-family: var(--font-display);
+  }
+
+  .font-body {
+    font-family: var(--font-body);
+  }
+
+  .gradient-hero {
+    background: var(--gradient-hero);
+  }
+
+  .gradient-accent {
+    background: var(--gradient-accent);
+  }
+
+  .shadow-soft {
+    box-shadow: var(--shadow-soft);
+  }
+
+  .shadow-card {
+    box-shadow: var(--shadow-card);
+  }
+
+  .shadow-elevated {
+    box-shadow: var(--shadow-elevated);
+  }
+  
+
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      hsl(var(--muted)) 25%,
+      hsl(var(--muted-foreground) / 0.12) 50%,
+      hsl(var(--muted)) 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+   .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+  .animate-float-delayed {
+    animation: float 6s ease-in-out infinite;
+    animation-delay: 2s;
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-20px); }
+  }
+  .animate-pulse-soft {
+    animation: pulse-soft 3s ease-in-out infinite;
+  }
+  @keyframes pulse-soft {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.8; }
+  }
+  .fade-in-up {
+    animation: fadeInUp 0.6s ease-out forwards;
+  }
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(30px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  
+}
+
+/* ================================
+   Scrollbar (WebKit)
+================================ */
+.scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar::-webkit-scrollbar-thumb {
+  background-color: #f3f2ef;
+  border-radius: 9999px;
+}
+
+.scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: #9ca3af;
+}
+
+.scrollbar::-webkit-scrollbar-button,
+.scrollbar::-webkit-scrollbar-corner {
+  display: none;
+}
+
+/* =========================================================
+   AI Interview Coach — "booth" theme
+   The coach pages render with `.booth-light`, which aliases the booth tokens
+   onto the app's own design tokens — so the coach tracks light/dark mode
+   automatically instead of pinning its own palette.
+   ========================================================= */
+:root {
+  --booth: 218 56% 6%;        /* immersive room background (dark default) */
+  --surface: 222 47% 11%;     /* elevated panel */
+  --surface-2: 222 40% 15%;   /* higher elevation */
+  --ink: 210 40% 98%;         /* primary text */
+  --ink-dim: 215 20% 65%;     /* secondary text */
+  --ink-muted: 215 16% 47%;   /* muted text */
+  --hairline: 210 40% 98%;    /* borders, used at low opacity */
+
+  /* Voice / conversation states */
+  --state-speaking: 38 92% 50%;   /* interviewer — warm amber */
+  --state-listening: 160 84% 39%; /* your turn — fresh green */
+  --state-thinking: 256 72% 70%;  /* analyzing — violet */
+  --state-idle: 215 14% 55%;      /* paused — muted slate */
+  --danger: 0 84% 60%;
+}
+
+/* Coach pages: follow the app's palette (page = background, cards = card). */
+.booth-light {
+  --booth: var(--background);
+  --surface: var(--card);
+  --surface-2: var(--muted);
+  --ink: var(--foreground);
+  --ink-dim: var(--muted-foreground);
+  --ink-muted: var(--muted-foreground);
+  --hairline: var(--foreground);
+}
+
+/* Accents tuned for dark surfaces are illegible on white — deepen them in
+   light mode only, so dark mode keeps the brighter originals. */
+html:not(.dark) .booth-light .text-coral { color: hsl(16 78% 40%); }
+html:not(.dark) .booth-light .text-emerald-400 { color: #059669; }
+html:not(.dark) .booth-light .text-amber-400 { color: #d97706; }
+html:not(.dark) .booth-light .text-rose-400 { color: #e11d48; }
+
+.tabular { font-variant-numeric: tabular-nums; }

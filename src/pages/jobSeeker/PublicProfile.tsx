@@ -1,0 +1,505 @@
+import { useState } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import { Loader2 } from 'lucide-react';
+import { getPublicProfile } from '@/lib/api/publicProfile';
+import {
+  MapPin,
+  Briefcase,
+  Share2,
+  ArrowLeft,
+  BadgeCheck,
+  Calendar,
+  GraduationCap,
+  Award,
+  Globe,
+  Play,
+  ExternalLink,
+  Eye,
+  Mail,
+  Linkedin,
+  Github,
+  Twitter,
+  Quote,
+  Flag,
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { useProfile } from '@/contexts/ProfileContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { getWorkEligibilityOption } from '@/lib/workEligibility';
+import VideoModel from '@/components/jobSeeker/VideoModel';
+import { ProfileAvatar, ProfileBanner } from '@/components/jobSeeker/ProfileVisuals';
+
+/**
+ * Public, read-only, recruiter-facing profile.
+ *
+ * `/profile/me` (or no id) renders the signed-in user's own ProfileContext data
+ * as a "this is how recruiters see you" preview. With a user id, it fetches
+ * that candidate's profile from the privacy-gated backend endpoint instead.
+ */
+const PublicProfile = () => {
+  const { id } = useParams<{ id: string }>();
+  const isOwnPreview = !id || id === 'me';
+  const { profile: ownProfile, isAuthenticated } = useProfile();
+  const { user } = useAuth();
+  const [isVideoOpen, setIsVideoOpen] = useState(false);
+
+  const {
+    data: fetchedProfile,
+    isLoading,
+    isError,
+    error,
+  } = useQuery({
+    queryKey: ['public-profile', id],
+    queryFn: () => getPublicProfile(id!),
+    enabled: !isOwnPreview,
+    staleTime: 5 * 60 * 1000,
+    retry: false, // a 404 here means "not allowed to view" — don't hammer it
+  });
+
+  const profile = isOwnPreview ? ownProfile : fetchedProfile;
+
+  /**
+   * The account photo backs up the profile one only in your own preview.
+   * On someone else's profile it must never be substituted — that would put
+   * the viewer's face on the candidate they are looking at.
+   */
+  const avatarSrc = isOwnPreview
+    ? profile?.avatarUrl || user?.avatarUrl || undefined
+    : profile?.avatarUrl;
+
+  if (!isOwnPreview && isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+        <Loader2 className="w-4 h-4 animate-spin" /> Loading profile…
+      </div>
+    );
+  }
+
+  if (!isOwnPreview && (isError || !profile)) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center px-4">
+        <div className="text-center max-w-sm">
+          <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
+            {(error as Error)?.message === 'Profile not available'
+              ? 'This profile isn’t available'
+              : 'Couldn’t load this profile'}
+          </h1>
+          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+            The candidate may have made their profile private or it no longer exists.
+          </p>
+          <Button asChild variant="outline" className="mt-5">
+            <Link to="/">Go back</Link>
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  const shareUrl = `${window.location.origin}/profile/${id ?? 'me'}`;
+  const firstName = profile.name?.split(' ')[0] || 'this candidate';
+
+  const eligibility = getWorkEligibilityOption(profile.workEligibility);
+  const normalizeUrl = (url: string) => (url.startsWith('http') ? url : `https://${url}`);
+  const { email, website, linkedin, github, twitter } = profile.contactLinks;
+  const contactLinks = [
+    email && { icon: Mail, label: 'Email', href: `mailto:${email}` },
+    website && { icon: Globe, label: 'Website', href: normalizeUrl(website) },
+    linkedin && { icon: Linkedin, label: 'LinkedIn', href: normalizeUrl(linkedin) },
+    github && { icon: Github, label: 'GitHub', href: normalizeUrl(github) },
+    twitter && { icon: Twitter, label: 'X', href: normalizeUrl(twitter) },
+  ].filter(Boolean) as { icon: typeof Mail; label: string; href: string }[];
+
+  const handleShare = async () => {
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: `${profile.name} — ProHire`, url: shareUrl });
+        return;
+      }
+      await navigator.clipboard.writeText(shareUrl);
+      toast.success('Profile link copied to clipboard');
+    } catch {
+      // User dismissed the native share sheet — not an error worth surfacing.
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      {/* Owner preview bar — only when previewing your own profile */}
+      {isOwnPreview && isAuthenticated && (
+        <div className="bg-blue-600 text-white">
+          <div className="max-w-4xl mx-auto px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
+            <span className="flex items-center gap-2 text-sm font-medium">
+              <Eye className="w-4 h-4" />
+              Preview — this is how recruiters see your public profile
+            </span>
+            <Button
+              asChild
+              variant="ghost"
+              size="sm"
+              className="h-8 text-white hover:bg-white/15 hover:text-white"
+            >
+              <Link to="/jobseeker/profile">
+                <ArrowLeft className="w-4 h-4 mr-1.5" />
+                Back to editing
+              </Link>
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <div className="max-w-4xl mx-auto px-4 py-6 space-y-4">
+        {/* Hero */}
+        <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+          <div className="relative h-40 sm:h-52 w-full bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20">
+            <ProfileBanner bannerUrl={profile.bannerUrl} />
+          </div>
+
+          <div className="relative -mt-14 px-6 pb-6">
+            <div className="relative inline-block">
+              <div className="w-28 h-28 sm:w-32 sm:h-32 rounded-full ring-4 ring-white dark:ring-gray-800 shadow-lg overflow-hidden">
+                <ProfileAvatar
+                  name={profile.name}
+                  avatarUrl={avatarSrc}
+                  className="w-full h-full"
+                  textClassName="text-3xl"
+                />
+              </div>
+              {profile.introVideoUrl && (
+                <button
+                  onClick={() => setIsVideoOpen(true)}
+                  className="absolute bottom-1 right-1 w-10 h-10 rounded-full bg-blue-600 hover:bg-blue-700 shadow-md flex items-center justify-center transition-all duration-200 hover:scale-105"
+                  aria-label="Play video introduction"
+                >
+                  <Play className="w-4 h-4 text-white ml-0.5" fill="currentColor" />
+                </button>
+              )}
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h1 className="text-2xl font-bold text-gray-900 dark:text-white tracking-tight">
+                  {profile.name}
+                </h1>
+                <p className="text-gray-600 dark:text-gray-300 mt-1 font-medium">{profile.headline}</p>
+                {eligibility && (
+                  <div className="mt-2">
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 text-xs font-semibold border border-red-200 dark:border-red-800">
+                      <Flag className="w-3.5 h-3.5" />
+                      {eligibility.badge}
+                      {eligibility.hasExpiry && profile.workPermitExpiry
+                        ? ` · until ${profile.workPermitExpiry}`
+                        : ''}
+                    </span>
+                  </div>
+                )}
+                <div className="flex flex-wrap items-center gap-3 mt-2 text-sm text-gray-500 dark:text-gray-400">
+                  {profile.location && (
+                    <span className="flex items-center gap-1.5">
+                      <MapPin className="w-4 h-4" />
+                      {profile.location}
+                    </span>
+                  )}
+                  {profile.openToWork && (
+                    <>
+                      <span className="text-gray-300 dark:text-gray-600">•</span>
+                      <span className="flex items-center gap-1.5 text-blue-600 dark:text-blue-400 font-medium">
+                        <Briefcase className="w-4 h-4" />
+                        Open to work
+                      </span>
+                    </>
+                  )}
+                  {profile.connections && (
+                    <>
+                      <span className="text-gray-300 dark:text-gray-600">•</span>
+                      <span>{profile.connections} connections</span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {contactLinks.map(({ icon: Icon, label, href }) => (
+                  <a
+                    key={label}
+                    href={href}
+                    target={href.startsWith('mailto:') ? undefined : '_blank'}
+                    rel="noreferrer"
+                    title={label}
+                    aria-label={label}
+                    className="h-10 w-10 flex items-center justify-center rounded-full border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                  >
+                    <Icon className="w-4 h-4" />
+                  </a>
+                ))}
+                <Button
+                  onClick={handleShare}
+                  className="h-10 px-5 rounded-full bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-md"
+                >
+                  <Share2 className="w-4 h-4 mr-2" />
+                  Share
+                </Button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* About */}
+        {profile.about && (
+          <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">About</h2>
+            <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed whitespace-pre-line">
+              {profile.about}
+            </p>
+            {profile.languages.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700 flex flex-wrap items-center gap-2">
+                <span className="flex items-center gap-1.5 text-sm font-medium text-gray-700 dark:text-gray-300">
+                  <Globe className="w-4 h-4" />
+                  Languages:
+                </span>
+                {profile.languages.map((lang) => (
+                  <span
+                    key={lang}
+                    className="px-2.5 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 text-xs font-medium"
+                  >
+                    {lang}
+                  </span>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Experience */}
+        {profile.experiences.length > 0 && (
+          <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-5">Experience</h2>
+            <div className="space-y-6">
+              {profile.experiences.map((exp, index) => (
+                <div key={exp.id} className="flex gap-4 relative">
+                  {index < profile.experiences.length - 1 && (
+                    <div className="absolute left-[22px] top-12 bottom-[-24px] w-0.5 bg-gray-200 dark:bg-gray-600" />
+                  )}
+                  <div className="flex-shrink-0 w-12 h-12 rounded-xl bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-600 flex items-center justify-center text-lg font-bold text-gray-700 dark:text-gray-200 shadow-sm border border-gray-100 dark:border-gray-600">
+                    {exp.company.charAt(0)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <h3 className="text-base font-semibold text-gray-900 dark:text-white">{exp.title}</h3>
+                        <p className="text-sm text-gray-700 dark:text-gray-300 font-medium">{exp.company}</p>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          {exp.period && (
+                            <span className="flex items-center gap-1">
+                              <Calendar className="w-3.5 h-3.5" />
+                              {exp.period}
+                            </span>
+                          )}
+                          {exp.location && (
+                            <span className="flex items-center gap-1">
+                              <MapPin className="w-3.5 h-3.5" />
+                              {exp.location}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {exp.verified && (
+                        <div className="flex items-center gap-1 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 px-2 py-1 rounded-full text-xs font-medium flex-shrink-0">
+                          <BadgeCheck className="w-4 h-4" />
+                          Verified
+                        </div>
+                      )}
+                    </div>
+                    {exp.description && (
+                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-3 leading-relaxed">
+                        {exp.description}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Education */}
+        {profile.educations.length > 0 && (
+          <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-5">Education</h2>
+            <div className="space-y-6">
+              {profile.educations.map((edu) => (
+                <div key={edu.id} className="flex gap-4">
+                  <div className="flex-shrink-0 w-12 h-12 rounded-xl bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/30 dark:to-purple-800/30 flex items-center justify-center shadow-sm border border-purple-100 dark:border-purple-700">
+                    <GraduationCap className="w-6 h-6 text-purple-600 dark:text-purple-400" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <h3 className="text-base font-semibold text-gray-900 dark:text-white">{edu.degree}</h3>
+                        <p className="text-sm text-gray-700 dark:text-gray-300 font-medium">{edu.school}</p>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          {edu.period && (
+                            <span className="flex items-center gap-1">
+                              <Calendar className="w-3.5 h-3.5" />
+                              {edu.period}
+                            </span>
+                          )}
+                          {edu.gpa && (
+                            <span className="bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 px-2 py-0.5 rounded-full font-medium">
+                              GPA: {edu.gpa}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {edu.honors && (
+                        <div className="flex items-center gap-1 bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-2 py-1 rounded-full text-xs font-medium flex-shrink-0">
+                          <Award className="w-4 h-4" />
+                          {edu.honors}
+                        </div>
+                      )}
+                    </div>
+                    {edu.description && (
+                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-3 leading-relaxed">
+                        {edu.description}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Skills */}
+        {profile.skills.length > 0 && (
+          <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Skills</h2>
+            <div className="flex flex-wrap gap-2">
+              {profile.skills.map((skill) => (
+                <span
+                  key={skill.name}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-gradient-to-r from-blue-50 to-blue-100 dark:from-blue-900/30 dark:to-blue-800/30 text-blue-700 dark:text-blue-300 text-sm font-medium border border-blue-200 dark:border-blue-700"
+                >
+                  {skill.name}
+                </span>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Certifications */}
+        {profile.certifications.length > 0 && (
+          <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Certifications</h2>
+            <div className="space-y-3">
+              {profile.certifications.map((cert) => (
+                <div
+                  key={cert.id}
+                  className="flex items-start justify-between gap-3 p-3 rounded-lg border border-gray-200 dark:border-gray-600"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-gray-900 dark:text-white">{cert.name}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {cert.issuer}
+                      {cert.issueDate ? ` · ${cert.issueDate}` : ''}
+                    </p>
+                  </div>
+                  {cert.credentialUrl && (
+                    <a
+                      href={cert.credentialUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex-shrink-0 text-blue-600 dark:text-blue-400 hover:underline text-xs flex items-center gap-1"
+                    >
+                      View <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Recommendations */}
+        {profile.recommendations.length > 0 && (
+          <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+              Recommendations
+              <span className="ml-2 text-sm font-normal text-gray-400 dark:text-gray-500">
+                ({profile.recommendations.length})
+              </span>
+            </h2>
+            <div className="space-y-4">
+              {profile.recommendations.map((rec) => (
+                <div
+                  key={rec.id}
+                  className="p-4 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50/50 dark:bg-gray-700/30"
+                >
+                  <Quote className="w-5 h-5 text-blue-300 dark:text-blue-700 mb-2" />
+                  <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed italic">"{rec.text}"</p>
+                  <div className="mt-3 flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-100 to-blue-200 dark:from-blue-900/40 dark:to-blue-800/40 flex items-center justify-center text-sm font-bold text-blue-700 dark:text-blue-300 flex-shrink-0">
+                      {rec.author.charAt(0)}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{rec.author}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                        {rec.authorTitle}
+                        {rec.relationship ? ` · ${rec.relationship}` : ''}
+                        {rec.date ? ` · ${rec.date}` : ''}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Portfolio */}
+        {profile.portfolioItems.length > 0 && (
+          <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Portfolio</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {profile.portfolioItems.map((item) => (
+                <div
+                  key={item.id}
+                  className="p-4 rounded-lg border border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 transition-colors"
+                >
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">{item.title}</p>
+                  {item.description && (
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{item.description}</p>
+                  )}
+                  {item.link && (
+                    <a
+                      href={item.link.startsWith('http') ? item.link : `https://${item.link}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                    >
+                      Open <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <p className="text-center text-xs text-gray-400 dark:text-gray-500 pt-2">
+          Want to reach {firstName}? They're on ProHire.
+        </p>
+      </div>
+
+      <VideoModel
+        isOpen={isVideoOpen}
+        onClose={() => setIsVideoOpen(false)}
+        videoUrl={profile.introVideoUrl || ''}
+        title={`${profile.name}'s Video Introduction`}
+      />
+    </div>
+  );
+};
+
+export default PublicProfile;

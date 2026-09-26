@@ -1,0 +1,17 @@
+-- Accommodation requests for a screening.
+--
+-- Records WHAT a candidate needs, never WHY. There is deliberately no field for
+-- a diagnosis, condition, or disability status: the employer does not need it
+-- to honour a request, requiring it is unlawful in many places, and storing it
+-- creates a liability with no upside.
+--
+-- Shape: { needs: string[], note: string|null, requestedAt, status,
+--          acknowledgedAt }
+-- Needs are drawn from a fixed list (extra_time, typed_answers,
+-- human_interviewer, assistive_tech, other) plus an optional free-text note in
+-- the candidate's own words.
+--
+-- Kept on the screening rather than the user: needs differ by context, and a
+-- persistent per-user flag is exactly the kind of record that leaks into
+-- profile reads and follows someone around.
+ALTER TABLE "ai_screens" ADD COLUMN "accommodations" JSONB;

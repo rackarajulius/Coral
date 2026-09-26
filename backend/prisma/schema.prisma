@@ -1,0 +1,2723 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// User roles enum
+enum UserRole {
+  JOB_SEEKER
+  EMPLOYER
+  FREELANCER
+  ADMIN
+}
+
+// User account status
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  BANNED
+  PENDING_ONBOARDING
+}
+
+// Community post types
+enum PostType {
+  TEXT
+  IMAGE
+  VIDEO
+  DOCUMENT
+  JOB
+  CAROUSEL
+  POLL
+  /// Carries a Tide. The post is how a tide reaches the feed, which means it
+  /// inherits comments, likes and resharing rather than needing its own.
+  TIDE
+}
+
+// Payment provider enum
+enum PaymentProvider {
+  STRIPE
+}
+
+// Payment transaction lifecycle
+enum PaymentStatus {
+  PENDING
+  REQUIRES_ACTION
+  PAID
+  FAILED
+  CANCELED
+  REFUNDED
+}
+
+// Webhook processing status
+enum WebhookProcessingStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+// Main User model
+model User {
+  id            String    @id @default(uuid())
+  supabaseId    String    @unique @map("supabase_id") // Supabase Auth User ID
+  email         String    @unique
+  emailVerified Boolean   @default(false) @map("email_verified")
+  
+  // Profile information
+  firstName     String?   @map("first_name")
+  lastName      String?   @map("last_name")
+  displayName   String?   @map("display_name")
+  avatarUrl     String?   @map("avatar_url")
+  
+  // Role and status
+  role          UserRole  @default(JOB_SEEKER)
+  status        UserStatus @default(PENDING_ONBOARDING)
+
+  // Subscription tier — gates premium features (e.g. web-wide resume matcher).
+  subscriptionTier String @default("free") @map("subscription_tier") // free | premium
+
+  // OAuth provider info
+  provider      String?   // google, linkedin, github
+  
+  // Timestamps
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  lastLoginAt   DateTime? @map("last_login_at")
+  
+  // Relations
+  jobSeekerProfile   JobSeekerProfile?
+  /// Fairness monitoring only — see DemographicSelfReport. Never include this
+  /// in a profile query: those results reach employers and AI prompts.
+  demographicReport  DemographicSelfReport?
+  employerProfile    EmployerProfile?
+  webhooks           EmployerWebhook[]
+  freelancerProfile  FreelancerProfile?
+  postedJobs         Job[]              @relation("PostedJobs")
+  applications       Application[]      @relation("UserApplications")
+  savedJobs          SavedJob[]         @relation("UserSavedJobs")
+  jobAlerts          JobAlert[]         @relation("UserJobAlerts")
+  jobRecommendations JobRecommendation[] @relation("UserJobRecommendations")
+  posts              Post[]
+  postComments       PostComment[]
+  postLikes          PostLike[]
+  postBookmarks      PostBookmark[]
+  interviewPrepSessions InterviewPrepSession[]
+  interviewPrepFeedback InterviewPrepFeedback[]
+  paymentTransactions PaymentTransaction[]
+  candidateNotes      CandidateNote[] @relation("CandidateNotes")
+  authoredNotes       CandidateNote[] @relation("CandidateNoteAuthor")
+  candidateTags       CandidateTag[]  @relation("CandidateTags")
+  spaceMemberships    SpaceMember[]   @relation("SpaceMemberships")
+  /// How this person appears to someone whose profile they viewed:
+  /// 'named' | 'company' | 'private'. Null means the role's default —
+  /// employers are attributed to their company, everyone else is private.
+  /// Deliberately on the User rather than in a role-specific settings blob:
+  /// every role both views profiles and owns one.
+  profileViewVisibility String? @map("profile_view_visibility")
+  profileImpressions  ProfileImpression[] @relation("ImpressionSubject")
+  seekerUsage         UserUsage[]     @relation("SeekerUsage")
+  seekerSubscription  UserSubscription? @relation("SeekerSubscription")
+  seekerCompsGranted  UserSubscription[] @relation("SeekerCompGrants")
+  impressionsMade     ProfileImpression[] @relation("ImpressionViewer")
+  pollVotes           PollVote[]      @relation("PollVotes")
+  verifications      Verification[]
+  workEmailVerifications WorkEmailVerification[]
+  tidesHosted            Tide[]                 @relation("TidesHosted")
+  tidesAttending         TideAttendee[]         @relation("TidesAttending")
+  auditLogs          AuditLog[]         @relation("AdminAuditLogs")
+  notifications      Notification[]     @relation("UserNotifications")
+  companyFollows     CompanyFollow[]    @relation("UserCompanyFollows")
+  companyReviews     CompanyReview[]
+  companyMemberships CompanyMember[]    @relation("UserCompanyMemberships")
+  companyAuditLogs   CompanyAuditLog[]  @relation("CompanyAuditActor")
+
+  @@index([status])
+  @@index([role])
+  @@index([status, createdAt])
+  @@index([role, createdAt])
+  @@map("users")
+}
+
+// In-app notification feed (the navbar bell across employer / admin / public).
+model Notification {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  user      User      @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+
+  type      String    @default("general") // application | verification | system | …
+  title     String
+  message   String    @db.Text
+  link      String?   // path the bell item navigates to
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+// Per-user Google Calendar connection (OAuth refresh token) — powers auto
+// Google Meet links on confirmed interviews.
+/// Zoom connection, per user.
+///
+/// A meeting provider rather than a calendar: it supplies the join link, and a
+/// connected calendar still creates the event that carries it.
+model ZoomCredential {
+  userId       String   @id @map("user_id")
+  zoomEmail    String?  @map("zoom_email")
+  refreshToken String   @map("refresh_token")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("zoom_credentials")
+}
+
+/// Microsoft 365 connection, per user.
+///
+/// Mirrors GoogleCredential deliberately: same shape, same lifecycle, so the
+/// calendar resolver can treat them interchangeably.
+model MicrosoftCredential {
+  userId         String   @id @map("user_id")
+  microsoftEmail String?  @map("microsoft_email")
+  refreshToken   String   @map("refresh_token")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("microsoft_credentials")
+}
+
+model GoogleCredential {
+  userId       String   @id @map("user_id")
+  googleEmail  String?  @map("google_email")
+  refreshToken String   @map("refresh_token")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("google_credentials")
+}
+
+// Employer-initiated async AI screening interview (hiring agent, Phase 4).
+model AiScreen {
+  id             String    @id @default(uuid())
+  employerId     String    @map("employer_id")
+  candidateId    String    @map("candidate_id")
+  /// Set when the screen was sent from a job's applicant list. Screens sharing
+  /// a jobId were asked the SAME questions, so their scores are comparable;
+  /// job-less screens (sourced candidates) are not rankable against them.
+  jobId          String?   @map("job_id")
+  applicationId  String?   @map("application_id")
+  role           String?
+  jobDescription String?   @map("job_description") @db.Text
+  mode           String    @default("text") // text | video | live
+  /// When the candidate accepted the AI-interview notice. Required before a
+  /// live run may start; null means they haven't consented (or don't need to).
+  consentAt      DateTime? @map("consent_at")
+  durationSec    Int?      @map("duration_sec")
+  /// Observations, never verdicts: { pasteCount, pastedChars, blurCount,
+  /// blurMs, latencies, collectedAt }. Shown to a human reviewer as context,
+  /// deliberately NOT fed into the score and never actionable automatically —
+  /// every signal has innocent explanations. Null = never measured, which must
+  /// stay distinguishable from measured-zero.
+  integritySignals Json?   @map("integrity_signals")
+  /// What the candidate needs, never why: { needs[], note, requestedAt, status,
+  /// acknowledgedAt }. There is deliberately no diagnosis or disability field —
+  /// an employer doesn't need one to honour a request, and storing it is a
+  /// liability with no upside.
+  accommodations Json?
+  questions      Json      // string[]
+  answers        Json? // text mode: { question, answer }[]; video mode: { question, videoPath }[]
+  evaluation     Json? // recruiter scorecard blob (summary/strengths/concerns/perAnswer)
+  overallScore   Int?      @map("overall_score")
+  recommendation String? // strong_yes | yes | maybe | no
+  status         String    @default("invited") // invited | completed | declined
+  invitedAt      DateTime  @default(now()) @map("invited_at")
+  completedAt    DateTime? @map("completed_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@index([employerId, createdAt])
+  @@index([candidateId, status])
+  @@index([jobId, overallScore])
+  @@index([jobId, candidateId])
+  @@map("ai_screens")
+}
+
+// Employer <-> candidate interview scheduling (hiring agent, Phase 3).
+model Interview {
+  id            String    @id @default(uuid())
+  employerId    String    @map("employer_id")
+  candidateId   String    @map("candidate_id")
+  role          String?
+  medium        String    @default("video") // video | phone | onsite
+  location      String? // onsite address / dial-in note
+  meetingLink   String?   @map("meeting_link")
+  calendarEventId String? @map("calendar_event_id") // calendar event backing the meeting link
+  /// Which calendar holds it — "google" or "microsoft". Needed so cancelling
+  /// deletes from the right API after someone switches provider.
+  calendarProvider String? @map("calendar_provider")
+  /// Zoom's meeting id, when Zoom supplied the link. Separate from the calendar
+  /// event: with both connected there are two objects to clean up.
+  zoomMeetingId    String? @map("zoom_meeting_id")
+  proposedSlots Json?     @map("proposed_slots") // ISO datetime strings the candidate can pick from
+  scheduledAt   DateTime? @map("scheduled_at") // confirmed slot
+  status        String    @default("proposed") // proposed | confirmed | declined | cancelled | completed
+  message       String?   @db.Text
+  // Post-interview outcome (no-ghosting) + private scorecard.
+  outcome       String? // advancing | rejected | hold | hired (candidate-visible)
+  outcomeNote   String?   @map("outcome_note") @db.Text // friendly note shared with the candidate
+  outcomeAt     DateTime? @map("outcome_at")
+  feedback      Json? // employer-private scorecard: { ratings:[{label,score}], recommendation, notes }
+  nudgedAt      DateTime? @map("nudged_at") // last time we nudged the employer to share an update
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  scorecards    Scorecard[]
+
+  @@index([employerId, createdAt])
+  @@index([candidateId, status])
+  @@map("interviews")
+}
+
+// Self-serve booking: reusable open time slots an employer publishes; a candidate
+// books one via their booking link, which creates a confirmed Interview.
+model AvailabilitySlot {
+  id           String   @id @default(uuid())
+  employerId   String   @map("employer_id")
+  role         String?
+  startAt      DateTime @map("start_at")
+  durationMins Int      @default(30) @map("duration_mins")
+  medium       String   @default("video") // video | phone | onsite
+  status       String   @default("open") // open | booked | cancelled
+  interviewId  String?  @map("interview_id") // the Interview created when booked
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([employerId, startAt])
+  @@index([status, startAt])
+  @@map("availability_slots")
+}
+
+// Hiring-assistant shortlist: the employer's curated pipeline for one search.
+// Keyed by a hash of the prompt so a long query can still be uniquely indexed.
+/// A project: the people a company is working on for one hiring effort.
+///
+/// It began as a saved search and was keyed by one — which meant "frontend
+/// dev", "frontend developer" and "frontend developer with 2 years of
+/// experience" were three containers for one job, and a candidate found by two
+/// of them was two cards with two stages. A project is now a thing in its own
+/// right that a search can fill, rather than a by-product of searching.
+model Shortlist {
+  id         String          @id @default(uuid())
+  employerId String          @map("employer_id")
+  /// What the team called it. Null while it is still only a saved search —
+  /// naming one is what turns it into a project they mean to keep.
+  name       String?         @db.VarChar(120)
+  /// sha256 of the normalized query. NULL for a project created by hand, which
+  /// has no search behind it. Postgres treats NULLs as distinct in a unique
+  /// index, so any number of hand-made projects coexist.
+  queryKey   String?         @map("query_key")
+  /// The search that produced it, if any.
+  query      String?         @db.Text
+  /// AI-derived from the prompt. `name` wins over it when the team set one.
+  roleTitle  String?         @map("role_title")
+  /// Kept out of the recency sort so a stage change does not reorder the list.
+  pinned     Boolean         @default(false)
+  lastOpenedAt DateTime?     @map("last_opened_at")
+  createdAt  DateTime        @default(now()) @map("created_at")
+  updatedAt  DateTime        @updatedAt @map("updated_at")
+  items      ShortlistItem[]
+
+  @@unique([employerId, queryKey])
+  @@index([employerId, updatedAt])
+  @@index([employerId, pinned, lastOpenedAt])
+  @@map("shortlists")
+}
+
+/// Where someone is with a company — one ladder, whichever way they arrived.
+///
+/// Replaces two vocabularies that could not be reconciled: sourced candidates
+/// ran new→contacted→screening→interview→offer and could never be marked hired
+/// or rejected, while applicants ran off `Application.status`. See
+/// src/common/pipeline-stage.ts for the ladder, the exits, and the mapping from
+/// application status.
+enum PipelineStage {
+  SOURCED
+  CONTACTED
+  APPLIED
+  SCREENING
+  INTERVIEW
+  OFFER
+  HIRED
+  REJECTED
+  WITHDRAWN
+}
+
+model ShortlistItem {
+  id          String    @id @default(uuid())
+  shortlistId String    @map("shortlist_id")
+  candidateId String    @map("candidate_id") // job-seeker userId
+  /// null = saved only, not in the pipeline.
+  stage       PipelineStage?
+  /// Set when this person's application arrives, so one candidate is one entry.
+  ///
+  /// Without it a candidate you sourced and then received an application from
+  /// appeared as two unconnected cards whose stages could disagree. While this
+  /// is set the application owns the stage, and a move on either side moves
+  /// both.
+  applicationId String? @unique @map("application_id")
+  saved       Boolean   @default(false)
+  // The candidate card as it was when shortlisted (no contact PII) — keeps the
+  // pipeline stable even if a later search ranks differently.
+  snapshot    Json
+  addedAt     DateTime  @default(now()) @map("added_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  shortlist   Shortlist @relation(fields: [shortlistId], references: [id], onDelete: Cascade)
+  /// SetNull, not Cascade: if the application goes, the person is still someone
+  /// this company sourced and worked on. Losing that history would be worse
+  /// than an unlinked card.
+  application Application? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+
+  @@unique([shortlistId, candidateId])
+  @@index([shortlistId])
+  @@index([candidateId])
+  @@map("shortlist_items")
+}
+
+// In-app messaging (PII-safe channel): one thread per employer<->candidate pair.
+enum CallMode {
+  AUDIO
+  VIDEO
+}
+
+/// FAILED is distinct from MISSED: missed means nobody answered, failed means
+/// both sides tried and the peer connection never established. With STUN-only
+/// and no TURN relay that happens on strict networks, and telling someone
+/// "no answer" when the other person was staring at the screen would be wrong.
+enum CallState {
+  RINGING
+  ACCEPTED
+  DECLINED
+  MISSED
+  ENDED
+  FAILED
+}
+
+/// An ad-hoc call inside a conversation.
+///
+/// Media is peer-to-peer and never touches this server; what is stored is the
+/// ringing lifecycle — who called whom, whether it was answered, and how it
+/// ended — so the thread can show an honest record afterwards.
+model Call {
+  id             String       @id @default(uuid())
+  conversationId String       @map("conversation_id")
+  callerId       String       @map("caller_id")
+  calleeId       String       @map("callee_id")
+  mode           CallMode
+  state          CallState    @default(RINGING)
+  startedAt      DateTime     @default(now()) @map("started_at")
+  answeredAt     DateTime?    @map("answered_at")
+  endedAt        DateTime?    @map("ended_at")
+  /// Null when never answered — distinct from a zero-second call.
+  durationSec    Int?         @map("duration_sec")
+
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, startedAt])
+  @@index([state, startedAt])
+  @@map("calls")
+}
+
+model Conversation {
+  id                  String    @id @default(uuid())
+  employerId          String    @map("employer_id")
+  candidateId         String    @map("candidate_id")
+  jobId               String?   @map("job_id")
+  lastMessageAt       DateTime? @map("last_message_at")
+  employerLastReadAt  DateTime? @map("employer_last_read_at")
+  candidateLastReadAt DateTime? @map("candidate_last_read_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+  messages            Message[]
+  calls               Call[]
+
+  @@unique([employerId, candidateId])
+  @@index([employerId, lastMessageAt])
+  @@index([candidateId, lastMessageAt])
+  @@map("conversations")
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String       @map("conversation_id")
+  senderId       String       @map("sender_id")
+  body           String       @db.Text
+  attachments    Json? // [{ name, type, size, url? }]
+  createdAt      DateTime     @default(now()) @map("created_at")
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+// Employer -> candidate recruiting outreach (hiring agent, Phase 2).
+/// How a candidate answered an approach.
+enum OutreachResponse {
+  INTERESTED
+  /// Not a refusal. Someone happy where they are this month may not be in six.
+  NOT_NOW
+  NOT_INTERESTED
+}
+
+model OutreachMessage {
+  id          String   @id @default(uuid())
+  employerId  String   @map("employer_id")
+  candidateId String   @map("candidate_id")
+  role        String?
+  subject     String
+  message     String   @db.Text
+  channel     String   @default("notification") // notification | email | both
+  /// Legacy. Never updated — the timestamps below are what is true.
+  status      String   @default("sent")
+
+  /// When the candidate first opened it **in Coral**. Email opens are not
+  /// tracked: that means a tracking pixel, and a recruiter's "open rate" is
+  /// not worth surveilling someone's inbox for.
+  openedAt     DateTime?         @map("opened_at")
+  respondedAt  DateTime?         @map("responded_at")
+  response     OutreachResponse?
+  /// Anything the candidate chose to add. Optional on purpose — a one-click
+  /// answer is what makes people answer at all.
+  responseNote String?           @map("response_note") @db.Text
+  /// The thread "Interested" opened. Saying yes to an approach is consent to
+  /// be written to, and without this the reply would lead nowhere.
+  conversationId String?         @map("conversation_id")
+
+  /// When a recruiter chose to have it arrive in the candidate's working
+  /// hours. Delivered by OutreachService's scheduled job; until then the
+  /// candidate cannot see it. `status` is 'scheduled' → 'sent', or 'cancelled'.
+  scheduledFor      DateTime? @map("scheduled_for")
+  /// When it actually reached the candidate. Stats and "sent" dates read this.
+  sentAt            DateTime? @map("sent_at")
+  /// The candidate's timezone at delivery, so reply rates can later be read
+  /// against their local send time rather than the recruiter's.
+  candidateTimezone String?   @map("candidate_timezone") @db.VarChar(64)
+
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([employerId, createdAt])
+  @@index([candidateId, createdAt])
+  @@index([status, scheduledFor])
+  @@map("outreach_messages")
+}
+
+// Key-value store for admin-adjustable system settings (e.g. audit retention).
+model SystemSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("system_settings")
+}
+
+// Administrative action audit trail — one row per admin mutation.
+model AuditLog {
+  id            String   @id @default(uuid())
+  adminId       String   @map("admin_id")
+  admin         User     @relation("AdminAuditLogs", fields: [adminId], references: [id], onDelete: Cascade)
+
+  action        String   // Create | Update | Delete | Approve | Reject | Login | Export | Settings Change
+  entityType    String   @map("entity_type") // Job | Employer | Jobseeker | Application | Settings | System
+  entityId      String?  @map("entity_id")
+  entityName    String?  @map("entity_name")
+  changeSummary String?  @map("change_summary")
+  status        String   @default("Success") // Success | Failed
+  before        Json?
+  after         Json?
+  ipAddress     String?  @map("ip_address")
+
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([adminId])
+  @@index([entityType])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// Job Seeker Profile (for candidates)
+model JobSeekerProfile {
+  id              String    @id @default(uuid())
+  userId          String    @unique @map("user_id")
+  
+  // Professional Info
+  headline        String?
+  summary         String?   @db.Text
+  currentTitle    String?   @map("current_title")
+  currentCompany  String?   @map("current_company")
+  industry        String?
+  
+  // Location
+  country         String?
+  city            String?
+  state           String?
+  remotePreference String?  @map("remote_preference")
+  
+  // Job Preferences
+  jobTypes        String[] // full-time, part-time, contract, internship
+  experienceLevel String?  @map("experience_level")
+  salaryExpectation String? @map("salary_expectation")
+  availableFrom   DateTime? @map("available_from")
+  
+  // Skills
+  skills          String[]
+  /// Lower-cased mirror of `skills`, for searching.
+  ///
+  /// Postgres array containment is case-sensitive and Prisma has no
+  /// `mode: "insensitive"` for it, so a recruiter searching "react" never
+  /// matched the "React" on anyone's profile — the single most important
+  /// signal in candidate search silently found nobody. `skills` keeps the
+  /// capitalisation people typed, because that is what gets displayed.
+  ///
+  /// Maintained in JobSeekersService.updateMyProfile, the only path that
+  /// writes skills. Anything new that writes `skills` must write this too.
+  skillsNormalized String[] @map("skills_normalized")
+  languages       String[]
+  
+  // Social Links
+  linkedinUrl     String?   @map("linkedin_url")
+  githubUrl       String?   @map("github_url")
+  portfolioUrl    String?   @map("portfolio_url")
+  twitterUrl      String?   @map("twitter_url")
+  
+  // Resume
+  resumeUrl       String?   @map("resume_url") // legacy/manual link, if any
+  /// Storage path in the PRIVATE `resumes` bucket. Never served directly —
+  /// access is always via a short-lived signed URL.
+  resumePath      String?   @map("resume_path")
+  resumeFileName  String?   @map("resume_file_name")
+  resumeUploadedAt DateTime? @map("resume_uploaded_at")
+  /// Summary of the last resume the user parsed — { fileName, skills, roles,
+  /// experienceYears, parsedAt }. Lets the interview coach (and future flows)
+  /// reuse it without re-reading the file.
+  parsedResume    Json?     @map("parsed_resume")
+
+  // Availability & contact (profile sync completion)
+  /// "I am looking." A badge and a ranking signal — no longer the gate on
+  /// whether a recruiter can find you; see `discoverable`.
+  openToWork      Boolean   @default(false) @map("open_to_work")
+  /// Whether recruiters may find this profile in candidate search.
+  ///
+  /// Opt-OUT, by product decision: on unless the person turns it off. Being
+  /// found is therefore not evidence that anyone agreed to it, which is why
+  /// the setting has to stay easy to find, contact details are still withheld,
+  /// and a hidden profile (privacySettings.profileVisible === false) is
+  /// excluded whatever this says — hiding is already an opt-out in substance.
+  discoverable    Boolean   @default(true) @map("discoverable")
+  contactEmail    String?   @map("contact_email")
+  phone           String?   @map("phone")
+
+  // Account settings (notification + privacy preference blobs)
+  notificationSettings Json? @map("notification_settings")
+  privacySettings      Json? @map("privacy_settings")
+
+  // Work eligibility (Canada market)
+  workEligibility   String?  @map("work_eligibility")
+  workPermitExpiry  String?  @map("work_permit_expiry")
+
+  // Profile media (Supabase Storage URLs)
+  avatarUrl         String?  @map("avatar_url")
+  bannerUrl         String?  @map("banner_url")
+  introVideoUrl     String?  @map("intro_video_url")
+
+  // Extended job preferences (profile sync completion)
+  preferredLocations  String[] @default([]) @map("preferred_locations")
+  preferredIndustries String[] @default([]) @map("preferred_industries")
+  keywords            String[] @default([])
+  willingToRelocate   Boolean  @default(false) @map("willing_to_relocate")
+  remoteWork          Boolean  @default(false) @map("remote_work")
+  /// IANA zone from the seeker's own browser, refreshed when they use Coral.
+  /// Used only to suggest when an outreach message lands in their working
+  /// hours. Region-level, and no more precise than the city they list.
+  timezone            String?  @db.VarChar(64)
+
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  experiences     Experience[]
+  educations      Education[]
+  certifications  Certification[]
+  portfolioItems  PortfolioItem[]
+  recommendations Recommendation[]
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([skillsNormalized], type: Gin)
+  @@map("job_seeker_profiles")
+}
+
+// Work Experience
+model Experience {
+  id              String    @id @default(uuid())
+  profileId       String    @map("profile_id")
+  
+  title           String
+  company         String
+  companyLogo     String?   @map("company_logo")
+  location        String?
+  employmentType  String?   @map("employment_type") // full-time, part-time, contract, freelance
+  
+  startDate       DateTime  @map("start_date")
+  endDate         DateTime? @map("end_date")
+  current         Boolean   @default(false)
+  /// Set only by the verification flow — never by the profile editor.
+  verified        Boolean   @default(false)
+  /// The work-email domain that was proved, when one was. Held even where
+  /// the domain could not be tied to this employer, because "a work email at
+  /// acme.com was verified" is true either way and "Verified" would not be.
+  verifiedWorkDomain String? @map("verified_work_domain") @db.VarChar(255)
+
+  description     String?   @db.Text
+
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  profile         JobSeekerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  workEmailVerifications WorkEmailVerification[]
+
+  @@map("experiences")
+}
+
+// Education
+model Education {
+  id              String    @id @default(uuid())
+  profileId       String    @map("profile_id")
+  
+  institution     String
+  institutionLogo String?   @map("institution_logo")
+  degree          String
+  fieldOfStudy    String?   @map("field_of_study")
+  location        String?
+  gpa             String?
+  honors          String?
+
+  startDate       DateTime  @map("start_date")
+  endDate         DateTime? @map("end_date")
+  current         Boolean   @default(false)
+  
+  description     String?   @db.Text
+  
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  
+  profile         JobSeekerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  
+  @@map("educations")
+}
+
+// Certification
+model Certification {
+  id              String    @id @default(uuid())
+  profileId       String    @map("profile_id")
+  
+  name            String
+  issuingOrg      String    @map("issuing_org")
+  issuingOrgLogo  String?   @map("issuing_org_logo")
+  credentialId    String?   @map("credential_id")
+  credentialUrl   String?   @map("credential_url")
+  
+  issueDate       DateTime  @map("issue_date")
+  expirationDate  DateTime? @map("expiration_date")
+  noExpiration    Boolean   @default(false) @map("no_expiration")
+  
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  
+  profile         JobSeekerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  
+  @@map("certifications")
+}
+
+// Portfolio Item
+model PortfolioItem {
+  id              String    @id @default(uuid())
+  profileId       String    @map("profile_id")
+  
+  title           String
+  mediaType       String?   @map("media_type") // video, document, project, design
+  description     String?   @db.Text
+  projectUrl      String?   @map("project_url")
+  imageUrl        String?   @map("image_url")
+  videoUrl        String?   @map("video_url")
+
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  profile         JobSeekerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@map("portfolio_items")
+}
+
+// Recommendation (testimonial from a colleague / manager)
+model Recommendation {
+  id              String    @id @default(uuid())
+  profileId       String    @map("profile_id")
+
+  author          String
+  authorTitle     String?   @map("author_title")
+  relationship    String?
+  text            String    @db.Text
+  date            String?
+
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  profile         JobSeekerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@map("recommendations")
+}
+
+// Verification request (identity / work eligibility / experience / education)
+enum VerificationType {
+  IDENTITY
+  WORK_ELIGIBILITY
+  EXPERIENCE
+  EDUCATION
+  /// Employer proving the company is real — the route for anyone whose email
+  /// domain can't be matched automatically.
+  COMPANY
+}
+
+/// A one-time code sent to a work email to prove employment at its domain.
+///
+/// The cheap half of identity verification: it costs nothing per check, and
+/// receiving mail at acme.com is real evidence about acme.com. What it is NOT
+/// is proof of who the person is — see Verification for that.
+model WorkEmailVerification {
+  id           String    @id @default(uuid())
+  userId       String    @map("user_id")
+  experienceId String    @map("experience_id")
+
+  email        String    @db.VarChar(255)
+  domain       String    @db.VarChar(255)
+  /// SHA-256 of the code. The code itself exists only in the email we sent.
+  codeHash     String    @map("code_hash")
+  attempts     Int       @default(0)
+  expiresAt    DateTime  @map("expires_at")
+  consumedAt   DateTime? @map("consumed_at")
+
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  experience Experience @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+
+  /// Both halves of the rate limit read this index.
+  @@index([userId, createdAt])
+  @@index([experienceId])
+  @@map("work_email_verifications")
+}
+
+enum VerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model Verification {
+  id            String              @id @default(uuid())
+  userId        String              @map("user_id")
+
+  type          VerificationType
+  status        VerificationStatus  @default(PENDING)
+
+  // Optional link to the record being verified (experience/education UUID)
+  targetId      String?             @map("target_id")
+
+  // Evidence supplied by the applicant
+  documentUrl   String?             @map("document_url")
+  note          String?             @db.Text
+
+  // Review outcome
+  reviewerNote  String?             @map("reviewer_note") @db.Text
+  reviewedById  String?             @map("reviewed_by_id")
+  reviewedAt    DateTime?           @map("reviewed_at")
+
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+
+  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([type, status])
+  @@index([createdAt])
+  @@map("verifications")
+}
+
+/// A company's Slack workspace connection.
+///
+/// Company-level, unlike GoogleCredential: a channel belongs to the team, and
+/// the connection must outlive whoever set it up. Holds an incoming-webhook URL
+/// rather than a bot token — Slack binds it to one channel at install time, it
+/// does not expire, and it grants no read access.
+model SlackIntegration {
+  id             String    @id @default(uuid())
+  companyId      String    @unique @map("company_id")
+  webhookUrl     String    @map("webhook_url")
+  channelName    String?   @map("channel_name")
+  teamName       String?   @map("team_name")
+  connectedById  String    @map("connected_by_id")
+  /// Last delivery failure, so a revoked webhook is visible instead of silent.
+  lastError      String?   @map("last_error")
+  lastPostedAt   DateTime? @map("last_posted_at")
+
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  company        Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("slack_integrations")
+}
+
+enum CompanyAuditCategory {
+  TEAM
+  JOBS
+  CANDIDATES
+  INTEGRATIONS
+  COMPANY
+}
+
+/// Who did what, inside one company.
+///
+/// Separate from AuditLog, which records platform governance by staff — a
+/// different audience with different access rules. Entries are written at the
+/// time of the action; a timeline reconstructed from current rows could not
+/// attribute anything, and would lose deletions entirely.
+model CompanyAuditLog {
+  id         String               @id @default(uuid())
+  companyId  String               @map("company_id")
+  /// Null once the actor's account is deleted — actorName is what survives.
+  actorId    String?              @map("actor_id")
+  /// Denormalised on purpose: a removed member's actions must still say who.
+  actorName  String               @map("actor_name")
+  category   CompanyAuditCategory
+  action     String
+  entityType String?              @map("entity_type")
+  entityId   String?              @map("entity_id")
+  /// Never a candidate's name — this log has a CSV export.
+  entityName String?              @map("entity_name")
+  summary    String               @db.Text
+  before     Json?
+  after      Json?
+  createdAt  DateTime             @default(now()) @map("created_at")
+
+  company    Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  actor      User?                @relation("CompanyAuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, createdAt])
+  @@index([companyId, category, createdAt])
+  @@map("company_audit_logs")
+}
+
+/// Fixed set of seats in a company. Each is a named capability set enforced
+/// server-side; there are deliberately no custom roles, because a per-company
+/// permission matrix has to be consulted on every employer endpoint and grows a
+/// new hole with every feature added.
+enum CompanyRole {
+  OWNER
+  ADMIN
+  RECRUITER
+  HIRING_MANAGER
+  INTERVIEWER
+  VIEWER
+}
+
+/// PENDING covers someone who asked to join on a matching email domain. They
+/// hold no access at all until an owner or admin approves — a shared domain is
+/// a hint about where someone works, never proof, and company data now includes
+/// other people's applications and CVs.
+enum CompanyMemberStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  /// Kept rather than deleted: the company must retain the jobs, threads and
+  /// interviews this person created on its behalf, and the person must not.
+  REMOVED
+}
+
+enum CompanyInvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+}
+
+/// The hiring organisation: who belongs to it and what they may do.
+///
+/// Distinct from EmployerProfile, which stays 1:1 with a user and remains the
+/// public-facing company page. The company's public branding is the profile of
+/// its OWNER — deriving it that way means transferring ownership moves the page
+/// with it, and avoids migrating reviews, followers and analytics off
+/// EmployerProfile before there is any reason to.
+model Company {
+  id        String   @id @default(uuid())
+  name      String
+  /// Work-email domain, when the company has one. Used to *suggest* joining.
+  /// Never grants access on its own — see CompanyMemberStatus.PENDING.
+  domain    String?  @unique @db.VarChar(255)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  members     CompanyMember[]
+  invitations CompanyInvitation[]
+  slack       SlackIntegration?
+  scheduledTasks ScheduledTask[]
+  auditLogs      CompanyAuditLog[]
+  joinLinks   CompanyJoinLink[]
+  profiles    EmployerProfile[]
+  subscription CompanySubscription?
+  usage        CompanyUsage[]
+  candidateNotes CandidateNote[]
+  profileImpressions ProfileImpression[]
+  candidateTags  CandidateTag[]
+  posts          Post[]
+  tides          Tide[]
+  offers         Offer[]
+  emailTemplates EmailTemplate[]
+  scorecardCriteria ScorecardCriterion[]
+  spaces            Space[]
+
+  @@map("companies")
+}
+
+/// A shareable link that admits its holder to the company.
+///
+/// Different in kind from CompanyInvitation, which is addressed to one person:
+/// this is a bearer token, so whoever receives it can use it. What's behind it
+/// is other people's applications, CVs and interview recordings, so three
+/// limits are structural rather than optional:
+///
+/// - **Domain lock.** Off-domain joiners land as PENDING for approval instead
+///   of being admitted, which makes a leaked link inert outside the company.
+/// - **Role ceiling.** Never OWNER or ADMIN — an escaped link that grants admin
+///   is a company takeover; one that grants Recruiter is contained.
+/// - **Expiry and revocation**, with regeneration invalidating the old token.
+///
+/// The token is stored in the clear here, unlike an emailed invitation. That is
+/// deliberate: a link that cannot be shown again is not a shareable link, and
+/// the containment comes from the domain lock rather than from secrecy.
+model CompanyJoinLink {
+  id           String      @id @default(uuid())
+  companyId    String      @map("company_id")
+  /// Looked up on every join.
+  token        String      @unique
+  role         CompanyRole @default(RECRUITER)
+  /// When true, only addresses on the company's domain join without approval.
+  domainLocked Boolean     @default(true) @map("domain_locked")
+  maxUses      Int?        @map("max_uses")
+  usedCount    Int         @default(0) @map("used_count")
+  expiresAt    DateTime    @map("expires_at")
+  createdById  String      @map("created_by_id")
+  revokedAt    DateTime?   @map("revoked_at")
+
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  company      Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@map("company_join_links")
+}
+
+model CompanyMember {
+  id          String              @id @default(uuid())
+  companyId   String              @map("company_id")
+  userId      String              @map("user_id")
+  role        CompanyRole         @default(RECRUITER)
+  status      CompanyMemberStatus @default(ACTIVE)
+  invitedById String?             @map("invited_by_id")
+  joinedAt    DateTime?           @map("joined_at")
+
+  createdAt   DateTime            @default(now()) @map("created_at")
+  updatedAt   DateTime            @updatedAt @map("updated_at")
+
+  company     Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user        User                @relation("UserCompanyMemberships", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, userId])
+  @@index([userId])
+  @@index([companyId, status])
+  @@map("company_members")
+}
+
+/// An emailed invitation to join a company.
+///
+/// Only the SHA-256 of the token is stored: the link grants access to other
+/// people's applications and CVs, so a leaked database must not also leak
+/// working invitations.
+model CompanyInvitation {
+  id           String                  @id @default(uuid())
+  companyId    String                  @map("company_id")
+  email        String                  @db.VarChar(255)
+  role         CompanyRole             @default(RECRUITER)
+  tokenHash    String                  @unique @map("token_hash")
+  status       CompanyInvitationStatus @default(PENDING)
+  invitedById  String                  @map("invited_by_id")
+  expiresAt    DateTime                @map("expires_at")
+  acceptedAt   DateTime?               @map("accepted_at")
+  acceptedById String?                 @map("accepted_by_id")
+
+  createdAt    DateTime                @default(now()) @map("created_at")
+  updatedAt    DateTime                @updatedAt @map("updated_at")
+
+  company      Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@index([email])
+  @@map("company_invitations")
+}
+
+
+/// What a scheduled task does. A fixed registry rather than free-form: each
+/// value has a handler, and the template gallery renders from this list so the
+/// UI cannot offer something nothing implements.
+enum ScheduledTaskType {
+  STALE_APPLICATIONS
+  INTERVIEWS_WITHOUT_OUTCOME
+  WEEKLY_SUMMARY
+  /// Watches one saved search; configKey holds the shortlist id, so several
+  /// may run at once while the unique index still forbids duplicates.
+  SAVED_SEARCH_MATCHES
+}
+
+/// Deliberately not cron syntax. These three cover every task on offer, each
+/// describes itself in one line, and none of them can be misconfigured into
+/// never firing.
+enum TaskCadence {
+  DAILY
+  WEEKDAYS
+  WEEKLY
+}
+
+/// A recurring job an employer set up for themselves.
+///
+/// Due work is found by querying `nextRunAt` rather than by registering cron
+/// jobs at runtime: in-memory jobs vanish on restart and double up the moment a
+/// second instance starts, whereas a stored timestamp survives both.
+model ScheduledTask {
+  id          String            @id @default(uuid())
+  companyId   String            @map("company_id")
+  createdById String            @map("created_by_id")
+  type        ScheduledTaskType
+  /// Distinguishes several tasks of one type — empty for the singleton kinds,
+  /// and a shortlist id once saved-search watching exists.
+  configKey   String            @default("") @map("config_key")
+  config      Json              @default("{}")
+
+  cadence     TaskCadence       @default(WEEKLY)
+  /// Hour of day 0-23, read in `timezone`.
+  hourLocal   Int               @default(9) @map("hour_local")
+  /// 1 = Monday … 7 = Sunday. Only meaningful for WEEKLY.
+  weekday     Int?
+  /// IANA zone captured from the creator's browser. Without this every task
+  /// fires at server time, which is nobody's 9am.
+  timezone    String            @default("UTC")
+
+  enabled     Boolean           @default(true)
+  /// Send a notification even when the run found nothing. Off by default —
+  /// a weekly "nothing to report" is how people learn to ignore a feature.
+  notifyWhenEmpty Boolean       @default(false) @map("notify_when_empty")
+
+  lastRunAt   DateTime?         @map("last_run_at")
+  nextRunAt   DateTime          @map("next_run_at")
+  lastSummary String?           @map("last_summary") @db.Text
+  /// Held while a sweeper is executing this row, so two instances cannot run
+  /// the same task twice. Cleared on completion; stale claims are reaped.
+  claimedAt   DateTime?         @map("claimed_at")
+
+  createdAt   DateTime          @default(now()) @map("created_at")
+  updatedAt   DateTime          @updatedAt @map("updated_at")
+
+  company     Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, type, configKey])
+  @@index([enabled, nextRunAt])
+  @@map("scheduled_tasks")
+}
+
+// Employer Profile (for recruiters/hiring managers)
+model EmployerProfile {
+  id              String    @id @default(uuid())
+  userId          String    @unique @map("user_id")
+  
+  // Company Info
+  // Now a real foreign key. It used to hold a loose domain string, which meant
+  // "same company" was a guess rather than a membership.
+  companyId       String?   @map("company_id")
+  company         Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  companyName     String    @map("company_name")
+  companyLogo     String?   @map("company_logo")
+  companyWebsite   String?   @map("company_website")
+  companySize     String?   @map("company_size") // 1-10, 11-50, 51-200, 201-500, 501-1000, 1000+
+  industry        String?
+  
+  // User's role in company
+  jobTitle        String    @map("job_title")
+  department      String?
+  isHiringManager Boolean   @default(false) @map("is_hiring_manager")
+  isRecruiter     Boolean   @default(false) @map("is_recruiter")
+  isAdmin         Boolean   @default(false) @map("is_admin")
+  
+  // Company description
+  companyDescription String? @map("company_description") @db.Text
+  companyBenefits    String[] @map("company_benefits")
+  companyCulture     String?  @map("company_culture") @db.Text
+  // "Life at <company>" extras (public culture card)
+  culturePhilosophy   String? @map("culture_philosophy") @db.Text
+  cultureCollaboration String? @map("culture_collaboration") @db.Text
+  cultureImageUrl     String? @map("culture_image_url")
+
+  // Location
+  headquarters    String?
+  companyLocations String[] @map("company_locations")
+  
+  // Social Links — flexible list of { id, label, url }, any platform
+  socialLinks     Json      @default("[]") @map("social_links")
+
+  // Public contact details — deliberately not the account email, which is the
+  // recruiter's login rather than an address candidates should write to.
+  supportEmail    String?   @map("support_email")
+  supportPhone    String?   @map("support_phone")
+
+  // Public branding profile (company page shown at /companies & /company-profile)
+  tagline         String?   @db.VarChar(160)
+  companyBanner   String?   @map("company_banner")
+  foundedYear     Int?      @map("founded_year")
+  industries      String[]  @default([])
+  locations       Json      @default("[]")
+  // Core values — list of { title, description, icon? }
+  coreValues      Json      @default("[]") @map("core_values")
+  // "Why work here" EVP cards — list of { icon, title, description }
+  whyWorkHere     Json      @default("[]") @map("why_work_here")
+  // Awards & accreditations — list of { title, organization, year, description?, badgeUrl? }
+  awards          Json      @default("[]")
+  // Diversity & inclusion: a statement + stats list of { label, value }
+  diversityStatement String? @map("diversity_statement") @db.Text
+  deiStats        Json      @default("[]") @map("dei_stats")
+  // Photo gallery — list of { url, caption?, id? } (uploaded or external URLs)
+  galleryPhotos   Json      @default("[]") @map("gallery_photos")
+  // Culture video — uploaded storage URL or external embed URL (YouTube/Vimeo/Loom)
+  cultureVideoUrl String?   @map("culture_video_url")
+  overview        String?   @db.Text
+  mission         String?   @db.Text
+  vision          String?   @db.Text
+  visibility      String    @default("unlisted") // public | unlisted | private
+  showJobs        Boolean   @default(true) @map("show_jobs")
+  allowFollow     Boolean   @default(true) @map("allow_follow")
+
+  // Trust signal: derived by comparing the employer's email domain to companyWebsite
+  verificationStatus String @default("unverified") @map("verification_status") // unverified | verified
+
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  
+  // Relations
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  followers       CompanyFollow[] @relation("EmployerFollowers")
+
+  @@index([userId])
+  @@index([verificationStatus])
+  @@index([createdAt])
+  @@map("employer_profiles")
+}
+
+// A user following a company — powers the profile "Follow" button and new-job alerts.
+model CompanyFollow {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  companyId String   @map("company_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user    User            @relation("UserCompanyFollows", fields: [userId], references: [id], onDelete: Cascade)
+  company EmployerProfile @relation("EmployerFollowers", fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, companyId])
+  @@index([companyId])
+  @@index([userId])
+  @@map("company_follows")
+}
+
+// Freelancer Profile (for gig workers)
+model FreelancerProfile {
+  id              String    @id @default(uuid())
+  userId          String    @unique @map("user_id")
+  
+  // Professional Info
+  headline        String?
+  summary         String?   @db.Text
+  title           String?
+  
+  // Skills & Expertise
+  skills          String[]
+  expertise       String[]  // areas of expertise
+  hourlyRate      String?   @map("hourly_rate")
+  currency        String    @default("USD")
+  
+  // Location
+  country         String?
+  city            String?
+  timezone        String?
+  availableForRemote Boolean @default(true) @map("available_for_remote")
+  
+  // Availability
+  availability    String?   // full-time, part-time, not-available
+  hoursPerWeek    Int?      @map("hours_per_week")
+  
+  // Portfolio
+  portfolioUrl    String?   @map("portfolio_url")
+  githubUrl       String?   @map("github_url")
+  linkedinUrl     String?   @map("linkedin_url")
+  
+  // Stats
+  completedProjects Int     @default(0) @map("completed_projects")
+  rating          Float?
+  totalEarnings   Float     @default(0) @map("total_earnings")
+  
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  
+  // Relations
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("freelancer_profiles")
+}
+
+// Employer job listings
+model Job {
+  id                   String   @id @default(uuid())
+  postedById           String   @map("posted_by_id")
+  // Admin-only manual employer override (used when no linked employer account is selected)
+  companyName          String?  @map("company_name")
+  companyLogo          String?  @map("company_logo")
+  title                String
+  slug                 String   @unique
+  description          String   @db.Text
+  category             String?
+  employmentType       String   @map("employment_type")
+  experienceLevel      String?  @map("experience_level")
+  location             String?
+  isRemote             Boolean  @default(false) @map("is_remote")
+  isHybrid             Boolean  @default(false) @map("is_hybrid")
+  salaryMin            Int?     @map("salary_min")
+  salaryMax            Int?     @map("salary_max")
+  salaryCurrency       String   @default("USD") @map("salary_currency")
+  salaryPeriod         String?  @map("salary_period")
+  responsibilities     String[] @default([])
+  requirements         String[] @default([])
+  benefits             String[] @default([])
+  skills               String[] @default([])
+  applicationDeadline  DateTime? @map("application_deadline")
+  maxApplicants        Int?      @map("max_applicants")
+  /// How candidates apply, chosen by whoever posted the job:
+  /// internal = Quick Apply on-platform · external = the company's own site
+  /// · email = send an application to applicationEmail.
+  applicationMethod    String    @default("internal") @map("application_method")
+  applicationUrl       String?   @map("application_url")
+  applicationEmail     String?   @map("application_email")
+  /// One AI-screening question set (string[]) shared by every candidate
+  /// screened for this job — the thing that makes their scores comparable.
+  screeningQuestions   Json?     @map("screening_questions")
+  screeningGeneratedAt DateTime? @map("screening_generated_at")
+  /// BCP-47 language the screening round is conducted in. Per job, not per
+  /// candidate: everyone must answer the same questions in the same language
+  /// for scores to compare, and the right language is a property of the role.
+  screeningLanguage    String    @default("en-US") @map("screening_language")
+  featured             Boolean   @default(false)
+  urgent               Boolean   @default(false)
+  status               String    @default("draft")
+  viewsCount           Int       @default(0) @map("views_count")
+  applicationsCount    Int       @default(0) @map("applications_count")
+  publishedAt          DateTime? @map("published_at")
+  /// When this job was matched against seekers after going live. Null means
+  /// not yet — the sweep in recommendations/job-fanout.service.ts picks it up.
+  /// A marker rather than "has any recommendation rows", because a job nobody
+  /// matched must not be re-matched every fifteen minutes.
+  fannedOutAt          DateTime? @map("fanned_out_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  postedBy             User          @relation("PostedJobs", fields: [postedById], references: [id], onDelete: Cascade)
+  applications         Application[]
+  savedBy              SavedJob[]
+  recommendations      JobRecommendation[]
+  boosts               JobBoost[]
+
+  @@index([postedById, createdAt])
+  @@index([status, publishedAt])
+  @@index([status, createdAt])
+  @@index([employmentType, createdAt])
+  @@index([experienceLevel, createdAt])
+  @@index([location])
+  @@index([featured, createdAt])
+  @@index([isRemote, createdAt])
+  @@map("jobs")
+}
+
+// Job applications submitted by job seekers
+model Application {
+  id               String   @id @default(uuid())
+  jobId            String   @map("job_id")
+  applicantId      String   @map("applicant_id")
+  coverLetter      String?  @map("cover_letter") @db.Text
+  resumeUrl        String?  @map("resume_url")
+  /// Storage path of the resume snapshot taken at apply time (PRIVATE bucket);
+  /// read through short-lived signed URLs only.
+  resumePath       String?  @map("resume_path")
+  expectedSalary   Int?     @map("expected_salary")
+  availabilityDate DateTime? @map("availability_date")
+  /// Skill overlap with the job, 0-100. NULL when the job lists no skills —
+  /// nothing to compare against, which is not the same as matching none of it.
+  /// Stored rather than derived so the board can sort and page in SQL.
+  matchScore       Int?     @map("match_score")
+  /// The employer-facing state of this application, and the only one stored.
+  ///
+  /// There used to be a second `stage` column beside this holding a third
+  /// vocabulary ("Application Sent"), written on every apply and read by
+  /// nothing. The shared pipeline stage is derived from this — see
+  /// src/common/pipeline-stage.ts.
+  status           String   @default("pending")
+  /// When the employer first did anything to this application — the moment the
+  /// candidate stopped waiting. `updatedAt` cannot answer this: it is the LAST
+  /// change, so an application touched three times overstates the wait.
+  /// Null for rows written before this column existed, and those are EXCLUDED
+  /// from the statistic rather than estimated from `updatedAt`.
+  firstRespondedAt DateTime? @map("first_responded_at")
+  notes            String?  @db.Text
+  appliedAt        DateTime @default(now()) @map("applied_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  job              Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  applicant        User     @relation("UserApplications", fields: [applicantId], references: [id], onDelete: Cascade)
+  offer            Offer?
+  /// The sourcing record this application was matched to, when the company had
+  /// already found this person. See ShortlistItem.applicationId.
+  shortlistItem    ShortlistItem?
+
+  @@unique([jobId, applicantId])
+  @@index([jobId, appliedAt])
+  @@index([jobId, matchScore])
+  @@index([applicantId, appliedAt])
+  @@index([status, appliedAt])
+  @@map("applications")
+}
+
+// Jobs saved/bookmarked by users
+model SavedJob {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  jobId     String   @map("job_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user      User     @relation("UserSavedJobs", fields: [userId], references: [id], onDelete: Cascade)
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, jobId])
+  @@index([userId, createdAt])
+  @@index([jobId])
+  @@map("saved_jobs")
+}
+
+// User-configured job matching alerts
+model JobAlert {
+  id              String   @id @default(uuid())
+  userId          String   @map("user_id")
+  name            String
+  keywords        String[] @default([])
+  location        String?
+  jobType         String?  @map("job_type")
+  experienceLevel String?  @map("experience_level")
+  salaryMin       Int?     @map("salary_min")
+  frequency       String   @default("daily")
+  isActive        Boolean  @default(true) @map("is_active")
+  lastSentAt      DateTime? @map("last_sent_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  user            User     @relation("UserJobAlerts", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, isActive])
+  @@index([isActive, frequency, lastSentAt])
+  @@map("job_alerts")
+}
+
+/// One job put in front of one job seeker by Coral's matching.
+///
+/// The unit of reach an employer is shown ("recommended to 40"), and the thing
+/// a seeker dismisses. Rows come from the publish fan-out and from boosts; the
+/// on-screen feed is computed live and writes a row only when the seeker acts
+/// on an item (opens or dismisses it), so the table is a record of delivery
+/// and response, not of every page render.
+///
+/// Matching reads only what the seeker declared about themselves against what
+/// the job asks for. The employer never chooses who receives it.
+model JobRecommendation {
+  id          String    @id @default(uuid())
+  jobId       String    @map("job_id")
+  userId      String    @map("user_id")
+  /// 0-100 from recommendations/job-match.rules.ts when the row was written.
+  score       Int
+  /// Why, in words the seeker is shown ("3 of your skills", "Remote").
+  reasons     String[]  @default([])
+  /// publish | boost | feed — what put it here.
+  source      String    @default("publish")
+  /// Reached this person because the employer paid. Shown as "Promoted".
+  promoted    Boolean   @default(false)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  /// When it went out in a digest. Null while queued.
+  notifiedAt  DateTime? @map("notified_at")
+  /// First time the seeker opened the job from a recommendation.
+  openedAt    DateTime? @map("opened_at")
+  /// "Not interested" — never shown or sent again.
+  dismissedAt DateTime? @map("dismissed_at")
+
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  user User @relation("UserJobRecommendations", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, userId])
+  @@index([userId, notifiedAt])
+  @@index([notifiedAt, createdAt])
+  @@map("job_recommendations")
+}
+
+/// Paid reach for one job: a wider fan-out, a follow-up wave if applications
+/// are slow, and a labelled "Promoted" slot in matching seekers' feeds.
+///
+/// It buys reach, never an audience. There is deliberately nowhere to say who
+/// should see the job — see recommendations/job-boost.service.ts.
+model JobBoost {
+  id           String    @id @default(uuid())
+  jobId        String    @map("job_id")
+  /// The company whose allowance it counts against. Null for a sole operator.
+  companyId    String?   @map("company_id")
+  createdById  String    @map("created_by_id")
+  /// active | ended
+  status       String    @default("active")
+  startsAt     DateTime  @default(now()) @map("starts_at")
+  endsAt       DateTime  @map("ends_at")
+  /// When the follow-up check ran (once per boost). Whether it sent anything
+  /// shows in the job_recommendations rows it wrote, source 'boost'.
+  secondWaveAt DateTime? @map("second_wave_at")
+  endedAt      DateTime? @map("ended_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, status])
+  @@index([status, endsAt])
+  @@index([companyId, createdAt])
+  @@map("job_boosts")
+}
+
+// Community post
+model Post {
+  id             String     @id @default(uuid())
+  authorId       String     @map("author_id")
+  /// Nullable only for posts written before spaces existed. Every new post is
+  /// given one by the service.
+  spaceId        String?    @map("space_id")
+  /// Set when the post speaks for a company rather than for its author.
+  ///
+  /// The author is still recorded — someone always wrote it, and in a hiring
+  /// context who that was is worth knowing — but the byline is the company.
+  /// Only an OWNER or ADMIN of that company may set it.
+  companyId      String?    @map("company_id")
+  content        String     @db.Text
+  postType       PostType   @default(TEXT) @map("post_type")
+  mediaUrls      String[]   @default([]) @map("media_urls")
+  hashtags       String[]   @default([])
+  /// Frozen at posting time: title, description, image and site for the first
+  /// link in the text. Stored rather than fetched on read so every reader and
+  /// every moderator sees the same card, and the destination cannot be swapped
+  /// after someone approved it.
+  linkPreview    Json?      @map("link_preview")
+  isEdited       Boolean    @default(false) @map("is_edited")
+  /// Set when a moderator removes it. Soft, so the record of what was said and
+  /// what was done about it survives — a hard delete leaves nothing to review.
+  removedAt      DateTime?  @map("removed_at")
+  removedById    String?    @map("removed_by_id")
+  removalReason  String?    @map("removal_reason") @db.Text
+  /// The post this one passes on, when it does.
+  ///
+  /// Reshares never chain: resharing a reshare points at the original, so
+  /// the embed is always the thing someone actually wrote.
+  resharedFromId String?    @map("reshared_from_id")
+  /// Set on TIDE posts. The tide is the record; the post is one announcement
+  /// of it, and there may be several.
+  tideId         String?    @map("tide_id")
+  likesCount     Int        @default(0) @map("likes_count")
+  commentsCount  Int        @default(0) @map("comments_count")
+  bookmarksCount Int        @default(0) @map("bookmarks_count")
+  resharesCount  Int        @default(0) @map("reshares_count")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+
+  author     User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  space      Space?         @relation(fields: [spaceId], references: [id], onDelete: SetNull)
+  company    Company?       @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  /// Cascade: deleting a post takes the copies that exist only to quote it.
+  /// An author asking for their words to be removed should not find them
+  /// still being read inside someone else's post.
+  resharedFrom Post?        @relation("PostReshares", fields: [resharedFromId], references: [id], onDelete: Cascade)
+  reshares     Post[]       @relation("PostReshares")
+  tide         Tide?        @relation(fields: [tideId], references: [id], onDelete: SetNull)
+  comments   PostComment[]
+  reports    PostReport[]
+  poll       Poll?
+  likes      PostLike[]
+  bookmarks  PostBookmark[]
+
+  @@index([authorId, createdAt])
+  @@index([createdAt])
+  @@index([postType, createdAt])
+  @@index([spaceId, createdAt])
+  /// The company page asks for its own posts, newest first.
+  @@index([companyId, createdAt])
+  @@index([resharedFromId])
+  @@index([tideId])
+  @@map("posts")
+}
+
+// Community comments
+model PostComment {
+  id         String        @id @default(uuid())
+  postId     String        @map("post_id")
+  parentId   String?       @map("parent_id")
+  authorId   String        @map("author_id")
+  content    String        @db.Text
+  isEdited   Boolean       @default(false) @map("is_edited")
+  /// Soft removal, for the same reason as on Post: what was said and what was
+  /// done about it both have to survive review.
+  removedAt   DateTime?    @map("removed_at")
+  removedById String?      @map("removed_by_id")
+  createdAt  DateTime      @default(now()) @map("created_at")
+  updatedAt  DateTime      @updatedAt @map("updated_at")
+
+  reports    PostReport[]
+  post       Post          @relation(fields: [postId], references: [id], onDelete: Cascade)
+  parent     PostComment?  @relation("PostCommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies    PostComment[] @relation("PostCommentReplies")
+  author     User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+  @@index([authorId])
+  @@index([parentId])
+  @@map("post_comments")
+}
+
+// Post likes
+model PostLike {
+  id        String   @id @default(uuid())
+  postId    String   @map("post_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@index([userId])
+  @@index([postId])
+  @@map("post_likes")
+}
+
+// Post bookmarks
+model PostBookmark {
+  id        String   @id @default(uuid())
+  postId    String   @map("post_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@index([userId])
+  @@index([postId])
+  @@map("post_bookmarks")
+}
+
+// Interview preparation sessions for job seekers
+model InterviewPrepSession {
+  id              String    @id @default(uuid())
+  userId          String    @map("user_id")
+  title           String
+  targetRole      String    @map("target_role")
+  company         String?
+  interviewType   String?   @map("interview_type")
+  difficulty      String    @default("intermediate")
+  jobDescription  String?   @map("job_description") @db.Text
+  focusAreas      String[]  @default([]) @map("focus_areas")
+  questionCount   Int       @default(8) @map("question_count")
+  profileSnapshot Json      @map("profile_snapshot")
+  generatedPlan   Json      @map("generated_plan")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  user      User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  feedbacks InterviewPrepFeedback[]
+
+  @@index([userId, createdAt])
+  @@map("interview_prep_sessions")
+}
+
+// AI feedback records for interview answers
+model InterviewPrepFeedback {
+  id         String   @id @default(uuid())
+  sessionId  String   @map("session_id")
+  userId     String   @map("user_id")
+  question   String   @db.Text
+  answer     String   @db.Text
+  score      Int
+  feedback   Json
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  session InterviewPrepSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+  @@index([userId, createdAt])
+  @@map("interview_prep_feedback")
+}
+
+// ── AI Interview Coach (/interview-prep) ────────────────────────────────────
+// A live mock-interview run. Replaces the client's localStorage history so a
+// session survives a refresh, a device change, and can be resumed mid-answer.
+/// Outbound webhook endpoint — the universal ATS integration primitive.
+/// Native connectors each need partner credentials and a live tenant; a signed
+/// webhook needs neither and any ATS, iPaaS or middleware can consume it.
+model EmployerWebhook {
+  id            String    @id @default(uuid())
+  employerId    String    @map("employer_id")
+  url           String
+  /// HMAC-SHA256 key. Receivers verify X-Coral-Signature so nobody can forge
+  /// screening results into a customer's ATS.
+  secret        String
+  /// Event names this endpoint subscribes to, e.g. ["screening.completed"].
+  events        String[]  @default([])
+  active        Boolean   @default(true)
+  /// Last delivery outcome, so a silently broken endpoint shows in the UI.
+  lastStatus    Int?      @map("last_status")
+  lastError     String?   @map("last_error")
+  lastAttemptAt DateTime? @map("last_attempt_at")
+  failureCount  Int       @default(0) @map("failure_count")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  employer User @relation(fields: [employerId], references: [id], onDelete: Cascade)
+
+  @@index([employerId])
+  @@map("employer_webhooks")
+}
+
+/// A review of an employer's HIRING PROCESS, tied to a verified interaction.
+///
+/// The trust model is the tie: a review requires a real Application or
+/// Interview with that employer, so fabricating one means fabricating an
+/// application first, and each interaction yields at most one review.
+///
+/// The author is anonymous to the employer and identified to the platform.
+/// `authorId` must never be exposed through an employer-facing endpoint.
+model CompanyReview {
+  id             String    @id @default(uuid())
+  employerId     String    @map("employer_id")
+  authorId       String    @map("author_id")
+  /// Exactly one is set — the proof this interaction happened.
+  applicationId  String?   @unique @map("application_id")
+  interviewId    String?   @unique @map("interview_id")
+  /// How far they actually got, so readers can weigh the review.
+  stageReached   String    @map("stage_reached")
+  rating         Int
+  /// { communication, clarity, respect, timeliness } — 1-5, all optional.
+  categoryRatings Json?    @map("category_ratings")
+  title          String
+  body           String    @db.Text
+  status         String    @default("pending") // pending | published | removed
+  /// What the automated checks found — kept even once published, so a later
+  /// complaint can be judged against what was known at the time.
+  checkResults   Json?     @map("check_results")
+  moderationNote String?   @map("moderation_note")
+  publishedAt    DateTime? @map("published_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  author   User            @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  response ReviewResponse?
+  flags    ReviewFlag[]
+
+  @@index([employerId, status])
+  @@index([authorId])
+  @@index([status, createdAt])
+  @@map("company_reviews")
+}
+
+/// Employer right of REPLY. There is deliberately no employer delete path —
+/// they can flag a review for moderation, never remove it.
+model ReviewResponse {
+  id         String   @id @default(uuid())
+  reviewId   String   @unique @map("review_id")
+  employerId String   @map("employer_id")
+  body       String   @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  review CompanyReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@map("review_responses")
+}
+
+/// A report against a review. Resolution is an admin action.
+model ReviewFlag {
+  id         String    @id @default(uuid())
+  reviewId   String    @map("review_id")
+  reporterId String
+  reason     String
+  detail     String?
+  resolvedAt DateTime? @map("resolved_at")
+  outcome    String?
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  review CompanyReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@index([reviewId])
+  @@index([resolvedAt])
+  @@map("review_flags")
+}
+
+/// Voluntary demographic self-report, used ONLY to check whether the AI
+/// screening scorer produces different outcomes across groups.
+///
+/// Kept in its own table on purpose: profile reads happen all over the
+/// candidate- and employer-facing code, and this must never ride along with
+/// one. It is never shown to employers, never placed in an AI prompt, and never
+/// returned for an individual to anyone but the person who submitted it — the
+/// only reads are aggregates with a minimum group size.
+model DemographicSelfReport {
+  id         String   @id @default(uuid())
+  userId     String   @unique @map("user_id")
+  /// All optional, all self-selected, all with an explicit "prefer not to say".
+  ethnicity  String?
+  gender     String?
+  ageBand    String?  @map("age_band")
+  disability String?
+  veteran    String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("demographic_self_reports")
+}
+
+model InterviewCoachSession {
+  id            String    @id @default(uuid())
+  userId        String    @map("user_id")
+  /// Set when this run IS an employer screening rather than self-practice.
+  /// Unique: one run per screening, so a candidate can't retake for a better
+  /// score. Screen runs take the job's fixed questions instead of AI-planned
+  /// ones, and hide live scores from the candidate.
+  screenId      String?   @unique @map("screen_id")
+  /// InterviewConfig — role, experience, type, difficulty, focus skills, voice.
+  config        Json
+  /// Question[] the engine planned for this run.
+  questions     Json      @default("[]")
+  /// AnswerRecord[] — question + transcript + evaluation, appended per answer.
+  answers       Json      @default("[]")
+  /// TranscriptItem[] — the conversation as shown in the transcript panel.
+  transcript    Json      @default("[]")
+  /// LiveScores — running competency scores (0-100).
+  liveScores    Json?     @map("live_scores")
+  /// Index of the next unanswered question — lets the UI resume exactly.
+  questionIndex Int       @default(0) @map("question_index")
+  status        String    @default("active") // active | completed | abandoned
+  durationSec   Int       @default(0) @map("duration_sec")
+  /// When this run was counted against the owner's coach allowance. Set once,
+  /// at the first successful AI plan, so a retried or resumed plan can never
+  /// be charged twice. Null for runs that never reached the AI, which are free.
+  meteredAt     DateTime? @map("metered_at")
+  startedAt     DateTime  @default(now()) @map("started_at")
+  completedAt   DateTime? @map("completed_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  report InterviewCoachReport?
+
+  @@index([userId, startedAt])
+  @@index([userId, status])
+  @@map("interview_coach_sessions")
+}
+
+model InterviewCoachReport {
+  id           String   @id @default(uuid())
+  sessionId    String   @unique @map("session_id")
+  userId       String   @map("user_id")
+  overallScore Int      @map("overall_score")
+  readiness    String // not-ready | getting-there | ready | strong
+  /// Full SessionReport blob (competencies, strengths, resources, samples…).
+  report       Json
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  session InterviewCoachSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("interview_coach_reports")
+}
+
+// Payment transactions managed by Stripe checkout/payment intents
+model PaymentTransaction {
+  id                      String        @id @default(uuid())
+  userId                  String        @map("user_id")
+  provider                PaymentProvider @default(STRIPE)
+  status                  PaymentStatus @default(PENDING)
+  amount                  Int
+  currency                String        @default("usd")
+  description             String?       @db.Text
+  referenceType           String?       @map("reference_type")
+  referenceId             String?       @map("reference_id")
+  stripeCheckoutSessionId String?       @unique @map("stripe_checkout_session_id")
+  stripePaymentIntentId   String?       @unique @map("stripe_payment_intent_id")
+  stripeCustomerId        String?       @map("stripe_customer_id")
+  metadata                Json?
+  failureCode             String?       @map("failure_code")
+  failureMessage          String?       @map("failure_message") @db.Text
+  paidAt                  DateTime?     @map("paid_at")
+  failedAt                DateTime?     @map("failed_at")
+  canceledAt              DateTime?     @map("canceled_at")
+  refundedAt              DateTime?     @map("refunded_at")
+  createdAt               DateTime      @default(now()) @map("created_at")
+  updatedAt               DateTime      @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([referenceType, referenceId])
+  @@map("payment_transactions")
+}
+
+// Records processed webhook events for idempotency and auditing
+model PaymentWebhookEvent {
+  id               String                  @id @default(uuid())
+  provider         PaymentProvider         @default(STRIPE)
+  providerEventId  String                  @unique @map("provider_event_id")
+  type             String
+  processingStatus WebhookProcessingStatus @default(PENDING) @map("processing_status")
+  payload          Json
+  errorMessage     String?                 @map("error_message") @db.Text
+  processedAt      DateTime?               @map("processed_at")
+  createdAt        DateTime                @default(now()) @map("created_at")
+  updatedAt        DateTime                @updatedAt @map("updated_at")
+
+  @@index([provider, createdAt])
+  @@index([processingStatus, createdAt])
+  @@map("payment_webhook_events")
+}
+
+/// Daily point-in-time snapshot of an admin metric, used to build real trend
+/// sparklines and period-over-period change. One row per (key, day).
+/// Raw event capture for employer analytics.
+///
+/// Job.viewsCount is a scalar with no time dimension, and the top of the funnel
+/// (profile views, job views, apply clicks, apply starts) was never recorded.
+/// None of it is reconstructable later, so capture ships before the charts.
+///
+/// Pruned after `ANALYTICS_EVENT_RETENTION_DAYS`; the daily rollup keeps the
+/// history.
+model AnalyticsEvent {
+  id          String   @id @default(uuid())
+  /// Always resolved server-side from the job/profile being viewed — never
+  /// taken from the client, or anyone could inflate anyone's numbers.
+  employerId  String   @map("employer_id")
+  jobId       String?  @map("job_id")
+  type        String // profile_view | job_view | apply_click | apply_started
+  occurredAt  DateTime @default(now()) @map("occurred_at")
+  /// Salted hash of (ip + user agent + UTC day) — unique-visitor counting and
+  /// dedupe without storing an IP. Day-scoped, so it can't link across days.
+  sessionHash String?  @map("session_hash")
+  /// Set only when signed in, so an employer's own visits can be excluded.
+  viewerId    String?  @map("viewer_id")
+  /// Referrer HOST only; full referrers carry search terms and private paths.
+  /// For `page_source` events this is the TRUE external referrer reported by
+  /// the browser — the API request's own Referer header is the app's own url
+  /// and says nothing about where the visitor came from.
+  source      String?
+  /// Campaign tags. A referrer alone can't tell an organic LinkedIn post from
+  /// a paid LinkedIn ad; utm_medium is what separates them.
+  /// ISO-2 from the CDN/proxy header. Accurate; only present behind one.
+  country     String?
+  /// IANA zone from the browser — always available, continent-level only.
+  timezone    String?
+  utmSource   String?  @map("utm_source")
+  utmMedium   String?  @map("utm_medium")
+  utmCampaign String?  @map("utm_campaign")
+
+  @@index([employerId, occurredAt])
+  @@index([jobId, occurredAt])
+  @@index([occurredAt])
+  @@index([employerId, type, occurredAt])
+  @@map("analytics_events")
+}
+
+/// Nightly rollup of AnalyticsEvent. Charts read this, not raw events.
+/// Submitted applications are deliberately absent — Application.appliedAt
+/// already has a time dimension, so counting them live keeps one source of
+/// truth rather than a rollup that can drift from the pipeline.
+model EmployerMetricDaily {
+  id             String   @id @default(uuid())
+  employerId     String   @map("employer_id")
+  day            DateTime @db.Date
+  profileViews   Int      @default(0) @map("profile_views")
+  jobViews       Int      @default(0) @map("job_views")
+  applyClicks    Int      @default(0) @map("apply_clicks")
+  applyStarted   Int      @default(0) @map("apply_started")
+  uniqueVisitors Int      @default(0) @map("unique_visitors")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@unique([employerId, day])
+  @@index([employerId, day])
+  @@map("employer_metrics_daily")
+}
+
+model MetricSnapshot {
+  id         String   @id @default(uuid())
+  key        String
+  value      Int
+  capturedOn DateTime @db.Date @map("captured_on")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@unique([key, capturedOn])
+  @@index([key, capturedOn])
+  @@map("metric_snapshots")
+}
+
+/// Which plan a company is on. Flat tiers with caps rather than per-seat
+/// pricing, so nothing here is a billable quantity — see PLAN_ENTITLEMENTS.
+enum CompanyPlan {
+  STARTER
+  PRO
+  ENTERPRISE
+}
+
+/// NONE is a company that has never subscribed, which is not the same as one
+/// whose subscription ended: the first has no Stripe customer at all, the
+/// second has an invoice history worth keeping.
+enum SubscriptionStatus {
+  NONE
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+}
+
+enum BillingInterval {
+  MONTHLY
+  YEARLY
+}
+
+/// A company's plan and its link to Stripe.
+///
+/// Keyed to the company rather than the user who happens to pay: an employer is
+/// a team, and billing one seat while eight colleagues stay on the free tier
+/// would be wrong in both directions. Jobseeker premium is a separate product
+/// and stays on User.subscriptionTier.
+model CompanySubscription {
+  id        String @id @default(uuid())
+  companyId String @unique @map("company_id")
+
+  plan     CompanyPlan        @default(STARTER)
+  status   SubscriptionStatus @default(NONE)
+  interval BillingInterval    @default(MONTHLY)
+
+  /// Fixed by Stripe at the first payment and unchangeable afterwards, so it is
+  /// stored per company rather than read from a global setting.
+  currency String @default("cad")
+
+  stripeCustomerId     String? @unique @map("stripe_customer_id")
+  stripeSubscriptionId String? @unique @map("stripe_subscription_id")
+
+  /// The usage window. Null on STARTER, which has no billing period — usage is
+  /// then counted against a calendar month.
+  currentPeriodStart DateTime? @map("current_period_start")
+  currentPeriodEnd   DateTime? @map("current_period_end")
+
+  /// Set when someone cancels: they keep everything until the period ends.
+  cancelAtPeriodEnd Boolean @default(false) @map("cancel_at_period_end")
+
+  /// What Stripe charges per period, in the currency's smallest unit.
+  /// Mirrored from the subscription so the page can state a real price rather
+  /// than a number typed into the UI. Null means nothing is being charged.
+  unitAmount Int? @map("unit_amount")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("company_subscriptions")
+}
+
+/// Metered usage, one row per company per metric per billing period.
+///
+/// Only for things that accumulate as events and cannot be recounted later —
+/// AI operations. Seats and active job posts are deliberately absent: those are
+/// derived by counting rows on read, so they can never drift from the truth.
+model CompanyUsage {
+  id        String @id @default(uuid())
+  companyId String @map("company_id")
+
+  /// Dotted metric key, e.g. 'ai.screening'. Kept as a string so adding a
+  /// metric does not need a migration.
+  metric String
+
+  /// Start of the window this count belongs to.
+  periodStart DateTime @map("period_start")
+
+  count Int @default(0)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, metric, periodStart])
+  @@index([companyId, periodStart])
+  @@map("company_usage")
+}
+
+/// Where an offer stands. DRAFT is being written; SENT is with the candidate.
+enum OfferStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  DECLINED
+  WITHDRAWN
+  EXPIRED
+}
+
+/// A note a recruiter leaves about a candidate.
+///
+/// Keyed to the company and the person, not to one application: an opinion
+/// formed in March is still worth reading when the same person applies to a
+/// different role in July. Append-only in practice — each note keeps its author
+/// and time, unlike the single `Application.notes` blob it replaces, which any
+/// teammate could overwrite without trace.
+model CandidateNote {
+  id          String   @id @default(uuid())
+  companyId   String   @map("company_id")
+  candidateId String   @map("candidate_id")
+  authorId    String?  @map("author_id")
+  /// Kept when the author's account goes — the note stays attributable.
+  authorName  String   @map("author_name")
+  body        String   @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  candidate User    @relation("CandidateNotes", fields: [candidateId], references: [id], onDelete: Cascade)
+  author    User?   @relation("CandidateNoteAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, candidateId, createdAt])
+  @@map("candidate_notes")
+}
+
+/// A label a company puts on a candidate, e.g. "silver medallist", "2027 grad".
+///
+/// The company's own vocabulary, so it is scoped to them and invisible to
+/// everyone else — including the candidate, who never sees how they were filed.
+model CandidateTag {
+  id          String   @id @default(uuid())
+  companyId   String   @map("company_id")
+  candidateId String   @map("candidate_id")
+  label       String   @db.VarChar(40)
+  createdById String?  @map("created_by_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  candidate User    @relation("CandidateTags", fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, candidateId, label])
+  @@index([companyId, label])
+  @@map("candidate_tags")
+}
+
+/// An offer of employment.
+///
+/// The last stage of hiring, which until now happened entirely in email and so
+/// left no record on the platform at all. Tied to the application because an
+/// offer is always for a specific role.
+model Offer {
+  id            String      @id @default(uuid())
+  applicationId String      @unique @map("application_id")
+  companyId     String      @map("company_id")
+
+  status        OfferStatus @default(DRAFT)
+
+  /// In the currency's smallest unit, like every other amount here.
+  salaryAmount  Int?        @map("salary_amount")
+  salaryCurrency String     @default("cad") @map("salary_currency")
+  /// 'yearly' | 'monthly' | 'hourly' — matches the job's own vocabulary.
+  salaryPeriod  String?     @map("salary_period")
+
+  startDate     DateTime?   @map("start_date")
+  /// After this the offer lapses. Null means no deadline was set, which is not
+  /// the same as one that expired.
+  expiresAt     DateTime?   @map("expires_at")
+
+  message       String?     @db.Text
+  /// Employer-only. Never shown to the candidate.
+  internalNotes String?     @map("internal_notes") @db.Text
+
+  createdById   String?     @map("created_by_id")
+  sentAt        DateTime?   @map("sent_at")
+  respondedAt   DateTime?   @map("responded_at")
+  /// The offer signals as they stood when it was sent — `[{ id, tone }]`.
+  /// Frozen, because the facts move afterwards; this is what the outcomes
+  /// report compares acceptance against. See ats/offer-signals.service.ts.
+  signalsAtSend Json?       @map("signals_at_send")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@map("offers")
+}
+
+/// A reusable message for writing to candidates.
+///
+/// Rejecting 180 of 200 applicants is the single most common bulk action in
+/// hiring, and without templates it is done badly or not at all — which is
+/// exactly the ghosting the rest of this product is built to avoid.
+model EmailTemplate {
+  id          String   @id @default(uuid())
+  companyId   String   @map("company_id")
+  name        String   @db.VarChar(80)
+  subject     String   @db.VarChar(200)
+  body        String   @db.Text
+  /// Which moment it is for: 'rejection' | 'interview' | 'offer' | 'general'.
+  /// A string rather than an enum so a company can be given new ones without a
+  /// migration.
+  category    String   @default("general")
+  createdById String?  @map("created_by_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, name])
+  @@index([companyId, category])
+  @@map("email_templates")
+}
+
+/// Deliberately the same vocabulary the AI screen uses, so interview outcomes
+/// can feed the existing adverse-impact analysis without a translation layer.
+enum ScorecardRecommendation {
+  STRONG_YES
+  YES
+  /// Borderline. Counts as not advancing for fairness purposes.
+  MAYBE
+  NO
+  STRONG_NO
+}
+
+/// What a company assesses candidates against.
+///
+/// A shared rubric is the point: scoring everyone on the same named criteria is
+/// what makes two interviewers comparable, and comparability is what makes
+/// adverse-impact analysis meaningful rather than noise.
+model ScorecardCriterion {
+  id         String    @id @default(uuid())
+  companyId  String    @map("company_id")
+  label      String    @db.VarChar(60)
+  position   Int       @default(0)
+  /// Retired rather than deleted, so historic ratings keep their meaning.
+  archivedAt DateTime? @map("archived_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, label])
+  @@index([companyId, position])
+  @@map("scorecard_criteria")
+}
+
+/// One interviewer's assessment of one interview.
+///
+/// Replaces the single `Interview.feedback` blob, which held exactly one
+/// scorecard — so on a panel the second interviewer overwrote the first, and
+/// the disagreement that makes a panel worth having was destroyed.
+model Scorecard {
+  id             String                   @id @default(uuid())
+  interviewId    String                   @map("interview_id")
+  reviewerId     String?                  @map("reviewer_id")
+  /// Kept when the reviewer's account goes — see CandidateNote for the reason.
+  reviewerName   String                   @map("reviewer_name")
+  recommendation ScorecardRecommendation?
+  notes          String?                  @db.Text
+  /// Null while still a draft. A half-written scorecard is not an opinion.
+  submittedAt    DateTime?                @map("submitted_at")
+  createdAt      DateTime                 @default(now()) @map("created_at")
+  updatedAt      DateTime                 @updatedAt @map("updated_at")
+
+  interview Interview         @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  ratings   ScorecardRating[]
+
+  @@unique([interviewId, reviewerId])
+  @@index([interviewId])
+  @@map("scorecards")
+}
+
+/// One criterion's score on one scorecard.
+///
+/// The criterion is stored as text rather than a foreign key: a rating means
+/// "scored 4 on Communication", and that stays true after the company renames
+/// or retires the criterion.
+model ScorecardRating {
+  id          String @id @default(uuid())
+  scorecardId String @map("scorecard_id")
+  criterion   String @db.VarChar(60)
+  /// 1–5. Enforced in the service, not the column, so the scale can change
+  /// without a migration.
+  score       Int
+
+  scorecard Scorecard @relation(fields: [scorecardId], references: [id], onDelete: Cascade)
+
+  @@unique([scorecardId, criterion])
+  @@map("scorecard_ratings")
+}
+
+/// What a space is for. Kind drives who may post and how it is presented, and
+/// is fixed at creation — a topic space quietly becoming a company space would
+/// change who is allowed to speak in it.
+/// How to be there.
+enum TideMode {
+  ONLINE
+  IN_PERSON
+  HYBRID
+}
+
+/// Where someone stands on a tide.
+enum TideRsvp {
+  GOING
+  INTERESTED
+}
+
+/// Something happening at a time: a webinar, a careers fair, an open day, an
+/// hour with the team.
+///
+/// Named for what it is rather than borrowed from elsewhere — a tide happens
+/// whether or not you are there, and you catch it or you miss it.
+model Tide {
+  id          String    @id @default(uuid())
+  title       String    @db.VarChar(140)
+  description String?   @db.Text
+
+  /// Set when a company is holding it. Only an owner or admin may publish in
+  /// the company's name, exactly as for posts.
+  companyId   String?   @map("company_id")
+  /// Always recorded. Someone is accountable for every tide, including a
+  /// company's — see the byline rules on company posts.
+  hostId      String    @map("host_id")
+
+  /// UTC, like every other timestamp here.
+  startsAt    DateTime  @map("starts_at")
+  endsAt      DateTime? @map("ends_at")
+  /**
+   * IANA zone the host chose, e.g. "Africa/Kampala".
+   *
+   * Stored beside the instant, not instead of it. "2pm" is not a time until
+   * you know where, and a reader in another country needs both: the host's
+   * clock to understand the intent, and their own to turn up.
+   */
+  timezone    String    @db.VarChar(64)
+
+  mode        TideMode  @default(ONLINE)
+  /// A venue for in-person, a platform name for online. Public.
+  location    String?   @db.VarChar(255)
+  /**
+   * The actual way in, given only to people who said they are coming and only
+   * once it is close. A meeting link in a public listing is an open door.
+   */
+  joinUrl     String?   @map("join_url") @db.VarChar(2048)
+
+  bannerUrl   String?   @map("banner_url")
+  /// Null means no limit. A number is enforced, never decorative.
+  capacity    Int?
+
+  /// When the "starts soon" reminder went out, so it goes out once.
+  ///
+  /// One stamp for the whole tide rather than one per attendee: someone who
+  /// says they are coming after it fired does not need telling that it is
+  /// about to start.
+  remindedAt   DateTime? @map("reminded_at")
+
+  /// Cancelled rather than deleted, so the people who were coming can be told
+  /// and can still see why.
+  canceledAt   DateTime? @map("canceled_at")
+  cancelReason String?   @map("cancel_reason") @db.Text
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  company   Company?       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  host      User           @relation("TidesHosted", fields: [hostId], references: [id], onDelete: Cascade)
+  attendees TideAttendee[]
+  posts     Post[]
+
+  /// The listing is always "what is coming up", so time leads.
+  @@index([startsAt])
+  /// The reminder sweep: starting soon, not yet told.
+  @@index([remindedAt, startsAt])
+  @@index([companyId, startsAt])
+  @@map("tides")
+}
+
+model TideAttendee {
+  id        String   @id @default(uuid())
+  tideId    String   @map("tide_id")
+  userId    String   @map("user_id")
+  status    TideRsvp @default(GOING)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tide Tide @relation(fields: [tideId], references: [id], onDelete: Cascade)
+  user User @relation("TidesAttending", fields: [userId], references: [id], onDelete: Cascade)
+
+  /// One answer per person. Changing your mind updates it.
+  @@unique([tideId, userId])
+  @@index([userId])
+  @@map("tide_attendees")
+}
+
+enum SpaceKind {
+  /// Open discussion on a subject: "Frontend in Canada", "Interviewing".
+  TOPIC
+  /// Attached to a company. Its members are that company's verified people.
+  COMPANY
+}
+
+enum SpaceMemberRole {
+  MEMBER
+  MODERATOR
+}
+
+/// A place posts belong to.
+///
+/// The structural bet of the community: ten people in one focused space reads
+/// as a community, while ten people in a global feed reads as abandoned. It is
+/// also what produces durable, searchable pages rather than a river that scrolls
+/// past.
+model Space {
+  id          String    @id @default(uuid())
+  slug        String    @unique @db.VarChar(60)
+  name        String    @db.VarChar(80)
+  description String?   @db.Text
+  kind        SpaceKind @default(TOPIC)
+
+  /// Uploaded by a moderator into the community bucket. Null renders a plain
+  /// tinted header rather than a broken frame.
+  bannerUrl   String?   @map("banner_url")
+
+  /// Set only for COMPANY spaces.
+  companyId   String?   @map("company_id")
+
+  /// Designed in, deliberately off. Anonymity is only honest once a space has
+  /// enough verified members that a pseudonym is not a disclosure — the same
+  /// threshold the fairness module applies to reporting a group's numbers.
+  allowAnonymous Boolean @default(false) @map("allow_anonymous")
+
+  /// Retired rather than deleted, so its posts and their links survive.
+  archivedAt  DateTime? @map("archived_at")
+  createdById String?   @map("created_by_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  company Company?      @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  members SpaceMember[]
+  posts   Post[]
+
+  @@index([kind, archivedAt])
+  @@map("spaces")
+}
+
+model SpaceMember {
+  id       String          @id @default(uuid())
+  spaceId  String          @map("space_id")
+  userId   String          @map("user_id")
+  role     SpaceMemberRole @default(MEMBER)
+  joinedAt DateTime        @default(now()) @map("joined_at")
+
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  user  User  @relation("SpaceMemberships", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([spaceId, userId])
+  @@index([userId])
+  @@map("space_members")
+}
+
+enum ReportStatus {
+  OPEN
+  ACTIONED
+  DISMISSED
+}
+
+/// Someone flagging a post or comment.
+///
+/// A professional community where people discuss named employers needs a way
+/// to raise something and a record that it was raised — without one, the only
+/// options are ignoring it or deleting quietly, and neither leaves anything to
+/// point at afterwards.
+model PostReport {
+  id        String       @id @default(uuid())
+  /// Exactly one of these is set.
+  postId    String?      @map("post_id")
+  commentId String?      @map("comment_id")
+
+  reporterId String      @map("reporter_id")
+  reason     String      @db.VarChar(40)
+  detail     String?     @db.Text
+
+  status     ReportStatus @default(OPEN)
+  reviewedById String?    @map("reviewed_by_id")
+  reviewedAt   DateTime?  @map("reviewed_at")
+  /// What the moderator decided and why. Read by nobody but moderators.
+  resolution   String?    @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  post    Post?        @relation(fields: [postId], references: [id], onDelete: Cascade)
+  comment PostComment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  /// One person may raise a given item once. Reporting twice is the same
+  /// concern, not a stronger one.
+  @@unique([postId, reporterId])
+  @@unique([commentId, reporterId])
+  @@index([status, createdAt])
+  @@map("post_reports")
+}
+
+/// A poll attached to a post.
+///
+/// The post's own text is the question, so there is no separate question field
+/// — two places to write the same thing is how they end up disagreeing.
+model Poll {
+  id     String @id @default(uuid())
+  postId String @unique @map("post_id")
+
+  /// When voting stops. Null means it stays open; a poll with no end is a
+  /// legitimate choice, and is not the same as one that has already closed.
+  closesAt DateTime? @map("closes_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  post    Post         @relation(fields: [postId], references: [id], onDelete: Cascade)
+  options PollOption[]
+  votes   PollVote[]
+
+  @@map("polls")
+}
+
+model PollOption {
+  id       String @id @default(uuid())
+  pollId   String @map("poll_id")
+  label    String @db.VarChar(80)
+  position Int    @default(0)
+
+  poll  Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  votes PollVote[]
+
+  @@index([pollId, position])
+  @@map("poll_options")
+}
+
+/// One person's vote.
+///
+/// Unique on (poll, user) rather than (option, user): the constraint is what
+/// makes the result trustworthy, and enforcing it per option would let one
+/// account pick every choice.
+model PollVote {
+  id       String   @id @default(uuid())
+  pollId   String   @map("poll_id")
+  optionId String   @map("option_id")
+  userId   String   @map("user_id")
+  votedAt  DateTime @default(now()) @map("voted_at")
+
+  poll   Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  option PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  user   User       @relation("PollVotes", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([pollId, userId])
+  @@index([optionId])
+  @@map("poll_votes")
+}
+
+/// Someone saw a candidate: either they opened the profile, or it came back in
+/// an employer's candidate search.
+///
+/// Deliberately thin. Both surfaces require a signed-in viewer, so there is no
+/// anonymous case to fingerprint — no IP, no user agent, no session hash is
+/// stored here, unlike the employer-side AnalyticsEvent which has to handle
+/// logged-out traffic.
+///
+/// One row per viewer, per type, per UTC day. That is what makes the number
+/// mean something: a recruiter refreshing a profile ten times is one view, and
+/// re-running the same search all afternoon is one appearance.
+model ProfileImpression {
+  id              String   @id @default(uuid())
+  /// The candidate this is about.
+  jobSeekerId     String   @map("job_seeker_id")
+  /// 'view' — the profile was opened. 'search' — it was returned in results.
+  type            String
+  viewerId        String   @map("viewer_id")
+  /// The company the viewer was acting for, so the owner can later be told
+  /// "an employer at X" without being told which person. Null for a viewer
+  /// who is not on a company.
+  viewerCompanyId String?  @map("viewer_company_id")
+  /// The viewer's visibility choice AS IT WAS when they looked.
+  ///
+  /// Snapshotted rather than read live, in both directions: switching to
+  /// "named" later must not retroactively expose browsing done in private,
+  /// and switching to "private" must not un-tell someone what they were
+  /// already shown.
+  viewerVisibility String @default("private") @map("viewer_visibility")
+  /// UTC day — the dedupe dimension, stored as a date so it is exact.
+  day             DateTime @db.Date
+  occurredAt      DateTime @default(now()) @map("occurred_at")
+
+  jobSeeker User     @relation("ImpressionSubject", fields: [jobSeekerId], references: [id], onDelete: Cascade)
+  viewer    User     @relation("ImpressionViewer", fields: [viewerId], references: [id], onDelete: Cascade)
+  company   Company? @relation(fields: [viewerCompanyId], references: [id], onDelete: SetNull)
+
+  @@unique([jobSeekerId, type, viewerId, day])
+  @@index([jobSeekerId, type, day])
+  @@index([day])
+  @@map("profile_impressions")
+}
+
+/// How much of a metered jobseeker allowance someone has used in one window.
+///
+/// Jobseeker Premium is billed per person and is a separate product from
+/// CompanySubscription/CompanyUsage — the two must never be merged. One row per
+/// (person, metric, window start); the count only ever goes up, and a new
+/// window is simply a new row, so nothing needs resetting.
+model UserUsage {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  /// coach.session | matcher.web | assist.cover_letter | assist.tailor | research.company
+  metric      String
+  /// UTC start of the window this count belongs to (a day or a month).
+  periodStart DateTime @map("period_start")
+  count       Int      @default(0)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user User @relation("SeekerUsage", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, metric, periodStart])
+  @@map("user_usage")
+}
+
+/// A job seeker's own Premium subscription and its link to Stripe.
+///
+/// Billed per person, and a different product from CompanySubscription — the
+/// two are kept apart on purpose and must never be merged. `User.subscriptionTier`
+/// remains the flag features read; this row is where it comes from, and both
+/// are written only from Stripe's `customer.subscription.*` events.
+model UserSubscription {
+  id     String @id @default(uuid())
+  userId String @unique @map("user_id")
+
+  status   SubscriptionStatus @default(NONE)
+  interval BillingInterval    @default(MONTHLY)
+  /// Fixed by Stripe at the first payment.
+  currency String @default("cad")
+
+  stripeCustomerId     String? @unique @map("stripe_customer_id")
+  stripeSubscriptionId String? @unique @map("stripe_subscription_id")
+
+  currentPeriodStart DateTime? @map("current_period_start")
+  currentPeriodEnd   DateTime? @map("current_period_end")
+  /// Cancelled, but Premium runs until the period ends.
+  cancelAtPeriodEnd  Boolean   @default(false) @map("cancel_at_period_end")
+  /// What Stripe charges per period, in the smallest unit. Null = nothing charged.
+  unitAmount         Int?      @map("unit_amount")
+
+  /// Whether the Stripe subscription, on its own, grants Premium. Written only
+  /// by the webhook. Kept apart from the comp below so that neither can erase
+  /// the other: a lapsed card must not end a comp, and ending a comp must not
+  /// end a paid subscription.
+  stripeEntitled Boolean @default(false) @map("stripe_entitled")
+
+  /// Complimentary Premium granted by an admin, until this moment. Past dates
+  /// are kept as history; they simply no longer grant anything.
+  compedUntil DateTime? @map("comped_until")
+  /// Why it was granted — required, so every free month has a reason on file.
+  compReason  String?   @map("comp_reason")
+  compedById  String?   @map("comped_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user     User  @relation("SeekerSubscription", fields: [userId], references: [id], onDelete: Cascade)
+  compedBy User? @relation("SeekerCompGrants", fields: [compedById], references: [id], onDelete: SetNull)
+
+  @@index([compedUntil])
+  @@map("user_subscriptions")
+}
+
+/// One row per built-in scheduled job (every @ExclusiveCron): which server is
+/// running it right now, and how its last run went.
+///
+/// Every server runs the same timers. Before a job does anything, its server
+/// must win this row with one atomic UPDATE — see
+/// src/common/scheduling/cron-lease.service.ts. That is what makes a job run
+/// once per slot however many servers there are, and it is the only record of
+/// a failed run that is not buried in one server's logs.
+model CronLease {
+  name                String    @id
+  /// Held until then by `lockedBy`. Expires on its own if that server dies.
+  lockedUntil         DateTime? @map("locked_until")
+  lockedBy            String?   @map("locked_by")
+  lastStartedAt       DateTime? @map("last_started_at")
+  lastFinishedAt      DateTime? @map("last_finished_at")
+  /// ok | failed
+  lastStatus          String?   @map("last_status")
+  lastError           String?   @map("last_error")
+  lastDurationMs      Int?      @map("last_duration_ms")
+  lastRanBy           String?   @map("last_ran_by")
+  runCount            Int       @default(0) @map("run_count")
+  consecutiveFailures Int       @default(0) @map("consecutive_failures")
+
+  @@map("cron_leases")
+}

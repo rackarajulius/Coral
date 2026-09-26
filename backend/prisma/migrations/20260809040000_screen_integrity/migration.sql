@@ -1,0 +1,11 @@
+-- Integrity signals for a screening.
+--
+-- Observations, not verdicts. Every signal here has innocent explanations — a
+-- paste can be a prepared note, a blurred tab can be a screen reader, a long
+-- pause can be thinking. They are shown to a human reviewer as context and are
+-- deliberately NOT fed into the score and NOT actionable automatically.
+--
+-- Shape: { pasteCount, pastedChars, blurCount, blurMs, latencies: number[],
+--          collectedAt } — nullable because older screens predate collection,
+-- and "we didn't measure" must stay distinguishable from "we measured zero".
+ALTER TABLE "ai_screens" ADD COLUMN "integrity_signals" JSONB;

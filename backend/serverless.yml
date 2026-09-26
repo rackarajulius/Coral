@@ -1,0 +1,26 @@
+service: job-platform-api
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+  stage: ${opt:stage, 'dev'}
+  memorySize: 512
+  timeout: 30
+  environment:
+    NODE_ENV: ${self:provider.stage}
+    API_PREFIX: api/v1
+
+package:
+  patterns:
+    - dist/**
+    - node_modules/**
+
+functions:
+  api:
+    handler: dist/serverless.handler
+    events:
+      - httpApi:
+          path: /{proxy+}
+          method: ANY

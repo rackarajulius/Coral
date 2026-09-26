@@ -1,0 +1,48 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm tsconfig.build.tsbuildinfo)",
+      "Bash(npm run *)",
+      "Bash(npx tsc *)",
+      "Bash(cp \"c:/coral/coral/public/main work/src/components/companies/companyProfile/\"*.tsx \"c:/coral/coral/src/components/company/\" && echo \"components copied\" && mkdir -p \"c:/coral/coral/src/data/companies/profile\" && cp \"c:/coral/coral/public/main work/src/data/companies/profile/mockCompany.ts\" \"c:/coral/coral/src/data/companies/profile/mockCompany.ts\" && echo \"data copied\")",
+      "Bash(npx prisma *)",
+      "Bash(grep -rn \"supabase\" backend/src --include=\"*.ts\" -l; echo \"---frontend supabase client---\"; find src/lib -iname \"*supabase*\"; echo \"---package deps---\"; grep -n \"supabase\" backend/package.json src/../package.json 2>/dev/null; grep -rn \"storage\\\\|bucket\" backend/src --include=\"*.ts\" -il)",
+      "Read(//c/coral/coral/**)",
+      "Bash(npm install *)",
+      "Bash(cd /c/coral/coral/backend && cat src/main.ts)",
+      "Read(//c/c/coral/coral/backend/src/**)",
+      "Bash(cd /c/coral/coral/backend && grep -i \"compression\" package.json package-lock.json 2>/dev/null | head -5; ls node_modules/compression 2>/dev/null && echo \"compression present\" || echo \"compression NOT present\"; ls node_modules/@types/compression 2>/dev/null && echo \"@types/compression present\" || echo \"@types/compression NOT present\")",
+      "Read(//c/c/coral/coral/backend/**)",
+      "Skill(claude-api)",
+      "Skill(claude-api:*)",
+      "Bash(npm i *)",
+      "Bash(node -e ' *)",
+      "Bash(echo \"BACKEND_EXIT=$?\")",
+      "Bash(grep -n \"DropdownMenuItem\\\\|Link to=\\\\|navigate\\(\\\\`/employers/jobs\" src/pages/employer/dashboard/EmployerJobs.tsx)",
+      "Bash(NODE_OPTIONS=--max-old-space-size=6144 npx tsc -p tsconfig.app.json --noEmit)",
+      "Bash(tee /c/Users/LENOVO~1/AppData/Local/Temp/claude/fe4.txt)",
+      "Bash(tee /c/Users/LENOVO~1/AppData/Local/Temp/claude/fe5.txt)",
+      "Bash(echo \"TSC=$?\")",
+      "Bash(perl -0pi -e 's/    \"audit:stability\": \"ts-node scripts\\\\/audit-score-stability.ts\",/    \"audit:stability\": \"ts-node scripts\\\\/audit-score-stability.ts\",\\\\n    \"verify:analytics\": \"ts-node scripts\\\\/verify-analytics-capture.ts\",/' package.json)",
+      "Bash(perl -0pi -e \"s/  Query,\\\\n  UseGuards,\\\\n\\\\} from '\\\\@nestjs\\\\/common';/  Query,\\\\n  Req,\\\\n  UseGuards,\\\\n} from '\\\\@nestjs\\\\/common';\\\\nimport { Request } from 'express';/\" src/jobs/jobs.controller.ts)",
+      "Bash(perl -0pi -e \"s/    private readonly companyResearchService: CompanyResearchService,\\\\n  \\\\\\) \\\\{\\\\}/    private readonly companyResearchService: CompanyResearchService,\\\\n    private readonly analyticsEvents: AnalyticsEventsService,\\\\n  \\) {}/\" src/jobs/jobs.controller.ts)",
+      "Bash(perl -0pi -e \"s/import \\\\{ DuplicateJobDto \\\\} from '.\\\\/dto\\\\/duplicate-job.dto';/import { AnalyticsEventsService } from '..\\\\/analytics\\\\/analytics-events.service';\\\\nimport { DuplicateJobDto } from '.\\\\/dto\\\\/duplicate-job.dto';/\" src/jobs/jobs.controller.ts)",
+      "Bash(perl -0pi -e \"s/  Post,\\\\n  Query,/  Post,\\\\n  Query,\\\\n  Req,/\" src/employers/employers.controller.ts)",
+      "Bash(perl -0pi -e \"s/    private readonly nextActions: NextActionsService,\\\\n  \\\\\\) \\\\{\\\\}/    private readonly nextActions: NextActionsService,\\\\n    private readonly analyticsEvents: AnalyticsEventsService,\\\\n  \\) {}/\" src/employers/employers.controller.ts)",
+      "Bash(perl -0pi -e \"s/  imports: \\\\[StorageModule\\\\],/  imports: [StorageModule, AnalyticsModule],/\" src/employers/employers.module.ts)",
+      "Bash(perl -0pi -e \"s/  imports: \\\\[ApplicationsModule, NotificationsModule, AiModule, StorageModule, CompanyResearchModule\\\\],/  imports: [ApplicationsModule, NotificationsModule, AiModule, StorageModule, CompanyResearchModule, AnalyticsModule],/\" src/jobs/jobs.module.ts)",
+      "Bash(perl -0pi -e \"s/import \\\\{ TrackEventDto \\\\} from '.\\\\/dto\\\\/track-event.dto';/import { EmployerAnalyticsService } from '.\\\\/employer-analytics.service';\\\\nimport { TrackEventDto } from '.\\\\/dto\\\\/track-event.dto';/\" src/analytics/analytics.controller.ts)",
+      "Bash(perl -0pi -e \"s/import \\\\{ Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Req, UseGuards,/import { Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query, Req, UseGuards,/\" src/analytics/analytics.controller.ts)",
+      "Bash(perl -0pi -e \"s/  Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Req, UseGuards,/  Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query, Req, UseGuards,/\" src/analytics/analytics.controller.ts)",
+      "Bash(perl -0pi -e \"s/import \\\\{ AnalyticsController, AnalyticsIngestController \\\\} from '.\\\\/analytics.controller';/import {\\\\n  AnalyticsController, AnalyticsIngestController, EmployerAnalyticsController,\\\\n} from '.\\\\/analytics.controller';/\" src/analytics/analytics.module.ts)",
+      "Bash(perl -0pi -e \"s/import \\\\{ AnalyticsEventsService \\\\} from '.\\\\/analytics-events.service';/import { AnalyticsEventsService } from '.\\\\/analytics-events.service';\\\\nimport { EmployerAnalyticsService } from '.\\\\/employer-analytics.service';/\" src/analytics/analytics.module.ts)",
+      "Bash(npx ts-node *)",
+      "Bash(tee /c/Users/LENOVO~1/AppData/Local/Temp/claude/ffd.txt)",
+      "Bash(perl -0pi -e \"s/import \\\\{ Injectable \\\\} from '\\\\@nestjs\\\\/common';/import { Injectable } from '\\\\@nestjs\\\\/common';\\\\nimport { Prisma } from '\\\\@prisma\\\\/client';/\" src/analytics/insights.service.ts)",
+      "Bash(perl -0pi -e \"s|\\\\n/\\\\*\\\\* Prisma's JSON-null sentinel, imported lazily to keep the import list small. \\\\*/\\\\nconst Prisma_JsonNull = null as unknown as never;\\\\n||\" src/analytics/insights.service.ts)"
+    ],
+    "additionalDirectories": [
+      "c:\\coral\\coral\\public\\main work\\src\\components\\companies\\companyProfile"
+    ]
+  }
+}
