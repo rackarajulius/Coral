@@ -10,24 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
 import { User } from '../common/types/user.types';
 import { StripeClient } from './stripe.client';
-
-/**
- * Plans that can be bought without talking to anyone.
- *
- * STARTER is free, so there is nothing to check out. ENTERPRISE is negotiated,
- * and offering a self-serve button for it would take money for terms nobody
- * agreed to.
- */
-const SELF_SERVE_PLANS = [CompanyPlan.PRO] as const;
-type SelfServePlan = (typeof SELF_SERVE_PLANS)[number];
-
-/** Env var holding the Stripe price id for each purchasable plan and interval. */
-const PRICE_ENV: Record<SelfServePlan, Record<BillingInterval, string>> = {
-  [CompanyPlan.PRO]: {
-    [BillingInterval.MONTHLY]: 'STRIPE_PRICE_PRO_MONTHLY',
-    [BillingInterval.YEARLY]: 'STRIPE_PRICE_PRO_YEARLY',
-  },
-};
+import { PRICE_ENV, SELF_SERVE_PLANS, type SelfServePlan } from './plan-entitlements';
 
 /**
  * Starting a subscription and reaching the billing portal.
@@ -62,11 +45,30 @@ export class BillingCheckoutService {
   ): Promise<{ url: string }> {
     const context = await this.companyContext.requireForUser(user.id);
 
-    if (!SELF_SERVE_PLANS.includes(input.plan as SelfServePlan)) {
+    if (!(SELF_SERVE_PLANS as readonly CompanyPlan[]).includes(input.plan)) {
       throw new BadRequestException(
         input.plan === CompanyPlan.ENTERPRISE
           ? 'Enterprise plans are arranged with our team rather than bought online.'
           : 'That plan is free — there is nothing to pay for.',
+      );
+    }
+
+    /**
+     * An Enterprise company cannot check out of its own contract.
+     *
+     * Enterprise is negotiated, which is exactly why it is not self-serve — and
+     * the same reasoning has to apply in the other direction. Without this, the
+     * billing page offered an Enterprise customer a Pro checkout, and taking it
+     * would have created a Stripe subscription alongside an agreement nobody
+     * renegotiated.
+     */
+    const subscription = await this.prisma.companySubscription.findUnique({
+      where: { companyId: context.companyId },
+      select: { plan: true },
+    });
+    if (subscription?.plan === CompanyPlan.ENTERPRISE) {
+      throw new BadRequestException(
+        'Your plan is arranged with our team. Talk to us before changing it.',
       );
     }
 

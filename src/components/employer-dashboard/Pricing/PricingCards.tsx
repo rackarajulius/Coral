@@ -1,16 +1,32 @@
+import { useQuery } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { pricingPlans } from '@/data/employer/pricing/pricing';
+import { BACKEND_PLAN, pricingPlans } from '@/data/employer/pricing/pricing';
 import { cn } from '@/libs/utils';
 import { ArrowRight, Check } from 'lucide-react';
 import React from 'react'
 import PriceDisplay from './PriceDisplay';
+import { amountFor, formatMoney, getPlanEntitlements } from '@/lib/api/billing';
 
 const PricingCards = ({ yearly }: { yearly: boolean }) => {
+  /**
+   * The same query key and figures the billing page uses, so what is advertised
+   * here and what is charged at checkout cannot drift apart. This file used to
+   * read hard-coded numbers that nothing reconciled against Stripe.
+   */
+  const plans = useQuery({
+    queryKey: ["billing", "entitlements"],
+    queryFn: getPlanEntitlements,
+    staleTime: 60 * 60 * 1000,
+    retry: false,
+  });
+
   return (
      <div className="mx-auto grid max-w-6xl grid-cols-1 gap-6 px-6 md:grid-cols-3 md:items-stretch">
       {pricingPlans.map((plan) => {
-        const price = yearly ? plan.yearly : plan.monthly;
+        const price = plans.data?.find((p) => p.id === BACKEND_PLAN[plan.id])?.price;
+        const annual = price ? amountFor(price, "YEARLY") : null;
+        const monthly = price ? amountFor(price, "MONTHLY") : null;
         const featured = plan.featured;
         const Icon = plan.icon;
         return (
@@ -47,9 +63,16 @@ const PricingCards = ({ yearly }: { yearly: boolean }) => {
 
             <div className="mt-5">
               <PriceDisplay price={price} yearly={yearly} />
-              {yearly && plan.monthly && plan.yearly && (
+              {/* The figure that actually leaves the bank, beside the per-month
+                  one. Only drawn when both real prices are known — striking
+                  through an assumed monthly price would invent the saving. */}
+              {yearly && price?.kind === "listed" && annual !== null && (
                 <p className="mt-2 text-xs text-muted-foreground">
-                  <span className="line-through">${plan.monthly}/mo</span> · ${plan.yearly! * 12}/yr total
+                  {monthly !== null && (
+                    <span className="line-through">{formatMoney(monthly, price.currency)}/mo</span>
+                  )}
+                  {monthly !== null && " · "}
+                  {formatMoney(annual, price.currency)}/yr total
                 </p>
               )}
               <p className="mt-3 text-sm text-muted-foreground">{plan.tagline}</p>

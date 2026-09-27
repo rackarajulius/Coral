@@ -2,27 +2,32 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import {
-  AlertTriangle, Building2, Check, ExternalLink, FileText, Info, Loader2, Sparkles,
+  AlertTriangle, Building2, Check, ChevronDown, ExternalLink, FileText, Info, Loader2, Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { UsageBar } from "@/components/employer-dashboard/billing/UsageBar";
 import {
+  amountFor,
+  annualSaving,
   formatMoney,
   getBillingOverview,
   getInvoices,
   getPlanEntitlements,
   hasCompany,
   openBillingPortal,
+  planRank,
   startCheckout,
   type BillingInterval,
   type BillingOverview,
   type Invoice,
   type PlanEntitlement,
+  type PlanPrice,
   type SubscriptionStatus,
   type UsageLine,
 } from "@/lib/api/billing";
@@ -68,16 +73,35 @@ export default function BillingPage() {
         )}
 
         {overview.data && hasCompany(overview.data) && (
-          <div className="space-y-10">
-            <PlanCard data={overview.data} />
-            <UsageSection data={overview.data} />
-            <PlanComparison
-              plans={plans.data}
-              loading={plans.isLoading}
-              overview={overview.data}
-            />
-            <PaymentSection overview={overview.data} />
-          </div>
+          /**
+           * Three tabs rather than one long scroll. Most visits are "when does
+           * this renew" or "where is my invoice", and both used to sit below a
+           * full plan comparison that only matters when you are changing plan.
+           */
+          <Tabs defaultValue="plans">
+            <TabsList>
+              <TabsTrigger value="plans">Plan</TabsTrigger>
+              <TabsTrigger value="usage">Usage</TabsTrigger>
+              <TabsTrigger value="invoices">Invoices</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="plans" className="mt-6 space-y-8">
+              <PlanCard data={overview.data} />
+              <PlanComparison
+                plans={plans.data}
+                loading={plans.isLoading}
+                overview={overview.data}
+              />
+            </TabsContent>
+
+            <TabsContent value="usage" className="mt-6">
+              <UsageSection data={overview.data} />
+            </TabsContent>
+
+            <TabsContent value="invoices" className="mt-6">
+              <PaymentSection overview={overview.data} />
+            </TabsContent>
+          </Tabs>
         )}
       </div>
     </div>
@@ -154,6 +178,8 @@ function PlanCard({ data }: { data: BillingOverview }) {
 
       <p className="mt-2 text-sm text-muted-foreground">{data.plan.tagline}</p>
 
+      <NextCharge data={data} />
+
       <div className="mt-6 grid gap-4 sm:grid-cols-3">
         {/* Only rendered when Stripe is actually charging something. A free
             plan has no price, which is not a price of zero. */}
@@ -187,6 +213,38 @@ function PlanCard({ data }: { data: BillingOverview }) {
       )}
     </section>
   );
+}
+
+/**
+ * What you will pay next, and when, in one sentence.
+ *
+ * The price and the renewal date were already on this card as two separate
+ * facts, leaving the reader to multiply and to work out whether a cancellation
+ * had already been scheduled. Every branch here is built from figures Stripe
+ * gave us; where one is missing the sentence gets shorter rather than guessing.
+ */
+function NextCharge({ data }: { data: BillingOverview }) {
+  const amount = data.unitAmount === null ? null : formatMoney(data.unitAmount, data.currency);
+  const when = data.currentPeriodEnd ? formatDate(data.currentPeriodEnd) : null;
+
+  let sentence: React.ReactNode;
+
+  if (data.cancelAtPeriodEnd) {
+    // Nothing further is owed, and saying "next charge" here would be false.
+    sentence = when
+      ? <>Nothing more to pay. Your plan ends on <strong>{when}</strong> and you return to Starter.</>
+      : <>Nothing more to pay — your plan is set to end.</>;
+  } else if (amount === null) {
+    // A free plan has no price, which is not a price of zero.
+    sentence = <>You are on {data.plan.name}. There is nothing to pay.</>;
+  } else if (when) {
+    sentence = <>Next charge <strong>{amount}</strong> on <strong>{when}</strong>.</>;
+  } else {
+    // Subscribed, but Stripe has not told us the period end yet.
+    sentence = <><strong>{amount}</strong> per {data.interval === "YEARLY" ? "year" : "month"}.</>;
+  }
+
+  return <p className="mt-4 text-sm text-foreground">{sentence}</p>;
 }
 
 /* --------------------------------- usage ---------------------------------- */
@@ -266,6 +324,11 @@ function PlanComparison({
   overview: BillingOverview;
 }) {
   const [interval, setInterval] = useState<BillingInterval>(overview.interval ?? "MONTHLY");
+  /**
+   * Collapsed by default. Someone who came to check a renewal date should not
+   * have to scroll past a plan grid to leave.
+   */
+  const [open, setOpen] = useState(false);
 
   const upgrade = useMutation({
     mutationFn: (plan: PlanEntitlement) => startCheckout(plan.id, interval),
@@ -277,13 +340,27 @@ function PlanComparison({
 
   return (
     <section>
-      <SectionHeading
-        eyebrow="Plans"
-        title="What each plan includes"
-        description="These are the limits the server actually enforces."
-      />
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-card px-5 py-4 text-left transition-colors hover:bg-muted/40"
+      >
+        <span>
+          <span className="text-sm font-medium">View all plans</span>
+          <span className="mt-0.5 block text-xs text-muted-foreground">
+            What each one costs, and the limits the server actually enforces.
+          </span>
+        </span>
+        <ChevronDown
+          className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")}
+          aria-hidden="true"
+        />
+      </button>
 
-      <div className="mt-4 inline-flex rounded-lg border border-border p-0.5">
+      {!open ? null : (
+      <div className="mt-6">
+      <div className="inline-flex rounded-lg border border-border p-0.5">
         {(["MONTHLY", "YEARLY"] as BillingInterval[]).map((i) => (
           <button
             key={i}
@@ -328,6 +405,7 @@ function PlanComparison({
                   )}
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">{p.tagline}</p>
+                <PriceLine price={p.price} interval={interval} />
                 <dl className="mt-4 space-y-1.5 text-sm">
                   <Limit label="Seats" value={p.seats} />
                   <Limit label="Active job posts" value={p.activeJobs} />
@@ -349,6 +427,8 @@ function PlanComparison({
                   <PlanAction
                     plan={p}
                     current={current}
+                    currentPlan={overview.plan.id}
+                    interval={interval}
                     canManage={overview.canManageBilling}
                     pending={upgrade.isPending && upgrade.variables?.id === p.id}
                     onUpgrade={() => upgrade.mutate(p)}
@@ -359,7 +439,69 @@ function PlanComparison({
           })}
         </div>
       )}
+      </div>
+      )}
     </section>
+  );
+}
+
+/**
+ * What a plan costs, or the honest reason there is no figure.
+ *
+ * The four cases are kept apart deliberately: free, negotiated, and "we could
+ * not read the price" all arrive as a missing number, and printing any of them
+ * as $0 would quote a price nobody set. See PlanPrice in lib/api/billing.
+ */
+function PriceLine({ price, interval }: { price: PlanPrice; interval: BillingInterval }) {
+  if (price.kind === "free") {
+    return <p className="mt-3 text-2xl font-semibold tracking-tight">Free</p>;
+  }
+  if (price.kind === "custom") {
+    return (
+      <div className="mt-3">
+        <p className="text-2xl font-semibold tracking-tight">Custom</p>
+        <p className="text-xs text-muted-foreground">Priced with our team.</p>
+      </div>
+    );
+  }
+  if (price.kind === "unavailable") {
+    // Said plainly. A plan whose price we cannot read is not a free plan.
+    return (
+      <div className="mt-3">
+        <p className="text-sm font-medium text-muted-foreground">Price unavailable</p>
+        <p className="text-xs text-muted-foreground">{price.reason}</p>
+      </div>
+    );
+  }
+
+  const amount = amountFor(price, interval);
+  if (amount === null) {
+    return (
+      <p className="mt-3 text-sm text-muted-foreground">
+        Not sold {interval === "YEARLY" ? "yearly" : "monthly"}.
+      </p>
+    );
+  }
+
+  const saving = interval === "YEARLY" ? annualSaving(price) : null;
+  return (
+    <div className="mt-3">
+      <div className="flex items-baseline gap-1">
+        <span className="text-2xl font-semibold tracking-tight tabular-nums">
+          {formatMoney(amount, price.currency)}
+        </span>
+        <span className="text-sm text-muted-foreground">
+          / {interval === "YEARLY" ? "year" : "month"}
+        </span>
+      </div>
+      {/* Only when both real prices are known — a saving computed against an
+          assumed monthly price is a marketing number, not a fact. */}
+      {saving !== null && (
+        <p className="text-xs text-emerald-700 dark:text-emerald-400">
+          Saves {formatMoney(saving, price.currency)} a year
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -368,22 +510,42 @@ function PlanComparison({
  *
  * Starter cannot be "bought" and Enterprise is negotiated — the server refuses
  * checkout for both, so neither gets a button that would only produce an error.
+ *
+ * The label names the direction of travel. It used to read "Upgrade to {name}"
+ * for every plan that was not the current one, so a company on Enterprise was
+ * invited to *upgrade* to Pro — which is a downgrade, and which the server
+ * accepted. Both halves of that are now closed; see createCheckoutSession.
  */
 function PlanAction({
   plan,
   current,
+  currentPlan,
+  interval,
   canManage,
   pending,
   onUpgrade,
 }: {
   plan: PlanEntitlement;
   current: boolean;
+  currentPlan: PlanEntitlement["id"];
+  interval: BillingInterval;
   canManage: boolean;
   pending: boolean;
   onUpgrade: () => void;
 }) {
   if (current) {
     return <p className="text-xs text-muted-foreground">Your current plan.</p>;
+  }
+  /**
+   * An Enterprise company is on negotiated terms, so no self-serve checkout is
+   * offered in either direction — the server refuses it for the same reason.
+   */
+  if (currentPlan === "ENTERPRISE") {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Your plan is arranged with our team. Talk to us before changing it.
+      </p>
+    );
   }
   if (plan.id === "ENTERPRISE") {
     return (
@@ -403,14 +565,35 @@ function PlanAction({
     // Says who can, rather than leaving a dead button to poke at.
     return (
       <p className="text-xs text-muted-foreground">
-        Your company owner can upgrade the plan.
+        Your company owner can change the plan.
       </p>
     );
   }
+  /**
+   * Checkout needs a price id, and without one the server answers "billing is
+   * not configured for this plan yet". Better to say so than to hand over a
+   * button whose only outcome is that message.
+   */
+  if (amountFor(plan.price, interval) === null) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Not available to buy {interval === "YEARLY" ? "yearly" : "monthly"} right now.
+      </p>
+    );
+  }
+
+  /**
+   * "Switch" is not reachable today: Pro is the only self-serve plan, Starter
+   * and Enterprise are handled above, and an Enterprise company never gets
+   * here — so the only journey left is Starter → Pro. It stays because the
+   * rank comparison is what makes adding a fourth plan safe, and because
+   * hard-coding "Upgrade" is precisely the bug this replaced.
+   */
+  const moving = planRank(plan.id) > planRank(currentPlan) ? "Upgrade" : "Switch";
   return (
     <Button size="sm" className="w-full" onClick={onUpgrade} disabled={pending}>
       {pending && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
-      Upgrade to {plan.name}
+      {moving} to {plan.name}
     </Button>
   );
 }

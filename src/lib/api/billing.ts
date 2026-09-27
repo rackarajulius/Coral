@@ -90,6 +90,21 @@ export interface Invoice {
   pdfUrl: string | null;
 }
 
+/**
+ * What a plan costs, as one of the four things that can be true.
+ *
+ * "Free", "negotiated" and "we could not read the price" are three different
+ * facts that all render as a missing number; keeping them apart is what stops a
+ * plan whose price id is unset being advertised as $0. Amounts are in the
+ * currency's smallest unit, like every other figure Stripe gives us, and
+ * `yearly` is a whole year's charge rather than a monthly equivalent.
+ */
+export type PlanPrice =
+  | { kind: "free" }
+  | { kind: "custom" }
+  | { kind: "listed"; currency: string; monthly: number | null; yearly: number | null }
+  | { kind: "unavailable"; reason: string };
+
 export interface PlanEntitlement {
   id: PlanId;
   name: string;
@@ -100,7 +115,36 @@ export interface PlanEntitlement {
   /** Job boosts per period. Null is unlimited. */
   boosts?: number | null;
   features: GatedFeature[];
+  /** Read from the same Stripe price id checkout charges against. */
+  price: PlanPrice;
 }
+
+/**
+ * What a year on the yearly price saves against twelve monthly ones.
+ *
+ * Null unless both figures are known — a saving computed from one real price
+ * and one assumption is a marketing number, not a fact.
+ */
+export function annualSaving(price: PlanPrice): number | null {
+  if (price.kind !== "listed") return null;
+  if (price.monthly === null || price.yearly === null) return null;
+  const saved = price.monthly * 12 - price.yearly;
+  return saved > 0 ? saved : null;
+}
+
+/** What this plan charges for the chosen interval, or null if not quotable. */
+export function amountFor(price: PlanPrice, interval: BillingInterval): number | null {
+  if (price.kind !== "listed") return null;
+  return interval === "YEARLY" ? price.yearly : price.monthly;
+}
+
+/**
+ * Cheapest first. Used to tell an upgrade from a downgrade, so the button
+ * under a plan can never invite someone to "upgrade" to less than they have.
+ */
+export const PLAN_ORDER: PlanId[] = ["STARTER", "PRO", "ENTERPRISE"];
+
+export const planRank = (plan: PlanId): number => PLAN_ORDER.indexOf(plan);
 
 export const hasCompany = (o: BillingOverview | NoCompanyOverview): o is BillingOverview =>
   o.company !== null;

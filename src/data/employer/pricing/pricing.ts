@@ -1,18 +1,39 @@
 import { Building2, LucideIcon, Sparkles, Zap } from "lucide-react";
+import type { PlanId as BillingPlanId } from "@/lib/api/billing";
 
 export type PlanId = "free" | "pro" | "enterprise";
+
+/**
+ * Editorial copy only. **No prices live here.**
+ *
+ * They used to: this file quoted Pro at $49/mo and $39/mo-billed-annually,
+ * hard-coded, while the page you actually buy from showed no price at all and
+ * charged whatever the Stripe price ids in the environment said. Two numbers
+ * with no relationship to each other, and the one a company agreed to was not
+ * the one it was charged. Prices now come from the billing API, which reads the
+ * same Stripe price ids checkout uses.
+ *
+ * `highlights` stays hand-written on purpose — it is a sales pitch, not a
+ * limit. The enforced limits are on /employers/billing, generated from the
+ * server's registry.
+ */
 export interface PricingPlan {
   id: PlanId;
   name: string;
   tagline: string;
   icon: LucideIcon;
-  monthly: number | null; // null = custom
-  yearly: number | null;
   cta: string;
   ctaVariant: "default" | "outline" | "premium";
   featured?: boolean;
   highlights: string[];
 }
+
+/** Marketing card to the plan the server actually bills. */
+export const BACKEND_PLAN: Record<PlanId, BillingPlanId> = {
+  free: "STARTER",
+  pro: "PRO",
+  enterprise: "ENTERPRISE",
+};
 
 export const pricingPlans: PricingPlan[] = [
   {
@@ -20,8 +41,6 @@ export const pricingPlans: PricingPlan[] = [
     name: "Starter",
     tagline: "For early-stage teams exploring hiring.",
     icon: Sparkles,
-    monthly: 0,
-    yearly: 0,
     cta: "Get Started Free",
     ctaVariant: "outline",
     highlights: [
@@ -36,8 +55,6 @@ export const pricingPlans: PricingPlan[] = [
     name: "Pro",
     tagline: "For growing teams hiring with intent.",
     icon: Zap,
-    monthly: 49,
-    yearly: 39,
     cta: "Start Hiring Smarter",
     ctaVariant: "premium",
     featured: true,
@@ -55,8 +72,6 @@ export const pricingPlans: PricingPlan[] = [
     name: "Enterprise",
     tagline: "For organizations scaling globally.",
     icon: Building2,
-    monthly: null,
-    yearly: null,
     cta: "Talk to Sales",
     ctaVariant: "default",
     highlights: [

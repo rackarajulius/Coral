@@ -32,10 +32,10 @@ export class BillingController {
     return { success: true, data: await this.billing.overview(user) };
   }
 
-  /** Every plan and what it includes — the same registry enforcement reads. */
+  /** Every plan, what it includes, and what it costs. */
   @Get('entitlements')
-  entitlements() {
-    return { success: true, data: this.billing.entitlements() };
+  async entitlements() {
+    return { success: true, data: await this.billing.entitlements() };
   }
 
   /**

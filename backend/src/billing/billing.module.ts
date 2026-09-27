@@ -4,6 +4,7 @@ import { BillingService } from './billing.service';
 import { BillingCheckoutService } from './billing-checkout.service';
 import { BillingWebhookService } from './billing-webhook.service';
 import { StripeClient } from './stripe.client';
+import { PlanPricingService } from './plan-pricing.service';
 
 /**
  * BillingService is exported for metering, which is called wherever an AI
@@ -13,7 +14,13 @@ import { StripeClient } from './stripe.client';
  */
 @Module({
   controllers: [BillingController],
-  providers: [BillingService, BillingCheckoutService, BillingWebhookService, StripeClient],
+  providers: [
+    BillingService,
+    BillingCheckoutService,
+    BillingWebhookService,
+    PlanPricingService,
+    StripeClient,
+  ],
   exports: [BillingService, BillingWebhookService],
 })
 export class BillingModule {}

@@ -106,3 +106,30 @@ export function entitlementsFor(plan: CompanyPlan): PlanEntitlements {
 export function isWithin(used: number, limit: number | null): boolean {
   return limit === null || used < limit;
 }
+
+/**
+ * Plans that can be bought without talking to anyone.
+ *
+ * STARTER is free, so there is nothing to check out. ENTERPRISE is negotiated,
+ * and offering a self-serve button for it would take money for terms nobody
+ * agreed to.
+ */
+export const SELF_SERVE_PLANS = [CompanyPlan.PRO] as const;
+export type SelfServePlan = (typeof SELF_SERVE_PLANS)[number];
+
+export const isSelfServe = (plan: CompanyPlan): plan is SelfServePlan =>
+  (SELF_SERVE_PLANS as readonly CompanyPlan[]).includes(plan);
+
+/**
+ * Env var holding the Stripe price id for each purchasable plan and interval.
+ *
+ * Lives beside the caps because both answer "what is this plan": checkout
+ * charges against these ids and the pricing service quotes them, so a plan
+ * cannot be sold at one price and advertised at another.
+ */
+export const PRICE_ENV: Record<SelfServePlan, Record<'MONTHLY' | 'YEARLY', string>> = {
+  [CompanyPlan.PRO]: {
+    MONTHLY: 'STRIPE_PRICE_PRO_MONTHLY',
+    YEARLY: 'STRIPE_PRICE_PRO_YEARLY',
+  },
+};

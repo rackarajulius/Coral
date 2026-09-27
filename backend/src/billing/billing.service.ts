@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { CompanyPlan, SubscriptionStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
+import { PlanPricingService } from './plan-pricing.service';
 import { User } from '../common/types/user.types';
 import { roleHasCapability } from '../company/capabilities';
 import {
@@ -38,6 +39,7 @@ export class BillingService {
     private readonly prisma: PrismaService,
     private readonly companyContext: CompanyContextService,
     private readonly config: ConfigService,
+    private readonly pricing: PlanPricingService,
   ) {}
 
   /**
@@ -193,13 +195,20 @@ export class BillingService {
     };
   }
 
-  /** The whole registry, so the UI cannot advertise a limit nothing enforces. */
-  entitlements() {
+  /**
+   * The whole registry, so the UI cannot advertise a limit nothing enforces —
+   * now including what each plan costs, read from the same Stripe price ids
+   * checkout charges against. A plan cannot be sold at one price and
+   * advertised at another.
+   */
+  async entitlements() {
+    const pricing = await this.pricing.all();
     return {
       plans: (Object.keys(PLAN_ENTITLEMENTS) as CompanyPlan[]).map((id) => ({
         id,
         ...PLAN_LABELS[id],
         ...PLAN_ENTITLEMENTS[id],
+        price: pricing[id],
       })),
     };
   }
