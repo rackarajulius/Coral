@@ -112,7 +112,7 @@ export function SidebarNudge() {
         title="Invite your team"
         body="Share your jobs, candidates and messages with colleagues."
         cta="Add someone"
-        to="/employers/settings/team"
+        to="/employers/team"
         onDismiss={hide}
       />
     );

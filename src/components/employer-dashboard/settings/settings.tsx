@@ -8,15 +8,15 @@ type SettingsShellProps = {
 
 export function SettingsShell({ children }: SettingsShellProps) {
   return (
-    <div className="min-h-screen bg-white dark:bg-background">
+    <div className="min-h-screen bg-background">
       <div className="max-w-[1320px] mx-auto px-6 lg:px-10 py-8">
         <div className="mb-6">
-          <h1 className="text-2xl font-semibold tracking-tight">Settings & Team</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Manage your organization, team access, integrations and security.
+            Your company record, security, and what Coral emails on your behalf.
           </p>
         </div>
-        <div className="top-14 z-10 -mx-6 lg:-mx-10 px-6 lg:px-10 bg-white/80 dark:bg-background/80 backdrop-blur border-b border-border">
+        <div className="top-14 z-10 -mx-6 lg:-mx-10 px-6 lg:px-10 bg-background/80 backdrop-blur border-b border-border">
           <nav className="flex gap-1 overflow-x-auto no-scrollbar">
             {SETTINGS_TABS.map((t) => (
               <NavLink

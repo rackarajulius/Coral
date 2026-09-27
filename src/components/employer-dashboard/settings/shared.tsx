@@ -1,5 +1,5 @@
 import {
-  Building2, Users, Shield, Lock, Bell, FileClock, MailPlus,
+  Building2, Lock, Bell, FileClock, MailPlus,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -7,8 +7,6 @@ import { cn } from "@/lib/utils";
 
 export type SettingsTabId =
   | "general"
-  | "team"
-  | "roles"
   | "security"
   | "notifications"
   | "templates"
@@ -16,9 +14,8 @@ export type SettingsTabId =
 
 export const SETTINGS_TABS: { id: SettingsTabId; label: string; path: string; icon: typeof Building2 }[] = [
   { id: "general", label: "General", path: "general", icon: Building2 },
-  { id: "team", label: "Team Members", path: "team", icon: Users },
-  { id: "roles", label: "Roles & Permissions", path: "roles", icon: Shield },
-  { id: "security", label: "Security", path: "security", icon: Lock },
+  { id: "security", label: "Security", path: "security", icon: Lock },
+
   { id: "notifications", label: "Notifications", path: "notifications", icon: Bell },
   { id: "templates", label: "Candidate Emails", path: "templates", icon: MailPlus },
   { id: "audit", label: "Audit Logs", path: "audit", icon: FileClock },

@@ -89,6 +89,7 @@ import Pricing from "./pages/employer/dashboard/Pricing";
 import Billing from "./pages/employer/dashboard/Billing";
 import EmployerNotifications from "./pages/employer/dashboard/EmployerNotifications";
 import SettingsPage from "./pages/employer/dashboard/Settings";
+import TeamPage from "./pages/employer/dashboard/Team";
 import ResetPassword from "./pages/ResetPassword";
 import { AppLayout } from "./components/adminDashboard/layout/AppLayout.tsx";
 import Overview from "./pages/admin/Overview.tsx";
@@ -283,6 +284,7 @@ const App = () => (
             <Route path="/employers/billing" element={<Billing />} />
             <Route path="/employers/notifications" element={<EmployerNotifications />} />
             <Route path="/employers/settings/*" element={<SettingsPage />} />
+            <Route path="/employers/team/*" element={<TeamPage />} />
             <Route path="/employers/company" element={<EmployerCompanyProfile />} />
             <Route path="/employers/automations" element={<Automations />} />
             <Route path="/employers/integrations" element={<Integrations />} />

@@ -82,7 +82,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     label: "Company",
     items: [
       { title: "Profile", url: "/employers/company", icon: Building2 },
-      { title: "Team", url: "/employers/settings/team", icon: UsersRound },
+      { title: "Team", url: "/employers/team", icon: UsersRound },
       // Surfaced rather than buried: connecting a calendar is something people
       // do early and then cannot find again.
       {

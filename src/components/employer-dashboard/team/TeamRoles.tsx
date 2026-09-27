@@ -1,10 +1,11 @@
+import { Fragment } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Check, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { SectionCard } from "./shared";
+import { SectionCard } from "../settings/shared";
 import { getRoles, ROLE_LABELS, type CompanyRole, type RoleReference } from "@/lib/api/companyTeam";
 
 /**
@@ -86,7 +87,7 @@ export default function RolesPermissions() {
     <div className="space-y-6">
       <SectionCard
         title="Roles and permissions"
-        description="A fixed set of roles, enforced on every request. Change someone's role from the Team Members tab."
+        description="A fixed set of roles, enforced on every request. Change someone's role from the People tab."
       >
         <div className="overflow-x-auto">
           <Table>
@@ -102,8 +103,8 @@ export default function RolesPermissions() {
             </TableHeader>
             <TableBody>
               {AREAS.map((area) => (
-                <>
-                  <TableRow key={area.label} className="hover:bg-transparent">
+                <Fragment key={area.label}>
+                  <TableRow className="hover:bg-transparent">
                     <TableCell
                       colSpan={roles.length + 1}
                       className="bg-secondary/40 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground"
@@ -130,7 +131,7 @@ export default function RolesPermissions() {
                       ))}
                     </TableRow>
                   ))}
-                </>
+                </Fragment>
               ))}
             </TableBody>
           </Table>

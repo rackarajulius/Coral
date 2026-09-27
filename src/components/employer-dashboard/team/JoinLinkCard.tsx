@@ -7,7 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { SectionCard, Field } from "./shared";
+import { SectionCard, Field } from "../settings/shared";
 import {
   LINK_ROLES, ROLE_LABELS, getJoinLink, regenerateJoinLink, revokeJoinLink,
   type CompanyRole,
