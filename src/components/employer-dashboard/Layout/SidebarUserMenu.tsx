@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useSidebar } from "@/components/ui/sidebar";
 import { useAuth } from "@/contexts/AuthContext";
+import { personInitials, personName } from "@/lib/personName";
 import { toast } from "sonner";
 const themeOptions = [
   { value: "light", label: "Light", icon: Sun },
@@ -37,19 +38,30 @@ const themeOptions = [
   { value: "system", label: "System", icon: Monitor },
 ] as const;
 
-const user = {
-  name: "John Fletcher",
-  email: "john@jobflow.io",
-  avatar: "",
-  initials: "JF",
-};
-
 export function SidebarUserMenu() {
   const { state, isMobile } = useSidebar();
   const collapsed = state === "collapsed";
   const navigate = useNavigate();
   const { theme, setTheme } = useTheme();
-  const { logout } = useAuth();
+  const { user, logout } = useAuth();
+
+  /**
+   * The signed-in person, not a placeholder.
+   *
+   * This block used to be a hard-coded "John Fletcher / john@jobflow.io" while
+   * `useAuth` sat two lines below, used only for sign-out — so every employer
+   * saw a stranger's name and address in their own sidebar, and a shared screen
+   * or a screenshot showed the same invented person to everyone.
+   *
+   * Where no name is known the email carries the row on its own. It is the one
+   * thing we can be sure is theirs, and better than the email's local part
+   * dressed up as a name. See lib/personName.
+   */
+  const name = personName(user);
+  const initials = personInitials(user);
+  const email = user?.email ?? "";
+  const primary = name || email;
+  const secondary = name ? email : "";
 
   const handleLogout = async () => {
     await logout();
@@ -64,20 +76,23 @@ export function SidebarUserMenu() {
           className="flex w-full items-center gap-2 rounded-xl p-2 text-left transition-colors duration-150 hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Avatar className="h-8 w-8 shrink-0 rounded-lg">
-            {user.avatar && <AvatarImage src={user.avatar} alt={user.name} />}
+            {user?.avatarUrl && <AvatarImage src={user.avatarUrl} alt="" />}
             <AvatarFallback className="rounded-lg  text-xs font-semibold">
-              {user.initials}
+              {/* Nothing to work from means a neutral icon, never fake letters. */}
+              {initials || <CircleUser className="h-4 w-4" aria-hidden="true" />}
             </AvatarFallback>
           </Avatar>
           {!collapsed && (
             <>
               <div className="flex-1 min-w-0">
                 <p className="truncate text-sm font-semibold text-sidebar-foreground leading-tight">
-                  {user.name}
+                  {primary || "Your account"}
                 </p>
-                <p className="truncate text-[11px] text-muted-foreground leading-tight">
-                  {user.email}
-                </p>
+                {secondary && (
+                  <p className="truncate text-[11px] text-muted-foreground leading-tight">
+                    {secondary}
+                  </p>
+                )}
               </div>
               <EllipsisVertical className="ml-auto h-4 w-4 shrink-0 text-muted-foreground/60" />
             </>
@@ -95,14 +110,18 @@ export function SidebarUserMenu() {
         <DropdownMenuLabel className="p-0 font-normal">
           <div className="flex items-center gap-3 px-3 py-3">
             <Avatar className="h-10 w-10 rounded-lg">
-              {user.avatar && <AvatarImage src={user.avatar} alt={user.name} />}
+              {user?.avatarUrl && <AvatarImage src={user.avatarUrl} alt="" />}
               <AvatarFallback className="rounded-lg  text-sm font-semibold">
-                {user.initials}
+                {initials || <CircleUser className="h-5 w-5" aria-hidden="true" />}
               </AvatarFallback>
             </Avatar>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-foreground">{user.name}</p>
-              <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+              <p className="truncate text-sm font-semibold text-foreground">
+                {primary || "Your account"}
+              </p>
+              {secondary && (
+                <p className="truncate text-xs text-muted-foreground">{secondary}</p>
+              )}
             </div>
           </div>
         </DropdownMenuLabel>
@@ -112,13 +131,18 @@ export function SidebarUserMenu() {
         {/* Upgrade CTA */}
        
         {/* Settings Group */}
+        {/* Every item here goes somewhere that exists. "Account" used to point
+            at /employers/account/settings, which no route matches — it fell
+            through to the 404 page. There is no personal account page on the
+            employer side yet, so the item is gone rather than pointed at the
+            company record under a label that says "Account". */}
         <DropdownMenuGroup>
           <DropdownMenuItem
             className="gap-2 cursor-pointer"
-            onClick={() => navigate("/employers/account/settings")}
+            onClick={() => navigate("/employers/settings/general")}
           >
             <CircleUser className="h-4 w-4" />
-            Account
+            Company settings
           </DropdownMenuItem>
           <DropdownMenuItem
             className="gap-2 cursor-pointer"
@@ -127,9 +151,10 @@ export function SidebarUserMenu() {
             <CreditCard className="h-4 w-4" />
             Billing
           </DropdownMenuItem>
+          {/* The notifications page, not the settings tab that configures them. */}
           <DropdownMenuItem
             className="gap-2 cursor-pointer"
-            onClick={() => navigate("/employers/settings")}
+            onClick={() => navigate("/employers/notifications")}
           >
             <BellDot className="h-4 w-4" />
             Notifications
@@ -174,7 +199,7 @@ export function SidebarUserMenu() {
         {/* Help */}
         <DropdownMenuItem
           className="gap-2 cursor-pointer"
-          onClick={() => navigate("/employers/settings")}
+          onClick={() => navigate("/employers/contact")}
         >
           <LifeBuoy className="h-4 w-4" />
           Help & Support

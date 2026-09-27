@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { useAuth } from './AuthContext';
 import { onAfterSignOut, onBeforeSignOut } from '@/lib/signOutHooks';
+import { personName } from '@/lib/personName';
 import { clearResumeImportStash } from '@/lib/resumeImportStash';
 import {
   hasSession,
@@ -792,13 +793,9 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
    * person's name.
    */
   useEffect(() => {
-    const fromNames = [user?.firstName, user?.lastName]
-      .filter(Boolean)
-      .join(' ')
-      .trim();
-    const display = user?.displayName?.trim() ?? '';
-    const emailLocal = user?.email?.split('@')[0] ?? '';
-    const name = !user ? '' : fromNames || (display && display !== emailLocal ? display : '');
+    // The rule itself lives in lib/personName, so the employer sidebar and this
+    // hero cannot drift into calling the same person two different things.
+    const name = personName(user);
 
     setProfile((prev) => (prev.name === name ? prev : { ...prev, name }));
   }, [user, user?.firstName, user?.lastName, user?.displayName, user?.email]);
