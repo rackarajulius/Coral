@@ -64,12 +64,15 @@ export class BillingCheckoutService {
      */
     const subscription = await this.prisma.companySubscription.findUnique({
       where: { companyId: context.companyId },
-      select: { plan: true },
+      select: { plan: true, stripeSubscriptionId: true, status: true },
     });
     if (subscription?.plan === CompanyPlan.ENTERPRISE) {
       throw new BadRequestException(
         'Your plan is arranged with our team. Talk to us before changing it.',
       );
+    }
+    if (subscription?.stripeSubscriptionId && ['ACTIVE', 'TRIALING', 'PAST_DUE'].includes(subscription.status)) {
+      throw new BadRequestException('Manage your existing subscription through the billing portal.');
     }
 
     const priceId = this.priceIdFor(input.plan as SelfServePlan, input.interval);
@@ -91,9 +94,27 @@ export class BillingCheckoutService {
       'metadata[companyId]': context.companyId,
       'subscription_data[metadata][companyId]': context.companyId,
       // So Stripe collects the tax id and address rather than us storing them.
-      tax_id_collection: 'enabled',
-      'automatic_tax[enabled]': 'true',
+      'tax_id_collection[enabled]': 'true',
       billing_address_collection: 'required',
+      /**
+       * Required by `tax_id_collection` on an existing customer, which this
+       * always is — `ensureCustomer` runs first. Without them Stripe refuses
+       * the session: "Tax ID collection requires updating business name on the
+       * customer… please set customer_update[name]=auto".
+       */
+      'customer_update[name]': 'auto',
+      'customer_update[address]': 'auto',
+      /**
+       * Opt-in, and off by default.
+       *
+       * `automatic_tax` needs an origin address registered in Stripe Tax; until
+       * one is, Stripe rejects every session with "You must have a valid head
+       * office address to enable automatic tax calculation". That made checkout
+       * impossible to try locally, and the failure surfaced only as a 502. A
+       * deployment that has configured Stripe Tax turns it on with
+       * STRIPE_AUTOMATIC_TAX=true.
+       */
+      ...(this.automaticTaxEnabled() ? { 'automatic_tax[enabled]': 'true' } : {}),
     });
 
     if (!session.url) {
@@ -183,9 +204,8 @@ export class BillingCheckoutService {
   /**
    * The company's Stripe customer, created once.
    *
-   * The unique constraint on `stripeCustomerId` is the real guard: two owners
-   * clicking upgrade at the same moment would otherwise create two customers
-   * and split the company's billing history in half.
+   * A stable Stripe idempotency key avoids duplicate provider creation, and
+   * a conditional database claim preserves whichever customer was stored first.
    */
   private async ensureCustomer(
     companyId: string,
@@ -202,7 +222,7 @@ export class BillingCheckoutService {
       name: companyName,
       email: user.email,
       'metadata[companyId]': companyId,
-    });
+    }, `company-customer-${companyId}`);
 
     try {
       await this.prisma.companySubscription.upsert({
@@ -212,9 +232,16 @@ export class BillingCheckoutService {
           stripeCustomerId: customer.id,
           currency: this.defaultCurrency(),
         },
-        update: { stripeCustomerId: customer.id },
+        update: {},
       });
-      return customer.id;
+      // Existing Starter rows may not have a customer yet. Claim only the empty
+      // field; a concurrent winner must never have its billing history replaced.
+      await this.prisma.companySubscription.updateMany({
+        where: { companyId, stripeCustomerId: null },
+        data: { stripeCustomerId: customer.id },
+      });
+      const winner = await this.prisma.companySubscription.findUniqueOrThrow({ where: { companyId } });
+      return winner.stripeCustomerId!;
     } catch (err) {
       // Lost the race: another request stored a customer between our read and
       // our write. Theirs is as good as ours, so use it and abandon the
@@ -242,6 +269,16 @@ export class BillingCheckoutService {
       );
     }
     return priceId;
+  }
+
+  /**
+   * Whether to ask Stripe to calculate tax.
+   *
+   * Off unless explicitly enabled, because turning it on without an origin
+   * address in Stripe Tax does not degrade — it refuses every checkout.
+   */
+  private automaticTaxEnabled(): boolean {
+    return this.config.get<string>('STRIPE_AUTOMATIC_TAX') === 'true';
   }
 
   /** Canada-first. Stripe fixes this at the first payment and it cannot change. */

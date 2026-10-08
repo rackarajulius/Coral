@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { StripeClient } from './stripe.client';
+import { Injectable, Logger, BadGatewayException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   BillingInterval,
@@ -40,6 +41,7 @@ export class BillingWebhookService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly audit: CompanyAuditService,
+    private readonly stripe: StripeClient,
   ) {}
 
   /** Whether this service claims the event. Keeps the dispatch table in one place. */
@@ -53,7 +55,7 @@ export class BillingWebhookService {
 
   async handle(type: string, object: Record<string, unknown>): Promise<void> {
     if (type.startsWith('customer.subscription.')) {
-      await this.applySubscription(object, type === 'customer.subscription.deleted');
+      await this.applySubscription(object);
       return;
     }
     if (type === 'invoice.paid' || type === 'invoice.payment_failed') {
@@ -65,7 +67,6 @@ export class BillingWebhookService {
 
   private async applySubscription(
     sub: Record<string, unknown>,
-    deleted: boolean,
   ): Promise<void> {
     const companyId = await this.resolveCompanyId(sub);
     if (!companyId) {
@@ -78,57 +79,69 @@ export class BillingWebhookService {
       return;
     }
 
-    const before = await this.prisma.companySubscription.findUnique({ where: { companyId } });
+    const change = await this.prisma.$transaction(async (tx) => {
+      // Serialize company subscription updates before fetching current provider state.
+      // Event timestamps alone cannot order events created in the same second.
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${companyId}, 0))::text`;
+      const before = await tx.companySubscription.findUnique({ where: { companyId } });
+      const subscriptionId = this.str(sub.id);
+      if (!subscriptionId) throw new BadGatewayException('Subscription event has no subscription ID');
+      sub = await this.stripe.get(`/subscriptions/${encodeURIComponent(subscriptionId)}`);
+      if (sub.id !== subscriptionId) throw new BadGatewayException('Billing provider returned a different subscription');
+      // Cancellation of a replaced subscription must not cancel its replacement.
+      if (before?.stripeSubscriptionId && before.stripeSubscriptionId !== subscriptionId &&
+          ['canceled', 'incomplete_expired'].includes(String(sub.status))) return null;
 
-    const stripeStatus = String(sub.status ?? '');
-    const status = deleted
-      ? SubscriptionStatus.CANCELED
-      : (STATUS_MAP[stripeStatus] ?? SubscriptionStatus.NONE);
+      const stripeStatus = String(sub.status ?? '');
+      const status = STATUS_MAP[stripeStatus];
+      if (!status) throw new BadGatewayException('Billing provider returned an unknown subscription status');
 
-    /**
-     * A cancelled or unpaid subscription falls back to Starter's limits, but
-     * nothing is deleted — jobs stay published, members stay in the team. The
-     * caps refuse the *next* action instead of undoing past ones.
-     */
-    const entitledPlan =
-      status === SubscriptionStatus.ACTIVE || status === SubscriptionStatus.TRIALING
-        ? this.planFromSubscription(sub)
-        : CompanyPlan.STARTER;
+      /**
+       * A cancelled or unpaid subscription falls back to Starter's limits, but
+       * nothing is deleted — jobs stay published, members stay in the team. The
+       * caps refuse the *next* action instead of undoing past ones.
+       */
+      const entitledPlan =
+        status === SubscriptionStatus.ACTIVE || status === SubscriptionStatus.TRIALING
+          ? this.planFromSubscription(sub)
+          : CompanyPlan.STARTER;
 
-    const interval = this.intervalFromSubscription(sub);
-    const unitAmount = this.unitAmountOf(sub);
-    const periodStart = this.toDate(sub.current_period_start);
-    const periodEnd = this.toDate(sub.current_period_end);
+      const interval = this.intervalFromSubscription(sub);
+      const unitAmount = this.unitAmountOf(sub);
+      const periodStart = this.toDate(sub.current_period_start);
+      const periodEnd = this.toDate(sub.current_period_end);
 
-    await this.prisma.companySubscription.upsert({
-      where: { companyId },
-      create: {
-        companyId,
-        plan: entitledPlan,
-        status,
-        interval: interval ?? BillingInterval.MONTHLY,
-        currency: String(sub.currency ?? this.defaultCurrency()).toLowerCase(),
-        stripeCustomerId: this.str(sub.customer),
-        stripeSubscriptionId: this.str(sub.id),
-        currentPeriodStart: periodStart,
-        currentPeriodEnd: periodEnd,
-        cancelAtPeriodEnd: Boolean(sub.cancel_at_period_end),
-        unitAmount,
-      },
-      update: {
-        plan: entitledPlan,
-        status,
-        ...(interval ? { interval } : {}),
-        ...(sub.currency ? { currency: String(sub.currency).toLowerCase() } : {}),
-        stripeSubscriptionId: this.str(sub.id),
-        currentPeriodStart: periodStart,
-        currentPeriodEnd: periodEnd,
-        cancelAtPeriodEnd: Boolean(sub.cancel_at_period_end),
-        unitAmount,
-      },
-    });
+      await tx.companySubscription.upsert({
+        where: { companyId },
+        create: {
+          companyId,
+          plan: entitledPlan,
+          status,
+          interval: interval ?? BillingInterval.MONTHLY,
+          currency: String(sub.currency ?? this.defaultCurrency()).toLowerCase(),
+          stripeCustomerId: this.str(sub.customer),
+          stripeSubscriptionId: this.str(sub.id),
+          currentPeriodStart: periodStart,
+          currentPeriodEnd: periodEnd,
+          cancelAtPeriodEnd: Boolean(sub.cancel_at_period_end),
+          unitAmount,
+        },
+        update: {
+          plan: entitledPlan,
+          status,
+          ...(interval ? { interval } : {}),
+          ...(sub.currency ? { currency: String(sub.currency).toLowerCase() } : {}),
+          stripeSubscriptionId: this.str(sub.id),
+          currentPeriodStart: periodStart,
+          currentPeriodEnd: periodEnd,
+          cancelAtPeriodEnd: Boolean(sub.cancel_at_period_end),
+          unitAmount,
+        },
+      });
 
-    await this.auditPlanChange(companyId, before, { plan: entitledPlan, status });
+      return { before, after: { plan: entitledPlan, status } };
+    }, { timeout: 20_000 });
+    if (change) await this.auditPlanChange(companyId, change.before, change.after);
   }
 
   /**
@@ -182,7 +195,8 @@ export class BillingWebhookService {
   private unitAmountOf(sub: Record<string, unknown>): number | null {
     const item = this.firstItem(sub);
     const price = item?.price as Record<string, unknown> | undefined;
-    const amount = Number(price?.unit_amount);
+    if (price?.unit_amount == null) return null;
+    const amount = Number(price.unit_amount);
     return Number.isFinite(amount) ? amount : null;
   }
 

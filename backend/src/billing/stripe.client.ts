@@ -23,25 +23,31 @@ export class StripeClient {
   async post<T = Record<string, unknown>>(
     path: string,
     form: Record<string, string | number | undefined>,
+    idempotencyKey?: string,
   ): Promise<T> {
     const body = new URLSearchParams();
     for (const [k, v] of Object.entries(form)) {
       if (v !== undefined && v !== '') body.set(k, String(v));
     }
-    return this.request<T>(path, { method: 'POST', body: body.toString() });
+    return this.request<T>(path, { method: 'POST', body: body.toString(), idempotencyKey });
   }
 
   async get<T = Record<string, unknown>>(path: string): Promise<T> {
     return this.request<T>(path, { method: 'GET' });
   }
 
-  private async request<T>(path: string, init: { method: string; body?: string }): Promise<T> {
+  async delete<T = Record<string, unknown>>(path: string): Promise<T> {
+    return this.request<T>(path, { method: 'DELETE' });
+  }
+
+  private async request<T>(path: string, init: { method: string; body?: string; idempotencyKey?: string }): Promise<T> {
     const key = this.secretKey();
     const res = await fetch(`${this.apiUrl()}${path}`, {
       method: init.method,
       headers: {
         Authorization: `Bearer ${key}`,
         'Content-Type': 'application/x-www-form-urlencoded',
+        ...(init.idempotencyKey ? { 'Idempotency-Key': init.idempotencyKey } : {}),
         /**
          * Pinning the version means Stripe changing a field shape does not
          * silently change what our webhooks read. Overridable so an upgrade is
@@ -50,15 +56,30 @@ export class StripeClient {
         'Stripe-Version': this.config.get<string>('STRIPE_API_VERSION', '2024-06-20'),
       },
       body: init.body,
-    });
+      signal: AbortSignal.timeout(10_000),
+    }).catch(() => { throw new BadGatewayException('Billing provider is unavailable. Please try again.'); });
 
     if (!res.ok) {
-      const text = await res.text().catch(() => '');
+      /**
+       * Stripe says exactly what is wrong — "You must have a valid head office
+       * address to enable automatic tax calculation", "Tax ID collection
+       * requires updating business name on the customer" — and this used to
+       * discard it, leaving a bare 502 in the browser and nothing anywhere
+       * else. Diagnosing one cost a reproduction against the live API.
+       *
+       * `console.error` rather than Nest's Logger on purpose: main.ts creates
+       * the app with `logger: false`, so a Logger call here prints nothing.
+       */
+      const detail = await res.text().catch(() => '');
+      // eslint-disable-next-line no-console
+      console.error(
+        `[stripe] ${init.method} ${path} failed (${res.status}): ${detail.slice(0, 500)}`,
+      );
       throw new BadGatewayException(
-        `Stripe ${init.method} ${path} failed (${res.status}): ${text.slice(0, 300)}`,
+        `Billing provider request failed (${res.status}). Please try again.`,
       );
     }
-    return (await res.json()) as T;
+    return (await res.json().catch(() => { throw new BadGatewayException('Billing provider returned an invalid response.'); })) as T;
   }
 
   private secretKey(): string {
