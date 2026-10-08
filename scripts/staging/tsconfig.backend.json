@@ -1,0 +1,10 @@
+{
+  "extends": "../../backend/tsconfig.build.json",
+  "compilerOptions": {
+    "outDir": "../../backend/.staging.local/dist",
+    "typeRoots": ["../../backend/node_modules/@types"],
+    "incremental": false
+  },
+  "include": ["../../backend/src/**/*"],
+  "exclude": ["../../backend/node_modules", "../../backend/dist", "../../backend/test", "../../backend/.staging.local", "../../backend/src/**/*.spec.ts", "../../backend/src/**/*.e2e-spec.ts"]
+}
