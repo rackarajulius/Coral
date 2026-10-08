@@ -5,6 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Search, Filter, MessageSquarePlus, X } from "lucide-react";
 import { useMessageStore, Conversation } from "@/stores/messageStore";
+import { useMySeat } from "@/hooks/useMySeat";
+import NewConversationDialog from "./NewConversationDialog";
 import { cn } from "@/lib/utils";
 
 interface ConversationListProps {
@@ -22,6 +24,15 @@ const ConversationList = ({ onSelect }: ConversationListProps) => {
   } = useMessageStore();
 
   const [search, setSearch] = useState("");
+  const [composeOpen, setComposeOpen] = useState(false);
+
+  /**
+   * Writing to a candidate needs `messaging:write`, which Viewer and
+   * Interviewer seats do not hold. Offering the button to them would produce a
+   * picker whose every row 403s.
+   */
+  const { can } = useMySeat();
+  const mayWrite = can("messaging:write");
 
   const filtered = useMemo(() => {
     let list = conversations;
@@ -52,10 +63,18 @@ const ConversationList = ({ onSelect }: ConversationListProps) => {
       {/* Header */}
       <div className="px-4 pt-4 pb-2 space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-foreground">Messages</h2>
-          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground">
-            <MessageSquarePlus className="h-4 w-4" />
-          </Button>
+          <h2 className="text-base font-semibold text-foreground">Chat</h2>
+          {mayWrite && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+              onClick={() => setComposeOpen(true)}
+              aria-label="Start a new conversation"
+            >
+              <MessageSquarePlus className="h-4 w-4" />
+            </Button>
+          )}
         </div>
 
         {/* Search */}
@@ -96,10 +115,39 @@ const ConversationList = ({ onSelect }: ConversationListProps) => {
       {/* List */}
       <div className="flex-1 overflow-y-auto">
         {filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-            <Filter className="h-8 w-8 mb-2 opacity-40" />
-            <p className="text-sm">No conversations found</p>
-          </div>
+          /* An inbox with nothing in it and an inbox whose filter matches
+             nothing are different problems. The first needs a way to start; the
+             second needs the filter cleared, and a "New conversation" button
+             there would not help. */
+          conversations.length === 0 ? (
+            <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
+              <MessageSquarePlus className="mb-3 h-8 w-8 text-muted-foreground opacity-40" />
+              <p className="text-sm font-medium text-foreground">No conversations yet</p>
+              <p className="mt-1 max-w-[15rem] text-xs text-muted-foreground">
+                {mayWrite
+                  ? "Write to anyone who applied to one of your jobs."
+                  : "Threads your colleagues open will appear here."}
+              </p>
+              {mayWrite && (
+                <Button size="sm" className="mt-4" onClick={() => setComposeOpen(true)}>
+                  <MessageSquarePlus className="h-4 w-4" />
+                  New conversation
+                </Button>
+              )}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+              <Filter className="mb-2 h-8 w-8 opacity-40" />
+              <p className="text-sm">No conversations match</p>
+              <button
+                type="button"
+                onClick={() => { setSearch(""); setFilterMode("all"); }}
+                className="mt-2 text-xs text-accent hover:underline"
+              >
+                Clear search and filters
+              </button>
+            </div>
+          )
         ) : (
           filtered.map((c) => (
             <button
@@ -141,6 +189,14 @@ const ConversationList = ({ onSelect }: ConversationListProps) => {
           ))
         )}
       </div>
+
+      <NewConversationDialog
+        open={composeOpen}
+        onClose={() => setComposeOpen(false)}
+        // On mobile the list covers the chat pane, so opening a thread has to
+        // hand over to it the same way picking an existing conversation does.
+        onStarted={() => onSelect?.()}
+      />
     </div>
   );
 };

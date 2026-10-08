@@ -272,8 +272,14 @@ export class MessagingService {
       type: 'message',
       title: `New message from ${senderName}`,
       message: body ? body.slice(0, 140) : `📎 ${attachments.length} attachment${attachments.length > 1 ? 's' : ''}`,
-      // Deep-link each recipient to their own inbox.
-      link: viewerIsEmployer ? '/jobseeker/messages' : '/employers/messages',
+      /**
+       * Each recipient's own inbox, opened on this thread.
+       *
+       * The `?c=` was missing, so "New message from X" landed on the inbox and
+       * left the reader to find the thread themselves — which is most of the
+       * work the notification was meant to save.
+       */
+      link: `${viewerIsEmployer ? '/jobseeker/chat' : '/employers/chat'}?c=${conversationId}`,
     });
 
     return {

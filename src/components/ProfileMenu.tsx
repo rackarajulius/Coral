@@ -21,6 +21,8 @@ import {
   MessageSquare,
   Save,
   Settings,
+  BriefcaseBusiness,
+  UsersRound,
 } from "lucide-react"
 import { Link } from "react-router-dom"
 import { useAuth } from "@/contexts/AuthContext"
@@ -33,18 +35,24 @@ import { accountSide } from "@/lib/accountSide"
  */
 const EMPLOYER_ITEMS = [
   { to: "/employers/dashboard", label: "Employer dashboard", icon: LayoutDashboard },
-  { to: "/employers/messages", label: "Messages", icon: MessageSquare },
+  { to: "/employers/chat", label: "Chat", icon: MessageSquare },
   { to: "/employers/notifications", label: "Notifications", icon: BellIcon },
   { to: "/employers/settings", label: "Settings", icon: Settings },
 ]
 const SEEKER_ITEMS = [
   { to: "/jobseeker/profile", label: "Profile", icon: CircleUserRound },
+  { to: "/provider", label: "Offer services", icon: BriefcaseBusiness },
   { to: "/saved-jobs", label: "Saved Jobs", icon: Save },
-  { to: "/jobseeker/messages", label: "Messages", icon: MessageSquare },
+  { to: "/jobseeker/chat", label: "Chat", icon: MessageSquare },
   { to: "/jobseeker/settings", label: "Settings", icon: Settings },
   { to: "/notifications", label: "Notifications", icon: BellIcon },
 ]
-const ADMIN_ITEMS = [{ to: "/admin/dashboard", label: "Admin dashboard", icon: LayoutDashboard }, ...SEEKER_ITEMS]
+const PROVIDER_ITEMS = [
+  { to: "/provider", label: "Provider profile", icon: CircleUserRound },
+  { to: "/providers", label: "Find professionals", icon: UsersRound },
+  { to: "/community", label: "Community", icon: MessageSquare },
+]
+const ADMIN_ITEMS = [{ to: "/admin/dashboard", label: "Admin dashboard", icon: LayoutDashboard }, ...SEEKER_ITEMS.filter((item) => item.to !== '/provider')]
 
 const ProfileMenu = () => {
   const { user, logout, isAuthenticated, enableBackendSync } = useAuth();
@@ -59,7 +67,7 @@ const ProfileMenu = () => {
   }
 
   const side = accountSide(user)
-  const items = side === "employer" ? EMPLOYER_ITEMS : side === "admin" ? ADMIN_ITEMS : SEEKER_ITEMS
+  const items = side === "employer" ? EMPLOYER_ITEMS : side === "admin" ? ADMIN_ITEMS : side === "provider" ? PROVIDER_ITEMS : SEEKER_ITEMS
 
   return (
     <DropdownMenu modal={false}>

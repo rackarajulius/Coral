@@ -99,7 +99,7 @@ export default function OutreachMessagePage() {
 
               {data.conversationId && (
                 <Button asChild size="sm" className="mt-3">
-                  <Link to={`/jobseeker/messages?c=${data.conversationId}`}>
+                  <Link to={`/jobseeker/chat?c=${data.conversationId}`}>
                     <MessageSquare className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
                     Open the conversation
                   </Link>

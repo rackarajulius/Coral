@@ -92,8 +92,8 @@ export class NextActionsService {
       icon: 'MessageCircle',
       title: `Reply to ${threads} candidate${threads > 1 ? 's' : ''}`,
       desc: `${unread.length} unread message${unread.length > 1 ? 's' : ''} — oldest has been waiting ${this.age(unread[0].createdAt)}.`,
-      cta: 'Open messages',
-      to: '/employers/messages',
+      cta: 'Open chat',
+      to: '/employers/chat',
       priority: 100,
     };
   }
