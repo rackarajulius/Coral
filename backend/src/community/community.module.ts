@@ -19,9 +19,10 @@ import { PostsController } from './posts/posts.controller';
 import { PostsService } from './posts/posts.service';
 import { TidesController } from './tides/tides.controller';
 import { TidesService } from './tides/tides.service';
+import { MarketplaceModule } from '../marketplace/marketplace.module';
 
 @Module({
-  imports: [StorageModule, NotificationsModule],
+  imports: [StorageModule, NotificationsModule, MarketplaceModule],
   controllers: [PostsController, CommentsController, FeedController, SpacesController, ModerationController, PollsController, TidesController],
   providers: [PostsService, CommentsService, FeedService, SpacesService, CommunityIdentityService, ModerationService, CommunityMediaService, PollsService, GifsService, LinkPreviewService, TidesService],
   exports: [PostsService, CommentsService, FeedService],

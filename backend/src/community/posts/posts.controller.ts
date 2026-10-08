@@ -65,6 +65,11 @@ export class PostsController {
     return { success: true, data: { company: await this.postsService.companyVoiceFor(user.id) } };
   }
 
+  @Get('announcement-options')
+  async announcementOptions(@CurrentUser() user: User, @Query('company') company?: string, @Query('companyId') companyId?: string) {
+    return { success: true, data: await this.postsService.announcementOptions(user.id, company === 'true', companyId) };
+  }
+
   @Public()
   @Get(':id')
   async getById(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user?: User) {

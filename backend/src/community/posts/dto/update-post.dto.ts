@@ -6,10 +6,22 @@ import {
   IsString,
   IsUrl,
   MaxLength,
+  ValidateNested,
 } from 'class-validator';
-import { CommunityPostType } from './create-post.dto';
+import { Type } from 'class-transformer';
+import { AnnouncementReferenceDto, CommunityPostPurpose, CommunityPostType } from './create-post.dto';
 
 export class UpdatePostDto {
+  @IsOptional()
+  @IsEnum(CommunityPostPurpose)
+  purpose?: CommunityPostPurpose;
+
+  /** Explicit null detaches the reference; omitted retains it. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => AnnouncementReferenceDto)
+  reference?: AnnouncementReferenceDto | null;
+
   @IsOptional()
   @IsString()
   @MaxLength(5000)

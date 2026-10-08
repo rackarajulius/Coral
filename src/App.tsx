@@ -34,9 +34,19 @@ import VideoProfilePage from "./pages/jobSeeker/VideoProfilePage";
 import JobPreferences from "./pages/jobSeeker/JobPreferences";
 import Activity from "./pages/jobSeeker/Activity";
 import JobSeekerMessages from "./pages/jobSeeker/JobSeekerMessages";
+import LegacyRedirect from "./components/LegacyRedirect";
 import OutreachMessagePage from "./pages/jobSeeker/OutreachMessage";
 import SeekerNotifications from "./pages/jobSeeker/Notifications";
 import PublicProfile from "./pages/jobSeeker/PublicProfile";
+import ProviderDashboard from "./pages/providers/ProviderDashboard";
+import ProviderPreview from "./pages/providers/ProviderPreview";
+import ProviderPublicProfile from "./pages/providers/ProviderPublicProfile";
+import ProviderDirectory from "./pages/providers/ProviderDirectory";
+import ProviderAreaGate from "./components/providers/ProviderAreaGate";
+import MarketplaceDirectory from "./pages/marketplace/MarketplaceDirectory";
+import MarketplaceDetail from "./pages/marketplace/MarketplaceDetail";
+import MarketplaceManage from "./pages/marketplace/MarketplaceManage";
+import MarketplaceInbox from "./pages/marketplace/MarketplaceInbox";
 import AiScreen from "./pages/jobSeeker/AiScreen";
 import GoogleOAuthCallback from "./pages/oauth/GoogleOAuthCallback";
 import InterviewRoom from "./pages/interview/InterviewRoom";
@@ -229,6 +239,18 @@ const App = () => (
             <Route path="/unsubscribe" element={<Unsubscribe />} />
             <Route path = "/onboarding" element={<Onboarding/>} />
             <Route path = "/profile/:id" element={<PublicProfile/>} />
+            <Route element={<ProviderAreaGate />}>
+              <Route path="/provider" element={<ProviderDashboard />} />
+              <Route path="/provider/preview" element={<ProviderPreview />} />
+            </Route>
+            <Route path="/providers" element={<ProviderDirectory />} />
+            <Route path="/providers/:userId" element={<ProviderPublicProfile />} />
+            <Route path="/services" element={<MarketplaceDirectory kind="service" />} />
+            <Route path="/services/:id" element={<MarketplaceDetail kind="service" />} />
+            <Route path="/projects" element={<MarketplaceDirectory kind="project" />} />
+            <Route path="/projects/:id" element={<MarketplaceDetail kind="project" />} />
+            <Route path="/marketplace/manage" element={<MarketplaceManage />} />
+            <Route path="/marketplace/inbox" element={<MarketplaceInbox />} />
             <Route path="/ai-screen/:id" element={<AiScreen/>} />
             {/* Accessible to any authenticated participant (both roles); access enforced by the API */}
             <Route path="/interview/:id/room" element={<InterviewRoom />} />
@@ -240,7 +262,10 @@ const App = () => (
               <Route path = "/jobseeker/profile" element={<Profile/>} />
               <Route path = "/jobseeker/preferences" element={<JobPreferences/>} />
               <Route path = "/activity" element={<Activity/>} />
-              <Route path = "/jobseeker/messages" element={<JobSeekerMessages/>} />
+              <Route path = "/jobseeker/chat" element={<JobSeekerMessages/>} />
+              {/* Renamed to /chat. Kept because notification rows already hold
+                  this path with the ?c= that opens the right thread. */}
+              <Route path = "/jobseeker/messages" element={<LegacyRedirect to="/jobseeker/chat" />} />
               <Route path = "/notifications" element={<SeekerNotifications/>} />
               {/* An approach from a company, and where to answer it. */}
               <Route path = "/outreach/:id" element={<OutreachMessagePage/>} />
@@ -277,7 +302,9 @@ const App = () => (
             <Route path="/employers/candidates" element={<Candidates />} />
             <Route path="/employers/jobs/:jobId/screening" element={<ScreeningBoard />} />
             <Route path="/employers/availability" element={<Availability />} />
-            <Route path="/employers/messages" element={<EmployerMessages />} />
+            <Route path="/employers/chat" element={<EmployerMessages />} />
+            {/* Same as the job-seeker side: stored notification links point here. */}
+            <Route path="/employers/messages" element={<LegacyRedirect to="/employers/chat" />} />
             <Route path="/employers/reviews" element={<Reviews />} />
             <Route path="/employers/hiring" element={<HiringAssistant />} />
             <Route path="/employers/pricing" element={<Pricing />} />

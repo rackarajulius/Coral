@@ -40,6 +40,14 @@ enum PostType {
   TIDE
 }
 
+enum PostPurpose {
+  GENERAL
+  QUESTION
+  SHOWCASE
+  SERVICE_ANNOUNCEMENT
+  OPPORTUNITY
+}
+
 // Payment provider enum
 enum PaymentProvider {
   STRIPE
@@ -100,6 +108,7 @@ model User {
   freelancerProfile  FreelancerProfile?
   postedJobs         Job[]              @relation("PostedJobs")
   applications       Application[]      @relation("UserApplications")
+  externalApplications ExternalApplication[]
   savedJobs          SavedJob[]         @relation("UserSavedJobs")
   jobAlerts          JobAlert[]         @relation("UserJobAlerts")
   jobRecommendations JobRecommendation[] @relation("UserJobRecommendations")
@@ -138,6 +147,17 @@ model User {
   companyReviews     CompanyReview[]
   companyMemberships CompanyMember[]    @relation("UserCompanyMemberships")
   companyAuditLogs   CompanyAuditLog[]  @relation("CompanyAuditActor")
+  serviceListings   ServiceListing[]
+  projectBriefs     ProjectBrief[]
+  marketplaceReports MarketplaceReport[]
+  marketplaceRequestsMade MarketplaceRequest[] @relation("MarketplaceRequester")
+  marketplaceRequestsReceived MarketplaceRequest[] @relation("MarketplaceRecipient")
+  marketplaceMessages MarketplaceMessage[]
+  marketplaceBlocksMade MarketplaceBlock[] @relation("MarketplaceBlocker")
+  marketplaceBlocksReceived MarketplaceBlock[] @relation("MarketplaceBlocked")
+  marketplaceRequestReports MarketplaceRequestReport[]
+  marketplaceDeliveries MarketplaceDelivery[]
+  marketplaceEvents MarketplaceEvent[]
 
   @@index([status])
   @@index([role])
@@ -1005,6 +1025,12 @@ model Company {
   emailTemplates EmailTemplate[]
   scorecardCriteria ScorecardCriterion[]
   spaces            Space[]
+  serviceListings   ServiceListing[]
+  projectBriefs     ProjectBrief[]
+
+  marketplaceRequestsMade MarketplaceRequest[] @relation("MarketplaceRequesterCompany")
+  marketplaceRequestsReceived MarketplaceRequest[] @relation("MarketplaceRecipientCompany")
+  marketplaceEvents MarketplaceEvent[]
 
   @@map("companies")
 }
@@ -1271,6 +1297,12 @@ model CompanyFollow {
 model FreelancerProfile {
   id              String    @id @default(uuid())
   userId          String    @unique @map("user_id")
+  // Personal provider capability; does not change the person's account role.
+  providerEnabled Boolean   @default(false) @map("provider_enabled")
+  // Separate, explicit consent for a contact-free signed-out work preview.
+  publicPreviewEnabled Boolean @default(false) @map("public_preview_enabled")
+  category        String?
+  workPreferences String[]  @default([]) @map("work_preferences")
   
   // Professional Info
   headline        String?
@@ -1312,6 +1344,7 @@ model FreelancerProfile {
 
   @@index([userId])
   @@index([createdAt])
+  @@index([providerEnabled, publicPreviewEnabled, category, id], map: "freelancer_provider_public_category_id_idx")
   @@map("freelancer_profiles")
 }
 
@@ -1374,6 +1407,7 @@ model Job {
   savedBy              SavedJob[]
   recommendations      JobRecommendation[]
   boosts               JobBoost[]
+  announcements        Post[] @relation("JobAnnouncements")
 
   @@index([postedById, createdAt])
   @@index([status, publishedAt])
@@ -1432,6 +1466,32 @@ model Application {
   @@index([applicantId, appliedAt])
   @@index([status, appliedAt])
   @@map("applications")
+}
+
+/// A seeker's private record of an application handled outside Coral.
+/// Opening a link only saves the opportunity; the seeker confirms submission.
+model ExternalApplication {
+  id         String    @id @default(uuid())
+  userId     String    @map("user_id")
+  sourceKey  String    @map("source_key")
+  title      String
+  company    String
+  url        String?
+  status     String    @default("saved")
+  appliedAt  DateTime? @map("applied_at")
+  followUpAt DateTime? @map("follow_up_at")
+  remindedAt DateTime? @map("reminded_at")
+  notes      String?   @db.Text
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sourceKey])
+  @@index([userId, updatedAt])
+  @@index([userId, followUpAt])
+  @@index([remindedAt, followUpAt])
+  @@map("external_applications")
 }
 
 // Jobs saved/bookmarked by users
@@ -1557,6 +1617,10 @@ model Post {
   companyId      String?    @map("company_id")
   content        String     @db.Text
   postType       PostType   @default(TEXT) @map("post_type")
+  purpose        PostPurpose @default(GENERAL)
+  linkedServiceListingId String? @map("linked_service_listing_id")
+  linkedGigId     String? @map("linked_gig_id")
+  linkedJobId     String? @map("linked_job_id")
   mediaUrls      String[]   @default([]) @map("media_urls")
   hashtags       String[]   @default([])
   /// Frozen at posting time: title, description, image and site for the first
@@ -1594,6 +1658,9 @@ model Post {
   resharedFrom Post?        @relation("PostReshares", fields: [resharedFromId], references: [id], onDelete: Cascade)
   reshares     Post[]       @relation("PostReshares")
   tide         Tide?        @relation(fields: [tideId], references: [id], onDelete: SetNull)
+  linkedServiceListing ServiceListing? @relation(fields: [linkedServiceListingId], references: [id], onDelete: SetNull)
+  linkedGig    ProjectBrief? @relation(fields: [linkedGigId], references: [id], onDelete: SetNull)
+  linkedJob    Job? @relation("JobAnnouncements", fields: [linkedJobId], references: [id], onDelete: SetNull)
   comments   PostComment[]
   reports    PostReport[]
   poll       Poll?
@@ -1608,7 +1675,243 @@ model Post {
   @@index([companyId, createdAt])
   @@index([resharedFromId])
   @@index([tideId])
+  @@index([purpose, createdAt])
+  @@index([linkedServiceListingId])
+  @@index([linkedGigId])
+  @@index([linkedJobId])
   @@map("posts")
+}
+
+/// Offers entered by professionals, never payment receipts or verified outcomes.
+model ServiceListing {
+  id String @id @default(uuid())
+  ownerUserId String @map("owner_user_id")
+  companyId String? @map("company_id")
+  title String @default("") @db.VarChar(160)
+  description String @default("") @db.Text
+  category String @default("design")
+  skills String[] @default([])
+  normalizedSkills String[] @default([]) @map("normalized_skills")
+  deliverables String[] @default([])
+  workSamples Json @default("[]") @map("work_samples")
+  availability String @default("available")
+  workMode String @default("remote") @map("work_mode")
+  country String @default("Canada")
+  city String?
+  pricingMode String @default("quote") @map("pricing_mode")
+  currency String @default("CAD")
+  amountMinor Int? @map("amount_minor")
+  publicConsent Boolean @default(false) @map("public_consent")
+  status String @default("draft")
+  removedAt DateTime? @map("removed_at")
+  publishedAt DateTime? @map("published_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  owner User @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  company Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  announcements Post[]
+  reports MarketplaceReport[]
+  requests MarketplaceRequest[]
+  @@index([ownerUserId, createdAt])
+  @@index([companyId, createdAt])
+  @@index([status, category, createdAt])
+  @@index([normalizedSkills], type: Gin)
+  @@map("service_listings")
+}
+
+/// Canonical project briefs, with private responses in MarketplaceRequest.
+model ProjectBrief {
+  id String @id @default(uuid())
+  ownerUserId String @map("owner_user_id")
+  companyId String? @map("company_id")
+  title String @default("") @db.VarChar(160)
+  description String @default("") @db.Text
+  scope String @default("") @db.Text
+  category String @default("design")
+  skills String[] @default([])
+  normalizedSkills String[] @default([]) @map("normalized_skills")
+  workMode String @default("remote") @map("work_mode")
+  country String @default("Canada")
+  city String?
+  budgetMode String @default("negotiable") @map("budget_mode")
+  currency String @default("CAD")
+  minBudgetMinor Int? @map("min_budget_minor")
+  maxBudgetMinor Int? @map("max_budget_minor")
+  deadline DateTime?
+  publicConsent Boolean @default(false) @map("public_consent")
+  status String @default("draft")
+  removedAt DateTime? @map("removed_at")
+  publishedAt DateTime? @map("published_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  owner User @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  company Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  announcements Post[]
+  reports MarketplaceReport[]
+  requests MarketplaceRequest[]
+  @@index([ownerUserId, createdAt])
+  @@index([companyId, createdAt])
+  @@index([status, category, createdAt])
+  @@index([normalizedSkills], type: Gin)
+  @@map("project_briefs")
+}
+
+/// Private reports have exactly one canonical target; no reporter data in cards.
+model MarketplaceReport {
+  id String @id @default(uuid())
+  reporterId String @map("reporter_id")
+  serviceListingId String? @map("service_listing_id")
+  projectBriefId String? @map("project_brief_id")
+  reason String
+  details String? @db.VarChar(1000)
+  status String @default("open")
+  reviewedAt DateTime? @map("reviewed_at")
+  reviewedById String? @map("reviewed_by_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  reporter User @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  serviceListing ServiceListing? @relation(fields: [serviceListingId], references: [id], onDelete: Cascade)
+  projectBrief ProjectBrief? @relation(fields: [projectBriefId], references: [id], onDelete: Cascade)
+  @@unique([reporterId, serviceListingId])
+  @@unique([reporterId, projectBriefId])
+  @@index([createdAt])
+  @@map("marketplace_reports")
+}
+
+/// Private marketplace introductions. Company seats never grant access to
+/// these records: the two named people remain the only participants.
+model MarketplaceRequest {
+  id String @id @default(uuid())
+  kind String
+  serviceListingId String? @map("service_listing_id")
+  projectBriefId String? @map("project_brief_id")
+  requesterId String @map("requester_id")
+  recipientId String @map("recipient_id")
+  requesterCompanyId String? @map("requester_company_id")
+  recipientCompanyId String? @map("recipient_company_id")
+  body String @db.Text
+  workSamples Json @default("[]") @map("work_samples")
+  status String @default("pending")
+  idempotencyKey String @map("idempotency_key")
+  payloadHash String @map("payload_hash")
+  source String @default("direct")
+  postId String? @map("post_id")
+  acceptedAt DateTime? @map("accepted_at")
+  firstRecipientReplyAt DateTime? @map("first_recipient_reply_at")
+  requesterLastReadAt DateTime? @map("requester_last_read_at")
+  recipientLastReadAt DateTime? @map("recipient_last_read_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  requester User @relation("MarketplaceRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  recipient User @relation("MarketplaceRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  requesterCompany Company? @relation("MarketplaceRequesterCompany", fields: [requesterCompanyId], references: [id], onDelete: Cascade)
+  recipientCompany Company? @relation("MarketplaceRecipientCompany", fields: [recipientCompanyId], references: [id], onDelete: Cascade)
+  serviceListing ServiceListing? @relation(fields: [serviceListingId], references: [id], onDelete: Cascade)
+  projectBrief ProjectBrief? @relation(fields: [projectBriefId], references: [id], onDelete: Cascade)
+  messages MarketplaceMessage[]
+  reports MarketplaceRequestReport[]
+  deliveries MarketplaceDelivery[]
+  @@unique([requesterId, idempotencyKey])
+  @@unique([requesterId, serviceListingId])
+  @@unique([requesterId, projectBriefId])
+  @@index([requesterId, createdAt])
+  @@index([recipientId, createdAt])
+  @@index([requesterId, recipientId])
+  @@map("marketplace_requests")
+}
+
+model MarketplaceMessage {
+  id String @id @default(uuid())
+  requestId String @map("request_id")
+  senderId String @map("sender_id")
+  body String @db.Text
+  idempotencyKey String @map("idempotency_key")
+  payloadHash String @map("payload_hash")
+  createdAt DateTime @default(now()) @map("created_at")
+  request MarketplaceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  sender User @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  @@unique([senderId, idempotencyKey])
+  @@index([requestId, createdAt])
+  @@index([senderId, createdAt])
+  @@map("marketplace_messages")
+}
+
+model MarketplaceBlock {
+  id String @id @default(uuid())
+  blockerId String @map("blocker_id")
+  blockedId String @map("blocked_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  blocker User @relation("MarketplaceBlocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("MarketplaceBlocked", fields: [blockedId], references: [id], onDelete: Cascade)
+  @@unique([blockerId, blockedId])
+  @@index([blockedId])
+  @@map("marketplace_blocks")
+}
+
+/// Report fields only enter the admin queue. A report does not grant access
+/// to its private introduction or message history.
+model MarketplaceRequestReport {
+  id String @id @default(uuid())
+  requestId String @map("request_id")
+  reporterId String @map("reporter_id")
+  reason String
+  details String? @db.VarChar(1000)
+  status String @default("open")
+  reviewedAt DateTime? @map("reviewed_at")
+  reviewedById String? @map("reviewed_by_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  request MarketplaceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  reporter User @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  @@unique([reporterId, requestId])
+  @@index([status, createdAt])
+  @@map("marketplace_request_reports")
+}
+
+/// Versioned structural events. Properties must never include message text,
+/// introduction bodies, work samples, contact details or recruiting data.
+model MarketplaceEvent {
+  id String @id @default(uuid())
+  schemaVersion Int @default(1) @map("schema_version")
+  type String
+  entityType String @map("entity_type")
+  entityId String @map("entity_id")
+  actorId String? @map("actor_id")
+  companyId String? @map("company_id")
+  requestId String? @map("request_id")
+  source String @default("direct")
+  postId String? @map("post_id")
+  sessionId String? @map("session_id")
+  dedupeKey String @unique @map("dedupe_key")
+  occurredAt DateTime @default(now()) @map("occurred_at")
+  receivedAt DateTime @default(now()) @map("received_at")
+  properties Json @default("{}")
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  deliveries MarketplaceDelivery[]
+  @@index([companyId, type, occurredAt])
+  @@index([actorId, type, occurredAt])
+  @@index([requestId])
+  @@map("marketplace_events")
+}
+
+/// Durable notifications outbox, committed with the action it represents.
+model MarketplaceDelivery {
+  id String @id @default(uuid())
+  requestId String @map("request_id")
+  userId String @map("user_id")
+  eventId String @map("event_id")
+  notificationId String @unique @default(uuid()) @map("notification_id")
+  status String @default("pending")
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now()) @map("next_attempt_at")
+  deliveredAt DateTime? @map("delivered_at")
+  lastError String? @map("last_error")
+  createdAt DateTime @default(now()) @map("created_at")
+  request MarketplaceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event MarketplaceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  @@unique([eventId, userId])
+  @@index([status, nextAttemptAt])
+  @@map("marketplace_deliveries")
 }
 
 // Community comments

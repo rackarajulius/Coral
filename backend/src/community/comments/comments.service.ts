@@ -33,10 +33,10 @@ export class CommentsService {
 
     const post = await this.prisma.post.findUnique({
       where: { id: postId },
-      select: { id: true },
+      select: { id: true, removedAt: true },
     });
 
-    if (!post) {
+    if (!post || post.removedAt) {
       throw new NotFoundException('Post not found');
     }
 
@@ -121,10 +121,10 @@ export class CommentsService {
   async create(postId: string, userId: string, dto: CreateCommentDto) {
     const post = await this.prisma.post.findUnique({
       where: { id: postId },
-      select: { id: true, authorId: true },
+      select: { id: true, authorId: true, removedAt: true },
     });
 
-    if (!post) {
+    if (!post || post.removedAt) {
       throw new NotFoundException('Post not found');
     }
 
@@ -137,10 +137,11 @@ export class CommentsService {
           postId: true,
           parentId: true,
           authorId: true,
+          removedAt: true,
         },
       });
 
-      if (!parent || parent.postId !== postId) {
+      if (!parent || parent.postId !== postId || parent.removedAt) {
         throw new BadRequestException('Invalid parent comment');
       }
 
@@ -152,6 +153,27 @@ export class CommentsService {
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
+      // Lock/update the live post first, matching hard post/comment deletion.
+      // If moderation won the race after the read, create nothing and notify nobody.
+      const active = await tx.post.updateMany({
+        where: { id: postId, removedAt: null },
+        data: { commentsCount: { increment: 1 } },
+      });
+      if (active.count !== 1) throw new NotFoundException('Post not found');
+
+      if (dto.parentId) {
+        // Recheck the reply target under a lock after any moderator commits.
+        // A rejection rolls back the post counter increment above.
+        const parents = await tx.$queryRaw<Array<{ authorId: string }>>`
+          SELECT author_id AS "authorId" FROM post_comments
+          WHERE id = ${dto.parentId} AND post_id = ${postId}
+            AND parent_id IS NULL AND removed_at IS NULL
+          FOR UPDATE
+        `;
+        if (parents.length !== 1) throw new BadRequestException('Invalid parent comment');
+        parentAuthorId = parents[0].authorId;
+      }
+
       const created = await tx.postComment.create({
         data: {
           postId,
@@ -160,11 +182,6 @@ export class CommentsService {
           content: dto.content.trim(),
         },
         include: this.commentInclude(),
-      });
-
-      await tx.post.update({
-        where: { id: postId },
-        data: { commentsCount: { increment: 1 } },
       });
 
       return {
@@ -299,6 +316,11 @@ export class CommentsService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      // Use the same post -> comment lock order as creation and post cascades.
+      const posts = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM posts WHERE id = ${postId} FOR UPDATE
+      `;
+      if (posts.length !== 1) throw new NotFoundException('Post not found');
       let removed = 1;
 
       if (!existing.parentId) {

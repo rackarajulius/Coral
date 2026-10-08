@@ -11,6 +11,7 @@ import { EmployersModule } from './employers/employers.module';
 import { FreelancersModule } from './freelancers/freelancers.module';
 import { JobsModule } from './jobs/jobs.module';
 import { GigsModule } from './gigs/gigs.module';
+import { MarketplaceModule } from './marketplace/marketplace.module';
 import { CommunityModule } from './community/community.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { AnalyticsModule } from './analytics/analytics.module';
@@ -74,6 +75,7 @@ import { ReviewsModule } from './reviews/reviews.module';
     RecommendationsModule,
     SchedulingModule,
     GigsModule,
+    MarketplaceModule,
     ContractsModule,
     PaymentsModule,
     BillingModule,

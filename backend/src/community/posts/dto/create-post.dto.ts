@@ -23,6 +23,29 @@ export enum CommunityPostType {
   POLL = 'POLL',
 }
 
+/** Purpose is separate from the media format of a post. */
+export enum CommunityPostPurpose {
+  GENERAL = 'general',
+  QUESTION = 'question',
+  SHOWCASE = 'showcase',
+  SERVICE_ANNOUNCEMENT = 'service_announcement',
+  OPPORTUNITY = 'opportunity',
+}
+
+export enum AnnouncementReferenceType {
+  SERVICE = 'service',
+  PROJECT = 'project',
+  JOB = 'job',
+}
+
+export class AnnouncementReferenceDto {
+  @IsEnum(AnnouncementReferenceType)
+  type!: AnnouncementReferenceType;
+
+  @IsUUID()
+  id!: string;
+}
+
 export class PollDto {
   @IsArray()
   @ArrayMaxSize(6)
@@ -36,6 +59,15 @@ export class PollDto {
 }
 
 export class CreatePostDto {
+  @IsOptional()
+  @IsEnum(CommunityPostPurpose)
+  purpose?: CommunityPostPurpose;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => AnnouncementReferenceDto)
+  reference?: AnnouncementReferenceDto;
+
   /** Present when the post is a poll. */
   @IsOptional()
   @ValidateNested()
@@ -49,13 +81,17 @@ export class CreatePostDto {
   /**
    * Post for the company rather than for yourself.
    *
-   * A request, not an instruction: the server decides whether the caller may
-   * speak for a company, and which one. Nothing here names the company, so a
-   * caller cannot post as somebody else's.
+   * The server verifies current company publishing authority. Without an
+   * explicit companyId, the existing primary-company selection is retained.
    */
   @IsOptional()
   @IsBoolean()
   asCompany?: boolean;
+
+  /** Optional company choice, accepted only when asCompany is true. */
+  @IsOptional()
+  @IsUUID()
+  companyId?: string;
 
   @IsOptional()
   @IsString()

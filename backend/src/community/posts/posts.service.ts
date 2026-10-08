@@ -4,7 +4,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { CompanyMemberStatus, CompanyRole, PostPurpose, Prisma } from '@prisma/client';
+import { isUUID } from 'class-validator';
+import { MarketplaceService } from '../../marketplace/marketplace.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SpacesService } from '../spaces/spaces.service';
 import { CompanyContextService } from '../../company/company-context.service';
@@ -14,9 +16,11 @@ import { CommunityMediaService } from '../media.service';
 import { PollsService } from '../polls.service';
 import { LinkPreviewService } from '../link-preview.service';
 import { User } from '../../common/types/user.types';
-import { CreatePostDto } from './dto/create-post.dto';
+import { AnnouncementReferenceDto, AnnouncementReferenceType, CommunityPostPurpose, CreatePostDto } from './dto/create-post.dto';
 import { ListPostsQueryDto } from './dto/list-posts-query.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
+
+type AnnouncementCard = Awaited<ReturnType<MarketplaceService['projectAnnouncementReference']>>;
 
 @Injectable()
 export class PostsService {
@@ -29,6 +33,7 @@ export class PostsService {
     private readonly links: LinkPreviewService,
     private readonly companyContext: CompanyContextService,
     private readonly notifications: NotificationsService,
+    private readonly marketplace?: MarketplaceService,
   ) {}
 
   async list(query: ListPostsQueryDto, currentUserId?: string) {
@@ -98,7 +103,7 @@ export class PostsService {
       include: {
         ...this.buildPostInclude(),
         comments: {
-          where: { parentId: null },
+          where: { parentId: null, removedAt: null },
           include: {
             author: {
               select: {
@@ -111,6 +116,7 @@ export class PostsService {
               },
             },
             replies: {
+              where: { removedAt: null },
               include: {
                 author: {
                   select: {
@@ -132,17 +138,16 @@ export class PostsService {
       },
     });
 
-    if (!post) {
+    // Removed content is retained for the moderation queue, not public permalinks.
+    if (!post || post.removedAt) {
       throw new NotFoundException('Post not found');
     }
 
-    const [normalized] = await this.addViewerFlags([post], currentUser?.id);
+    const [normalized] = await this.withIdentity(await this.addViewerFlags([post], currentUser?.id));
 
     return {
       ...normalized,
-      canEdit: Boolean(
-        currentUser && (currentUser.id === post.authorId || currentUser.role === 'ADMIN'),
-      ),
+      canEdit: normalized.canEdit || Boolean(currentUser?.role === 'ADMIN' && !post.companyId),
     };
   }
 
@@ -162,7 +167,36 @@ export class PostsService {
       : null;
   }
 
+  private async selectedCompanyVoiceFor(userId: string, companyId?: string): Promise<{ id: string; name: string } | null> {
+    if (companyId === undefined) return this.companyVoiceFor(userId);
+    if (typeof companyId !== 'string' || !isUUID(companyId)) throw new BadRequestException('Choose a valid company.');
+    const membership = await this.prisma.companyMember.findUnique({
+      where: { companyId_userId: { companyId, userId } },
+      select: { role: true, status: true, user: { select: { status: true } }, company: { select: { id: true, name: true } } },
+    });
+    if (!membership || membership.status !== CompanyMemberStatus.ACTIVE || membership.user.status !== 'ACTIVE' ||
+      !CompanyContextService.canManageMembers(membership.role)) {
+      throw new ForbiddenException('Only a current company owner or admin can publish in its name.');
+    }
+    return membership.company;
+  }
+
+  async announcementOptions(userId: string, asCompany = false, selectedCompanyId?: string) {
+    if (selectedCompanyId !== undefined && !asCompany) throw new BadRequestException('A company choice requires company publishing.');
+    // Explicit choices are checked even while announcements are disabled.
+    const selectedCompany = selectedCompanyId !== undefined ? await this.selectedCompanyVoiceFor(userId, selectedCompanyId) : null;
+    if (!this.marketplace?.isListingWritesEnabled()) {
+      return { services: [], projects: [], jobs: [] };
+    }
+    const companyId = asCompany ? (selectedCompany ?? await this.companyVoiceFor(userId))?.id : null;
+    if (asCompany && !companyId) {
+      throw new ForbiddenException('Only a current company owner or admin can announce its opportunities.');
+    }
+    return this.marketplace.getAnnouncementOptions(userId, companyId);
+  }
+
   async create(userId: string, dto: CreatePostDto) {
+    if (dto.companyId !== undefined && dto.asCompany !== true) throw new BadRequestException('A company choice requires company publishing.');
     this.assertPostContent(dto.content, dto.mediaUrls);
     // Refused at the door rather than producing a post attached to nothing.
     await this.spaces.assertPostable(dto.spaceId);
@@ -172,7 +206,7 @@ export class PostsService {
 
     let companyId: string | null = null;
     if (dto.asCompany) {
-      companyId = (await this.companyVoiceFor(userId))?.id ?? null;
+      companyId = (await this.selectedCompanyVoiceFor(userId, dto.companyId))?.id ?? null;
       // Refused rather than quietly downgraded to a personal post: someone who
       // meant to publish as the company should not discover later that they
       // published as themselves.
@@ -186,17 +220,27 @@ export class PostsService {
     const hashtags = this.normalizeHashtags(dto.hashtags ?? []);
     const contentHashtags = this.extractHashtags(dto.content);
     const mergedHashtags = Array.from(new Set([...hashtags, ...contentHashtags]));
-
-    const created = await this.prisma.post.create({
+    const purpose = dto.purpose ?? CommunityPostPurpose.GENERAL;
+    this.assertPurposeReference(purpose, dto.reference);
+    const postData = {
+      authorId: userId,
+      companyId,
+      spaceId: dto.spaceId,
+      content: dto.content?.trim() || '',
+      postType: dto.poll ? 'POLL' as const : dto.postType || 'TEXT' as const,
+      purpose: purpose.toUpperCase() as PostPurpose,
+      mediaUrls: dto.mediaUrls ?? [],
+      hashtags: mergedHashtags,
+    };
+    // Validate the canonical record within the same transaction as publication.
+    const created = dto.reference
+      ? await this.prisma.$transaction(async (tx) => {
+          const referenceData = await this.validateReference(userId, dto.reference!, companyId, tx);
+          return tx.post.create({ data: { ...postData, ...referenceData }, include: this.buildPostInclude() });
+        })
+      : await this.prisma.post.create({
       data: {
-        authorId: userId,
-        companyId,
-        spaceId: dto.spaceId,
-        content: dto.content?.trim() || '',
-        // A post carrying a poll is a poll, whatever the client said.
-        postType: dto.poll ? 'POLL' : dto.postType || 'TEXT',
-        mediaUrls: dto.mediaUrls ?? [],
-        hashtags: mergedHashtags,
+        ...postData,
       },
       include: this.buildPostInclude(),
     });
@@ -251,39 +295,62 @@ export class PostsService {
       select: {
         id: true,
         authorId: true,
+        companyId: true,
         content: true,
         mediaUrls: true,
         hashtags: true,
+        purpose: true,
+        linkedServiceListingId: true,
+        linkedGigId: true,
+        linkedJobId: true,
+        tideId: true,
+        removedAt: true,
       },
     });
 
-    if (!existing) {
+    if (!existing || existing.removedAt) {
       throw new NotFoundException('Post not found');
     }
 
-    if (existing.authorId !== currentUser.id && currentUser.role !== 'ADMIN') {
-      throw new ForbiddenException('You can only edit your own post');
+    if (!(await this.canManagePost(existing, currentUser))) {
+      throw new ForbiddenException(existing.companyId
+        ? 'Only a current owner or admin of this company can edit its post.'
+        : 'You can only edit your own post');
     }
 
     const nextContent = dto.content !== undefined ? dto.content : existing.content;
     const nextMediaUrls = dto.mediaUrls !== undefined ? dto.mediaUrls : existing.mediaUrls;
     this.assertPostContent(nextContent, nextMediaUrls);
+    if (dto.mediaUrls !== undefined) this.media.assertOwnMedia(nextMediaUrls ?? []);
+
+    const purpose = dto.purpose ?? (existing.purpose ?? 'GENERAL').toLowerCase() as CommunityPostPurpose;
+    const reference = dto.reference === undefined ? this.referenceOf(existing) : dto.reference;
+    this.assertPurposeReference(purpose, reference);
+    if (existing.tideId && (purpose !== CommunityPostPurpose.GENERAL || reference)) {
+      throw new BadRequestException('Tide announcements retain their event purpose.');
+    }
 
     const hashtags = this.normalizeHashtags(dto.hashtags ?? existing.hashtags);
     const contentHashtags = this.extractHashtags(nextContent);
     const mergedHashtags = Array.from(new Set([...hashtags, ...contentHashtags]));
 
-    const updated = await this.prisma.post.update({
-      where: { id: postId },
-      data: {
+    const updateData = {
         ...(dto.content !== undefined ? { content: dto.content.trim() } : {}),
         ...(dto.postType !== undefined ? { postType: dto.postType } : {}),
         ...(dto.mediaUrls !== undefined ? { mediaUrls: dto.mediaUrls } : {}),
+        purpose: purpose.toUpperCase() as PostPurpose,
+        linkedServiceListingId: null,
+        linkedGigId: null,
+        linkedJobId: null,
         hashtags: mergedHashtags,
         isEdited: true,
-      },
-      include: this.buildPostInclude(),
-    });
+    };
+    const updated = reference
+      ? await this.prisma.$transaction(async (tx) => {
+          const referenceData = await this.validateReference(currentUser.id, reference, existing.companyId, tx);
+          return tx.post.update({ where: { id: postId }, data: { ...updateData, ...referenceData }, include: this.buildPostInclude() });
+        })
+      : await this.prisma.post.update({ where: { id: postId }, data: updateData, include: this.buildPostInclude() });
 
     const [normalized] = await this.addViewerFlags([updated], currentUser.id);
     return {
@@ -296,15 +363,17 @@ export class PostsService {
   async delete(postId: string, currentUser: User) {
     const existing = await this.prisma.post.findUnique({
       where: { id: postId },
-      select: { id: true, authorId: true },
+      select: { id: true, authorId: true, companyId: true },
     });
 
     if (!existing) {
       throw new NotFoundException('Post not found');
     }
 
-    if (existing.authorId !== currentUser.id && currentUser.role !== 'ADMIN') {
-      throw new ForbiddenException('You can only delete your own post');
+    if (!(await this.canManagePost(existing, currentUser))) {
+      throw new ForbiddenException(existing.companyId
+        ? 'Only a current owner or admin of this company can delete its post.'
+        : 'You can only delete your own post');
     }
 
     await this.prisma.post.delete({ where: { id: postId } });
@@ -388,7 +457,8 @@ export class PostsService {
       });
     }
 
-    return { success: true, data: created, message: 'Post shared' };
+    const [visible] = await this.addViewerFlags([created], userId);
+    return { success: true, data: visible, message: 'Post shared' };
   }
 
   /** The display name for a notification line. */
@@ -655,7 +725,10 @@ export class PostsService {
       space: { select: { id: true, slug: true, name: true } },
       // Present only on posts published in a company's name. The author is
       // still included alongside it — see the byline in FeedPost.
-      company: { select: { id: true, name: true } },
+      company: { select: { id: true, name: true, profiles: {
+        where: { visibility: { not: 'private' } }, select: { id: true },
+        orderBy: { createdAt: 'asc' as const }, take: 1,
+      } } },
       /**
        * The post being passed on, embedded.
        *
@@ -669,13 +742,20 @@ export class PostsService {
           content: true,
           mediaUrls: true,
           postType: true,
+          purpose: true,
+          linkedServiceListingId: true,
+          linkedGigId: true,
+          linkedJobId: true,
           createdAt: true,
           removedAt: true,
           authorId: true,
           author: {
             select: { id: true, displayName: true, firstName: true, lastName: true, avatarUrl: true, role: true, createdAt: true },
           },
-          company: { select: { id: true, name: true } },
+          company: { select: { id: true, name: true, profiles: {
+            where: { visibility: { not: 'private' } }, select: { id: true },
+            orderBy: { createdAt: 'asc' as const }, take: 1,
+          } } },
           space: { select: { id: true, slug: true, name: true } },
         },
       },
@@ -738,20 +818,29 @@ export class PostsService {
     }));
   }
 
-  private async addViewerFlags<T extends { id: string }>(
+  private async addViewerFlags<T extends { id: string; authorId?: string; companyId?: string | null }>(
     posts: T[],
     currentUserId?: string,
-  ): Promise<Array<T & { likedByMe: boolean; bookmarkedByMe: boolean }>> {
+  ): Promise<Array<T & { likedByMe: boolean; bookmarkedByMe: boolean; canEdit: boolean; linkedRecord: AnnouncementCard; linkedRecordUnavailable: boolean }>> {
+    // A live reshare may outlast its removed source. Retain the sharer's words,
+    // but do not serialize the removed original into any ordinary read payload.
+    const visiblePosts = await this.withLinkedRecords(posts.map((post) => {
+      const source = (post as T & { resharedFrom?: { removedAt?: Date | null } }).resharedFrom;
+      return source?.removedAt ? { ...post, resharedFrom: null } : post;
+    }));
+
     if (!currentUserId || posts.length === 0) {
-      return posts.map((post) => ({
+      return visiblePosts.map((post) => ({
         ...post,
         likedByMe: false,
         bookmarkedByMe: false,
+        canEdit: false,
       }));
     }
 
     const postIds = posts.map((post) => post.id);
-    const [likes, bookmarks] = await Promise.all([
+    const companyIds = [...new Set(posts.flatMap((post) => post.companyId ? [post.companyId] : []))];
+    const [likes, bookmarks, companySeats] = await Promise.all([
       this.prisma.postLike.findMany({
         where: {
           userId: currentUserId,
@@ -766,16 +855,117 @@ export class PostsService {
         },
         select: { postId: true },
       }),
+      // A page can contain many authors from the same company. Resolve the
+      // viewer's current publishing seats once, rather than once per card.
+      companyIds.length > 0
+        ? this.prisma.companyMember.findMany({
+            where: {
+              userId: currentUserId,
+              companyId: { in: companyIds },
+              status: CompanyMemberStatus.ACTIVE,
+              role: { in: [CompanyRole.OWNER, CompanyRole.ADMIN] },
+            },
+            select: { companyId: true },
+          })
+        : Promise.resolve([]),
     ]);
 
     const likedPostIds = new Set(likes.map((item) => item.postId));
     const bookmarkedPostIds = new Set(bookmarks.map((item) => item.postId));
+    const managedCompanyIds = new Set(companySeats.map((seat) => seat.companyId));
 
-    return posts.map((post) => ({
+    return visiblePosts.map((post) => ({
       ...post,
       likedByMe: likedPostIds.has(post.id),
       bookmarkedByMe: bookmarkedPostIds.has(post.id),
+      canEdit: post.companyId
+        ? managedCompanyIds.has(post.companyId)
+        : post.authorId === currentUserId,
     }));
+  }
+
+  /** Company attribution survives a seat change; permission to act does not. */
+  private async canManagePost(
+    post: { authorId: string; companyId?: string | null },
+    currentUser: User,
+  ): Promise<boolean> {
+    if (!post.companyId) {
+      return post.authorId === currentUser.id || currentUser.role === 'ADMIN';
+    }
+
+    // Resolve this record's company directly. A caller may have an older,
+    // removed membership elsewhere; that row cannot grant or deny this seat.
+    const membership = await this.prisma.companyMember.findUnique({
+      where: { companyId_userId: { companyId: post.companyId, userId: currentUser.id } },
+      select: { role: true, status: true },
+    });
+    return membership?.status === CompanyMemberStatus.ACTIVE &&
+      CompanyContextService.canManageMembers(membership.role);
+  }
+
+  private assertPurposeReference(purpose: CommunityPostPurpose, reference?: AnnouncementReferenceDto | null) {
+    if (purpose === CommunityPostPurpose.SERVICE_ANNOUNCEMENT || purpose === CommunityPostPurpose.OPPORTUNITY) {
+      this.marketplace?.assertListingWritesEnabled();
+      if (!this.marketplace) throw new ForbiddenException('Marketplace announcements are unavailable.');
+    }
+    if (purpose === CommunityPostPurpose.SERVICE_ANNOUNCEMENT && reference?.type !== AnnouncementReferenceType.SERVICE) {
+      throw new BadRequestException('A service announcement must link to your published service.');
+    }
+    if (purpose === CommunityPostPurpose.OPPORTUNITY && ![AnnouncementReferenceType.PROJECT, AnnouncementReferenceType.JOB].includes(reference?.type as AnnouncementReferenceType)) {
+      throw new BadRequestException('An opportunity must link to your published project brief or live job.');
+    }
+    if (reference && (purpose === CommunityPostPurpose.GENERAL || purpose === CommunityPostPurpose.QUESTION)) {
+      throw new BadRequestException('Choose showcase, service announcement or opportunity to attach a listing.');
+    }
+    if (purpose === CommunityPostPurpose.SHOWCASE && reference && reference.type !== AnnouncementReferenceType.SERVICE) {
+      throw new BadRequestException('A showcase can link to your published service.');
+    }
+  }
+
+  private async validateReference(userId: string, reference: AnnouncementReferenceDto, companyId: string | null | undefined, tx: Prisma.TransactionClient) {
+    if (!this.marketplace) throw new ForbiddenException('Marketplace announcements are unavailable.');
+    this.marketplace.assertListingWritesEnabled();
+    return this.marketplace.validateAnnouncementReference(userId, reference, companyId, tx);
+  }
+
+  private referenceOf(record: { linkedServiceListingId?: string | null; linkedGigId?: string | null; linkedJobId?: string | null }): AnnouncementReferenceDto | null {
+    if (record.linkedServiceListingId) return { type: AnnouncementReferenceType.SERVICE, id: record.linkedServiceListingId };
+    if (record.linkedGigId) return { type: AnnouncementReferenceType.PROJECT, id: record.linkedGigId };
+    if (record.linkedJobId) return { type: AnnouncementReferenceType.JOB, id: record.linkedJobId };
+    return null;
+  }
+
+  /** Canonical records are resolved once per distinct reference on every read. */
+  private async withLinkedRecords<T extends { id: string }>(posts: T[]) {
+    type LinkedFields = { purpose?: string; linkedServiceListingId?: string | null; linkedGigId?: string | null; linkedJobId?: string | null; resharedFrom?: ({ id: string } & LinkedFields) | null };
+    const references = new Map<string, AnnouncementReferenceDto>();
+    for (const post of posts) {
+      for (const record of [post as T & LinkedFields, (post as T & LinkedFields).resharedFrom]) {
+        const reference = record && this.referenceOf(record);
+        if (reference) references.set(`${reference.type}:${reference.id}`, reference);
+      }
+    }
+    const cards = new Map<string, AnnouncementCard>(await Promise.all([...references].map(async ([key, reference]) =>
+      [key, this.marketplace ? await this.marketplace.projectAnnouncementReference(reference) : null] as const)));
+    const project = <R extends { id: string } & LinkedFields>(record: R) => {
+      const reference = this.referenceOf(record);
+      const linkedRecord = reference ? cards.get(`${reference.type}:${reference.id}`) ?? null : null;
+      return {
+        ...record,
+        purpose: (record.purpose ?? 'GENERAL').toLowerCase(),
+        linkedRecord,
+        linkedRecordUnavailable: Boolean(reference && !linkedRecord),
+        // A stored unfurl must not revive withdrawn canonical details.
+        ...(reference ? { linkPreview: null } : {}),
+      };
+    };
+    return posts.map((post) => {
+      const record = post as T & LinkedFields;
+      return {
+        ...project(record),
+        ...(record.resharedFrom ? { resharedFrom: project(record.resharedFrom) } : {}),
+      };
+    });
   }
 
   private assertPostContent(content?: string, mediaUrls?: string[]) {

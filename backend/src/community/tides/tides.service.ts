@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { CronExpression } from '@nestjs/schedule';
 import { ExclusiveCron } from '../../common/scheduling/exclusive-cron';
-import { Prisma, TideRsvp } from '@prisma/client';
+import { CompanyMemberStatus, Prisma, TideRsvp } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CompanyContextService } from '../../company/company-context.service';
 import { NotificationsService } from '../../notifications/notifications.service';
@@ -461,21 +461,27 @@ export class TidesService {
     }
   }
 
-  /** The host, or an owner/admin of the company holding it. */
+  /** Personal host, or a current active owner/admin of the company holding it. */
   private async owned(tideId: string, userId: string) {
     const tide = await this.prisma.tide.findUnique({ where: { id: tideId } });
     if (!tide) throw new NotFoundException('Tide not found');
-    if (tide.hostId === userId) return tide;
 
     if (tide.companyId) {
-      const context = await this.companyContext.forUser(userId);
+      // The historical host remains attributed, but a revoked seat cannot
+      // keep changing the company's event. Resolve the exact record's seat.
+      const membership = await this.prisma.companyMember.findUnique({
+        where: { companyId_userId: { companyId: tide.companyId, userId } },
+        select: { role: true, status: true },
+      });
       if (
-        context?.companyId === tide.companyId &&
-        CompanyContextService.canManageMembers(context.role)
+        membership?.status === CompanyMemberStatus.ACTIVE &&
+        CompanyContextService.canManageMembers(membership.role)
       ) {
         return tide;
       }
+      throw new ForbiddenException('Only a current owner or admin of this company can change its tide.');
     }
+    if (tide.hostId === userId) return tide;
     throw new ForbiddenException('Only the host can change this tide.');
   }
 

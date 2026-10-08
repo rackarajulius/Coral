@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Query, UseGuards } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -8,11 +8,18 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { User } from '../common/types/user.types';
 import { UpdateFreelancerProfileDto } from './dto/update-freelancer-profile.dto';
 import { FreelancersService } from './freelancers.service';
+import { ProviderDirectoryQueryDto } from './dto/provider-directory-query.dto';
 
 @Controller('freelancers')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class FreelancersController {
   constructor(private readonly freelancersService: FreelancersService) {}
+
+  @Public()
+  @Get()
+  async listPublicProfiles(@Query() query: ProviderDirectoryQueryDto) {
+    return { success: true, data: await this.freelancersService.listPublicProfiles(query) };
+  }
 
   @Public()
   @Get(':id')
@@ -24,7 +31,7 @@ export class FreelancersController {
     };
   }
 
-  @Roles(UserRole.FREELANCER, UserRole.ADMIN)
+  @Roles(UserRole.JOB_SEEKER, UserRole.FREELANCER)
   @Get('me/profile')
   async getMyProfile(@CurrentUser() user: User) {
     const profile = await this.freelancersService.getMyProfile(user.id);
@@ -34,7 +41,7 @@ export class FreelancersController {
     };
   }
 
-  @Roles(UserRole.FREELANCER, UserRole.ADMIN)
+  @Roles(UserRole.JOB_SEEKER, UserRole.FREELANCER)
   @Patch('me/profile')
   async updateMyProfile(
     @CurrentUser() user: User,
