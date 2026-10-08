@@ -24,6 +24,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { ContactFormData, contactSchema, subjectOptions } from "@/data/contactSchema/contactSchema";
+import { BRAND_NAME } from "@/lib/brand";
 
 
 export function ContactForm() {
@@ -206,7 +207,7 @@ export function ContactForm() {
                   >
                     Privacy Policy
                   </Link>{" "}
-                  and consent to Your Resume Platform processing my data solely
+                  and consent to {BRAND_NAME} processing my data solely
                   to respond to this inquiry.{" "}
                   <span className="text-destructive">*</span>
                 </Label>

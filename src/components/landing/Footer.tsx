@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { BRAND_NAME } from "@/lib/brand";
 import {
   Accordion,
   AccordionContent,
@@ -75,7 +76,7 @@ const Footer = () => {
                 <Briefcase className="h-6 w-6 text-orange-500" />
               </div>
               <span className="font-display text-lg font-bold tracking-tight">
-                JobFlow
+                {BRAND_NAME}
               </span>
             </Link>
             <p className="text-sm leading-relaxed max-w-xs">
@@ -174,7 +175,7 @@ const Footer = () => {
       {/* Bottom Bar */}
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6">
           <div className="pt-8 border-t flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-footer-foreground">
-            <p>© {new Date().getFullYear()} JobFlow. All rights reserved.</p>
+            <p>© {new Date().getFullYear()} {BRAND_NAME}. All rights reserved.</p>
 
             <div className="flex items-center gap-5">
               <Link to="/privacy-policy" className="transition-colors duration-200 hover:text-slate-900 dark:hover:text-white">

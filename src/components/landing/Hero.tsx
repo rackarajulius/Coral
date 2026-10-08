@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
 import heroImage from "@/assets/hero-workplace.jpg";
+import { BRAND_NAME } from "@/lib/brand";
 
 const Hero = () => {
   return (
@@ -25,7 +26,7 @@ const Hero = () => {
             Turn Your Company into a Destination Candidates Want
           </h1>
           <p className="text-lg md:text-xl text-white/80 mb-10 max-w-2xl">
-            Build your employer brand, attract top talent, and streamline your hiring process with CareerConnect's powerful platform.
+            Build your employer brand, attract top talent, and streamline your hiring process with {BRAND_NAME}'s powerful platform.
           </p>
           <div className="flex flex-wrap gap-4">
             <Button

@@ -1,12 +1,13 @@
 import { useEffect } from 'react';
+import { BRAND_NAME, BRAND_TAGLINE } from '@/lib/brand';
 
 /**
  * What the tab says when no page has anything more specific to say.
  * Keep in step with the <title> in index.html — a static file can't import this.
  */
-export const DEFAULT_TITLE = 'Coral - Hiring & Talent Platform';
+export const DEFAULT_TITLE = `${BRAND_NAME} - ${BRAND_TAGLINE}`;
 
-const BRAND = 'Coral';
+const BRAND = BRAND_NAME;
 
 /**
  * Longest descriptive part we'll put in the tab.

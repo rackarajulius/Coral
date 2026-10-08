@@ -4,10 +4,12 @@ import { PrivacyPolicyTOC } from '@/components/PrivacyPolicyTOC';
 import { ArrowLeft, Shield, Lock, Eye, Trash2, Edit3, FileText } from 'lucide-react';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
 export default function PrivacyPolicy() {
+  useDocumentTitle("Privacy Policy");
+
   useEffect(() => {
-    document.title = 'Privacy Policy | Your Resume Platform';
     
     const metaDescription = document.querySelector('meta[name="description"]');
     if (metaDescription) {

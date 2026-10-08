@@ -4,11 +4,12 @@ import { ArrowLeft, Mail, MapPin, Clock, Shield } from "lucide-react";
 import { ContactForm } from "@/components/ContactForm";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
 export default function Contact() {
-  useEffect(() => {
-    document.title = "Contact Us | Your Resume Platform";
+  useDocumentTitle("Contact Us");
 
+  useEffect(() => {
     const metaDescription = document.querySelector('meta[name="description"]');
     const content =
       "Get in touch with our support team. We typically respond within 24 hours to help with technical issues, privacy inquiries, and more.";

@@ -18,6 +18,8 @@ import { authIntent } from "@/lib/authIntent";
 import { lastGoogleAccount } from "@/lib/lastGoogleAccount";
 import supabase from "@/lib/supabase";
 import { isAuthFlowError } from "@/lib/authErrors";
+import { BRAND_NAME } from "@/lib/brand";
+import { enabledSocialAuthProviders, hasSocialAuthProviders } from "@/lib/socialAuthProviders";
 
 /** Supabase itself refuses faster resends; this just keeps the button honest. */
 const RESEND_COOLDOWN_MS = 60_000;
@@ -264,6 +266,7 @@ const AuthModal = ({ open, onClose, initialView = "social", onAuthenticated }: A
     provider: 'google' | 'apple' | 'facebook',
     opts?: { useLastAccount?: boolean },
   ) => {
+    if (!enabledSocialAuthProviders.includes(provider)) return;
     // Google & Facebook: sign in via a popup window (main tab stays put). On
     // success, keep the modal open with the button spinning until the backend
     // user loads (handled by the awaitingUser effect). If the popup is blocked,
@@ -314,25 +317,27 @@ const AuthModal = ({ open, onClose, initialView = "social", onAuthenticated }: A
             >
               <DialogHeader className="mb-1">
                 <DialogTitle className="text-[22px] sm:text-2xl font-semibold text-foreground tracking-tight text-center">
-                  Welcome to JobFlow
+                  Welcome to {BRAND_NAME}
                 </DialogTitle>
                 <DialogDescription className="text-sm text-muted-foreground mt-1.5 text-center">
                   Sign in or create an account to continue.
                 </DialogDescription>
               </DialogHeader>
 
-              {/* Social auth */}
-              <SocialAuthButtons disabled={loading || authLoading} onSocialAuth={handleSocialAuth} busyProvider={busyProvider} />
+              {hasSocialAuthProviders && (
+                <>
+                  <SocialAuthButtons disabled={loading || authLoading} onSocialAuth={handleSocialAuth} busyProvider={busyProvider} />
 
-              {/* OR Divider */}
-              <div className="relative my-4">
-                <div className="absolute inset-0 flex items-center">
-                  <span className="w-full border-t border-gray-300" />
-                </div>
-                <div className="relative flex justify-center text-xs">
-                  <span className="bg-white px-2 text-muted-foreground font-medium">OR</span>
-                </div>
-              </div>
+                  <div className="relative my-4">
+                    <div className="absolute inset-0 flex items-center">
+                      <span className="w-full border-t border-gray-300" />
+                    </div>
+                    <div className="relative flex justify-center text-xs">
+                      <span className="bg-white px-2 text-muted-foreground font-medium">OR</span>
+                    </div>
+                  </div>
+                </>
+              )}
 
               {/* Continue with email */}
               <div className="mt-3">
@@ -402,7 +407,7 @@ const AuthModal = ({ open, onClose, initialView = "social", onAuthenticated }: A
             >
               <DialogHeader className="mb-1">
                 <DialogTitle className="text-[22px] sm:text-2xl font-semibold text-foreground tracking-tight text-center">
-                  Continue to JobFlow
+                  Continue to {BRAND_NAME}
                 </DialogTitle>
                 <DialogDescription className="text-sm text-muted-foreground mt-1.5 text-center">
                   Sign in or create your account.
@@ -410,9 +415,11 @@ const AuthModal = ({ open, onClose, initialView = "social", onAuthenticated }: A
               </DialogHeader>
 
               {/* Social auth - moved above email */}
-              <div className="mb-4">
-                <SocialAuthButtons disabled={loading || authLoading} onSocialAuth={handleSocialAuth} busyProvider={busyProvider} />
-              </div>
+              {hasSocialAuthProviders && (
+                <div className="mb-4">
+                  <SocialAuthButtons disabled={loading || authLoading} onSocialAuth={handleSocialAuth} busyProvider={busyProvider} />
+                </div>
+              )}
 
               <form onSubmit={handleSubmit} className="flex flex-col gap-4">
                 {successMessage && (

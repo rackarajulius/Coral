@@ -10,6 +10,7 @@ import { accountSide } from "@/lib/accountSide";
 import { useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
+import { BRAND_NAME } from "@/lib/brand";
 import {
   getMyNotifications,
   markNotificationRead,
@@ -39,7 +40,7 @@ const Header = () => {
     // employer, the employer site for everyone else.
     const side = accountSide(user);
     const employerLink =
-      side === "seeker"
+      side === "seeker" || side === "provider"
         ? null
         : side === "employer"
           ? { to: "/employers/dashboard", label: "Employer dashboard" }
@@ -112,15 +113,18 @@ const Header = () => {
           <div className="flex items-center gap-4 ">
           <Link to="/" className="flex items-center gap-2 text-primary font-display font-bold text-xl">
             <Briefcase className="h-6 w-6 text-coral" />
-            <span className="text-2xl font-semibold tracking-tight">JobFlow</span>
+            <span className="text-2xl font-semibold tracking-tight">{BRAND_NAME}</span>
           </Link>
           
-          <nav className="hidden bs-mx:!hidden lg:flex xl:gap-8 items-center gap-6">
+          <nav className="hidden xl:flex items-center gap-6 whitespace-nowrap">
             <Link to="/jobs" className="nav-link text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
               Find Jobs
             </Link>
             <Link to="/companies" className="nav-link text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
               Companies
+            </Link>
+            <Link to="/providers" className="nav-link text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
+              Professionals
             </Link>
             <Link to="/community" className="nav-link text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
               Community
@@ -144,6 +148,8 @@ const Header = () => {
           <div className="relative">
     <button
       onClick={() => setIsOpen(!isOpen)}
+      aria-label="Notifications"
+      aria-expanded={isOpen}
       className="relative p-2 rounded-full hover:bg-muted transition-colors"
     >
       <Bell className="w-5 h-5 text-muted-foreground" />
@@ -183,6 +189,7 @@ const Header = () => {
               {/* Close button for mobile */}
               <button
                 onClick={() => setIsOpen(false)}
+                aria-label="Close notifications"
                 className="sm:hidden p-1 hover:bg-muted rounded-full transition-colors"
               >
                 <X className="w-4 h-4" />
@@ -262,7 +269,7 @@ const Header = () => {
               )}
 
                {/* Mobile Menu Button */}
-               <div className="lg:hidden">
+               <div className="xl:hidden">
                <Burger
                opened={opened}
                onClick={open}
@@ -283,24 +290,48 @@ const Header = () => {
         opened={opened}
         onClose={close}
         closeButtonProps={{ icon: < X size={20} /> }}
-        className="lg:hidden"
+        className="xl:hidden"
       >
           <div className="flex flex-col gap-6 mt-6 px-4">
             <div className="border-b border-border pb-3 last:border-b-0">
-              <Link to="/jobs" className="nav-link text-sm text-muted-foreground hover:text-foreground transition-colors">
+              <Link to="/jobs" onClick={close} className="nav-link text-sm text-muted-foreground hover:text-foreground transition-colors">
                 Find Jobs
               </Link>
             </div>
 
             <div className="border-b border-border pb-3 last:border-b-0">
-              <Link to="/resources" className="nav-link text-sm text-muted-foreground hover:text-foreground transition-colors">
+              <Link to="/resources" onClick={close} className="nav-link text-sm text-muted-foreground hover:text-foreground transition-colors">
                 Resources
               </Link>
             </div>
 
+            <div className="border-b border-border pb-3">
+              <Link to="/companies" onClick={close} className="nav-link text-sm text-muted-foreground hover:text-foreground">
+                Companies
+              </Link>
+            </div>
+
+            <div className="border-b border-border pb-3">
+              <Link to="/providers" onClick={close} className="nav-link text-sm text-muted-foreground hover:text-foreground">
+                Find professionals
+              </Link>
+            </div>
+            <div className="border-b border-border pb-3">
+              <Link to="/community" onClick={close} className="nav-link text-sm text-muted-foreground hover:text-foreground">
+                Community
+              </Link>
+            </div>
+            {(!user || side === 'seeker' || side === 'provider' || side === 'undecided') && (
+              <div className="border-b border-border pb-3">
+                <Link to="/provider" onClick={close} className="nav-link text-sm text-muted-foreground hover:text-foreground">
+                  Offer services
+                </Link>
+              </div>
+            )}
+
             {employerLink && (
               <div className="border-b border-border pb-3 last:border-b-0">
-                <Link to={employerLink.to} className="nav-link text-sm text-muted-foreground hover:text-foreground transition-colors">
+                <Link to={employerLink.to} onClick={close} className="nav-link text-sm text-muted-foreground hover:text-foreground transition-colors">
                   {employerLink.label}
                 </Link>
               </div>

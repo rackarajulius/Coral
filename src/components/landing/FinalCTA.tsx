@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
 import { Link } from "react-router-dom";
+import { BRAND_NAME } from "@/lib/brand";
 
 const FinalCTA = () => {
   return (
@@ -14,7 +15,7 @@ const FinalCTA = () => {
           </p>
           <Button size="xl" className="group rounded-full" asChild>
             <Link to="/employers/dashboard">
-              Join CareerConnect
+              Join {BRAND_NAME}
               <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" />
             </Link>
           </Button>

@@ -1,5 +1,6 @@
 import { Briefcase ,Linkedin, Facebook, Instagram } from "lucide-react";
 import { IconBrandX } from "@tabler/icons-react";
+import { BRAND_NAME } from "@/lib/brand";
 
 const Footer = () => {
   return (
@@ -9,7 +10,7 @@ const Footer = () => {
           <div>
             <a href="/" className="flex items-center gap-2 font-display font-semibold text-xl text-foreground mb-4">
               <Briefcase className="h-6 w-6 text-accent" />
-              <span>JobFlow</span>
+              <span>{BRAND_NAME}</span>
             </a>
             <p className="text-muted-foreground text-sm leading-relaxed">
              We connect talented people with meaningful opportunities at leading
@@ -82,7 +83,7 @@ transition-all duration-200"
 
         <div className="pt-8 border-t border-gray-300 flex flex-col md:flex-row justify-between items-center gap-4">
           <p className="text-muted-foreground text-sm">
-            © {new Date().getFullYear()} JobFlow. All rights reserved.
+            © {new Date().getFullYear()} {BRAND_NAME}. All rights reserved.
           </p>
           <div className="flex gap-6">
             <ul className="flex items-center gap-6 text-sm text-muted-foreground">

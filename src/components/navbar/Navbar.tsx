@@ -4,6 +4,7 @@ import { Briefcase } from "lucide-react";
 import { DesktopNav } from "./DesktopNav";
 import { NavActions } from "./NavActions";
 import { MobileMenu } from "./MobileMenu";
+import { BRAND_NAME } from "@/lib/brand";
 
 const Navbar = () => {
   const [scrolled, setScrolled] = useState(false);
@@ -32,7 +33,7 @@ const Navbar = () => {
             </div>
             <div className="flex flex-col leading-none">
               <span className="text-lg font-semibold tracking-tight text-foreground">
-                JobFlow
+                {BRAND_NAME}
               </span>
               <span className="text-[11px] uppercase tracking-widest text-muted-foreground">
                 employer

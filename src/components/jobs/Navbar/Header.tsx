@@ -8,6 +8,7 @@ import { useDisclosure } from "@mantine/hooks";
 import ProfileMenu from "@/components/jobs/Navbar/ProfileMenu";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
+import { BRAND_NAME } from "@/lib/brand";
 
 const Header = () => {
     const { isAuthenticated } = useAuth();
@@ -26,7 +27,7 @@ const Header = () => {
           <div className="flex items-center gap-4 ">
           <Link to="/" className="flex items-center gap-2 text-primary font-display font-bold text-xl">
             <Briefcase className="h-6 w-6 text-coral" />
-            <span className="text-2xl font-semibold tracking-tight">JobFlow</span>
+            <span className="text-2xl font-semibold tracking-tight">{BRAND_NAME}</span>
           </Link>
           
           <nav className="hidden bs-mx:!hidden lg:flex xl:gap-4 items-center gap-6">

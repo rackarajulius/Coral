@@ -1,6 +1,7 @@
 import { Briefcase } from 'lucide-react'
 import React from 'react'
 import { Link } from 'react-router-dom'
+import { BRAND_NAME } from "@/lib/brand";
 
 const Navbar = () => {
   return (
@@ -10,7 +11,7 @@ const Navbar = () => {
              <div className="flex items-center gap-4 ">
                  <Link to="/home" className="flex items-center gap-2 text-primary font-display font-bold text-xl">
                   <Briefcase className="h-6 w-6 text-coral" />
-                   <span className="text-2xl font-semibold tracking-tight">JobFlow</span>
+                   <span className="text-2xl font-semibold tracking-tight">{BRAND_NAME}</span>
                  </Link>
                  <nav className="hidden bs-mx:!hidden lg:flex xl:gap-4 items-center gap-6">
                   <Link to="/jobs" className="nav-link font-medium text-muted-foreground hover:text-foreground transition-colors">

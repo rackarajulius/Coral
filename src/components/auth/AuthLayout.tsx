@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { Briefcase, Shield } from "lucide-react";
 import { motion } from "framer-motion";
+import { BRAND_NAME } from "@/lib/brand";
 
 interface AuthLayoutProps {
   children: React.ReactNode;
@@ -19,7 +20,7 @@ const AuthLayout = ({ children }: AuthLayoutProps) => {
       >
         <Briefcase className="h-6 w-6 text-coral" />
         <span className="font-display font-bold text-xl text-foreground tracking-tight">
-          JobFlow
+          {BRAND_NAME}
         </span>
       </Link>
 

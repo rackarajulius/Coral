@@ -4,6 +4,7 @@ import { Briefcase, X } from "lucide-react";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
+import { BRAND_NAME } from "@/lib/brand";
 import {
   Accordion,
   AccordionContent,
@@ -59,7 +60,7 @@ export const MobileMenu = ({ open, onOpenChange }: MobileMenuProps) => {
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-coral/10 text-coral">
               <Briefcase className="h-4 w-4" />
             </div>
-            <span className="text-base font-semibold tracking-tight text-foreground">JobFlow</span>
+            <span className="text-base font-semibold tracking-tight text-foreground">{BRAND_NAME}</span>
           </div>
         </div>
 

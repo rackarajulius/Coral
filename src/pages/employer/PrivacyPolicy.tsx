@@ -5,11 +5,13 @@ import { ArrowLeft, Shield, Lock, Eye, Trash2, Edit3, FileText } from 'lucide-re
 import EmployerNavbar from '@/components/landing/Navbar';
 import Footer from '@/components/landing/Footer';
 import ScrollToTop from '@/components/ui/ScrollToTop';
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
 
 export default function PrivacyPolicy() {
+  useDocumentTitle("Privacy Policy");
+
   useEffect(() => {
-    document.title = 'Privacy Policy | Your Resume Platform';
     
     const metaDescription = document.querySelector('meta[name="description"]');
     if (metaDescription) {

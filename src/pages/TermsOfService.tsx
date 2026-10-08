@@ -20,11 +20,13 @@ import {
 import { TermsOfServiceTOC } from '@/components/TermsOfServiceTOC';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
 
 export default function TermsOfService() {
+  useDocumentTitle("Terms of Service");
+
   useEffect(() => {
-    document.title = 'Terms of Service | Your Resume Platform';
     
     const metaDescription = document.querySelector('meta[name="description"]');
     if (metaDescription) {
