@@ -1,7 +1,10 @@
-import { Injectable, Logger, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, ForbiddenException, BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, UserRole } from '@prisma/client';
+import { plainToInstance } from 'class-transformer';
+import { validateSync } from 'class-validator';
+import { UpdateFreelancerProfileDto } from '../freelancers/dto/update-freelancer-profile.dto';
 import { User } from '../common/types/user.types';
 
 /** Every new account starts as this role, awaiting onboarding. */
@@ -40,11 +43,19 @@ export class AuthService {
   /**
    * Find or create user from Supabase auth data
    */
-  async findOrCreateUser(supabaseUser: any): Promise<User> {
+  async findOrCreateUser(
+    supabaseUser: any,
+    verifyProvisioningIdentity?: () => Promise<boolean>,
+  ): Promise<User> {
     const email = supabaseUser.email;
     if (!email) {
       throw new BadRequestException('Email is required');
     }
+
+    // Administrator provisioning requires an explicit environment setting.
+    // A missing or blank value leaves both new and existing accounts alone.
+    const defaultAdminEmail = this.configService.get<string>('DEFAULT_ADMIN_EMAIL')?.trim();
+    const isDefaultAdmin = !!defaultAdminEmail && email.toLowerCase() === defaultAdminEmail.toLowerCase();
 
     // First, try to find existing user by supabaseId
     let user = await this.prisma.user.findUnique({
@@ -52,9 +63,6 @@ export class AuthService {
     });
 
     if (user) {
-      const defaultAdmin = this.configService.get<string>('DEFAULT_ADMIN_EMAIL') || 'rackarajulius@gmail.com';
-      const isDefaultAdmin = email.toLowerCase() === defaultAdmin.toLowerCase();
-
       // This runs on every authenticated request. Writing "last seen" each
       // time cost a database round trip per request; everything that reads it
       // works in days or 24-hour windows, so every few minutes is plenty.
@@ -75,6 +83,12 @@ export class AuthService {
       return user as User;
     }
 
+    // Accepted tokens can be cached on this or another server. An identity
+    // deleted in Supabase must never be provisioned again from that cache.
+    if (!verifyProvisioningIdentity || !(await verifyProvisioningIdentity())) {
+      throw new UnauthorizedException('This account is no longer available');
+    }
+
     // If not found by supabaseId, check if user exists by email
     // This handles the case where user signed up with email/password first
     user = await this.prisma.user.findUnique({
@@ -85,8 +99,6 @@ export class AuthService {
       // User exists with same email but different auth method
       // Link this Supabase account to the existing user
       const metadata = supabaseUser.user_metadata || {};
-      const defaultAdmin = this.configService.get<string>('DEFAULT_ADMIN_EMAIL') || 'rackarajulius@gmail.com';
-      const isDefaultAdmin = email.toLowerCase() === defaultAdmin.toLowerCase();
 
       user = await this.prisma.user.update({
         where: { id: user.id },
@@ -121,10 +133,8 @@ export class AuthService {
     const metadata = supabaseUser.user_metadata || {};
     const provider = supabaseUser.app_metadata?.provider || 'email';
 
-    const defaultAdminEmail = this.configService.get<string>('DEFAULT_ADMIN_EMAIL') || 'rackarajulius@gmail.com';
-    const isDefault = email.toLowerCase() === defaultAdminEmail.toLowerCase();
-    const createRole = isDefault ? 'ADMIN' : 'JOB_SEEKER';
-    const createStatus = isDefault ? 'ACTIVE' : 'PENDING_ONBOARDING';
+    const createRole = isDefaultAdmin ? 'ADMIN' : DEFAULT_NEW_ACCOUNT_ROLE;
+    const createStatus = isDefaultAdmin ? 'ACTIVE' : 'PENDING_ONBOARDING';
 
     user = await this.prisma.user.create({
       data: {
@@ -165,31 +175,32 @@ export class AuthService {
     newRole: UserRole,
     currentUser: User,
   ): Promise<User> {
-    const targetUser = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
+    const updatedUser = await this.prisma.$transaction(async (tx) => {
+      // Onboarding and provider setup lock this same row. Check eligibility
+      // after acquiring it so a concurrent activation cannot leave a stale
+      // pending-account permission to change the person's role.
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId} FOR UPDATE`;
+      const targetUser = await tx.user.findUnique({ where: { id: userId } });
 
-    if (!targetUser) {
-      throw new BadRequestException('User not found');
-    }
+      if (!targetUser) {
+        throw new BadRequestException('User not found');
+      }
 
-    const isAdmin = currentUser.role === 'ADMIN';
-    if (!isAdmin) {
-      const choosingOwnType = currentUser.id === userId && targetUser.status === 'PENDING_ONBOARDING';
-      if (!choosingOwnType) {
-        throw new ForbiddenException('You do not have permission to change this user role');
+      const isAdmin = currentUser.role === 'ADMIN';
+      if (!isAdmin) {
+        const choosingOwnType = currentUser.id === userId && targetUser.status === 'PENDING_ONBOARDING';
+        if (!choosingOwnType) {
+          throw new ForbiddenException('You do not have permission to change this user role');
+        }
+        if (!SELF_SERVICE_ROLES.includes(newRole)) {
+          throw new ForbiddenException("That account type can't be chosen here.");
+        }
+        if (targetUser.role !== newRole && targetUser.role !== DEFAULT_NEW_ACCOUNT_ROLE) {
+          throw new ForbiddenException('This account has already chosen its type.');
+        }
       }
-      if (!SELF_SERVICE_ROLES.includes(newRole)) {
-        throw new ForbiddenException("That account type can't be chosen here.");
-      }
-      if (targetUser.role !== newRole && targetUser.role !== DEFAULT_NEW_ACCOUNT_ROLE) {
-        throw new ForbiddenException('This account has already chosen its type.');
-      }
-    }
 
-    const updatedUser = await this.prisma.user.update({
-      where: { id: userId },
-      data: { role: newRole },
+      return tx.user.update({ where: { id: userId }, data: { role: newRole } });
     });
 
     this.logger.log(`Updated user ${userId} role to ${newRole}`);
@@ -205,6 +216,9 @@ export class AuthService {
     role: UserRole,
     profileData: Record<string, unknown> = {},
   ): Promise<User> {
+    if (!profileData || typeof profileData !== 'object' || Array.isArray(profileData)) {
+      throw new BadRequestException('Profile data must be an object');
+    }
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
     });
@@ -238,6 +252,17 @@ export class AuthService {
     const safeData = safeProfileData;
 
     const updatedUser = await this.prisma.$transaction(async (tx) => {
+      // Provider setup and account status transitions share the same row lock.
+      // Recheck pending eligibility so concurrent onboarding cannot change a
+      // role already selected and activated by another request.
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId} FOR UPDATE`;
+      const pending = await tx.user.findUnique({
+        where: { id: userId }, select: { role: true, status: true },
+      });
+      if (!pending || pending.status !== 'PENDING_ONBOARDING' || pending.role === 'EMPLOYER'
+        || (pending.role !== role && pending.role !== DEFAULT_NEW_ACCOUNT_ROLE)) {
+        throw new BadRequestException('This account cannot complete this onboarding flow');
+      }
       await this.createRoleProfile(tx, role, userId, safeData);
 
       return tx.user.update({
@@ -285,10 +310,24 @@ export class AuthService {
         return;
 
       case 'FREELANCER':
+        // Onboarding seeds a private draft. Publication belongs to the provider
+        // endpoint, which checks completeness and explicit visibility consent.
+        if ('publicPreviewEnabled' in safeData || 'providerEnabled' in safeData) {
+          throw new BadRequestException('Manage provider visibility after onboarding');
+        }
+        const providerDraft = plainToInstance(UpdateFreelancerProfileDto, safeData);
+        const draftErrors = validateSync(providerDraft, { whitelist: true, forbidNonWhitelisted: true });
+        if (draftErrors.length) {
+          throw new BadRequestException('Only valid provider work-profile fields may be used for onboarding');
+        }
         await tx.freelancerProfile.upsert({
           where: { userId },
-          create: { ...safeData, userId },
-          update: { ...safeData },
+          create: {
+            ...providerDraft, userId, skills: providerDraft.skills ?? [],
+            expertise: providerDraft.expertise ?? [], currency: providerDraft.currency ?? 'CAD',
+            providerEnabled: true, publicPreviewEnabled: false,
+          },
+          update: { ...providerDraft, providerEnabled: true, publicPreviewEnabled: false },
         });
         return;
 

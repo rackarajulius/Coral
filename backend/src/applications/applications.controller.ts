@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -16,6 +17,8 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { User } from '../common/types/user.types';
 import { ApplicationsService } from './applications.service';
+import { ExternalApplicationsService } from './external-applications.service';
+import { CreateExternalApplicationDto, UpdateExternalApplicationDto } from './dto/external-application.dto';
 import { BulkUpdateApplicationsDto } from './dto/bulk-update-applications.dto';
 import { CreateApplicationDto } from './dto/create-application.dto';
 import { ListApplicationsQueryDto } from './dto/list-applications-query.dto';
@@ -31,8 +34,37 @@ import { CompanyCapabilityGuard, RequiresCapability } from '../company/company-c
 export class ApplicationsController {
   constructor(
     private readonly applicationsService: ApplicationsService,
+    private readonly externalApplications: ExternalApplicationsService,
     private readonly pipeline: PipelineService,
   ) {}
+
+  @Roles(UserRole.JOB_SEEKER, UserRole.ADMIN)
+  @Get('external')
+  async listExternal(@CurrentUser() user: User) {
+    return { success: true, data: await this.externalApplications.list(user.id) };
+  }
+
+  @Roles(UserRole.JOB_SEEKER, UserRole.ADMIN)
+  @Post('external')
+  async createExternal(@CurrentUser() user: User, @Body() dto: CreateExternalApplicationDto) {
+    return { success: true, data: await this.externalApplications.create(user.id, dto) };
+  }
+
+  @Roles(UserRole.JOB_SEEKER, UserRole.ADMIN)
+  @Patch('external/:id')
+  async updateExternal(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+    @Body() dto: UpdateExternalApplicationDto,
+  ) {
+    return { success: true, data: await this.externalApplications.update(user.id, id, dto) };
+  }
+
+  @Roles(UserRole.JOB_SEEKER, UserRole.ADMIN)
+  @Delete('external/:id')
+  async deleteExternal(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: User) {
+    return { success: true, data: await this.externalApplications.remove(user.id, id) };
+  }
 
   @Get('me')
   async listMyApplications(@CurrentUser() user: User, @Query() query: ListApplicationsQueryDto) {

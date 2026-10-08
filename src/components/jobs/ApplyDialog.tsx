@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { Briefcase, FileText, Loader2, Upload } from "lucide-react";
+import { Briefcase, FileText, Loader2, Sparkles, Upload } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -16,11 +17,14 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { applyToJob, uploadResumeForApplication } from "@/lib/api/applications";
 import { getMyResumeFile, type StoredResumeFile } from "@/lib/api/interviewCoach";
+import { generateCoverLetter } from "@/lib/api/resumeMatcher";
+import { isEntitlementError } from "@/lib/api/entitlementError";
+import { useUpgradePrompt } from "@/stores/upgradePromptStore";
 
 interface ApplyDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  job: { id: string; title: string; company: string };
+  job: { id: string; title: string; company: string; location?: string; description?: string };
   onApplied: (jobId: string) => void;
 }
 
@@ -30,12 +34,17 @@ interface ApplyDialogProps {
  * file the user has not uploaded.
  */
 export default function ApplyDialog({ open, onOpenChange, job, onApplied }: ApplyDialogProps) {
+  const queryClient = useQueryClient();
+  const showUpgrade = useUpgradePrompt((s) => s.show);
   const [coverLetter, setCoverLetter] = useState("");
+  const [drafting, setDrafting] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
   const [expectedSalary, setExpectedSalary] = useState("");
   const [availableFrom, setAvailableFrom] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [resumeFile, setResumeFile] = useState<StoredResumeFile | null>(null);
   const [resumeChecked, setResumeChecked] = useState(false);
+  const [resumeError, setResumeError] = useState(false);
 
   // A resume chosen for THIS application only — the profile default is untouched.
   const [swapped, setSwapped] = useState<{ path: string; fileName: string; url: string | null } | null>(null);
@@ -45,15 +54,30 @@ export default function ApplyDialog({ open, onOpenChange, job, onApplied }: Appl
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    setResumeChecked(false);
+    setResumeError(false);
     void getMyResumeFile().then((r) => {
       if (cancelled) return;
       setResumeFile(r);
       setResumeChecked(true);
+    }).catch(() => {
+      if (!cancelled) {
+        setResumeError(true);
+        setResumeChecked(true);
+      }
     });
     return () => {
       cancelled = true;
     };
   }, [open]);
+
+  useEffect(() => {
+    setCoverLetter("");
+    setExpectedSalary("");
+    setAvailableFrom("");
+    setSwapped(null);
+    setReviewing(false);
+  }, [job.id]);
 
   const chooseResume = async (file: File) => {
     if (file.size > 10 * 1024 * 1024) {
@@ -76,6 +100,29 @@ export default function ApplyDialog({ open, onOpenChange, job, onApplied }: Appl
   /** What will actually be sent: the swapped file if chosen, else the default. */
   const active = swapped ?? (resumeFile?.fileName ? resumeFile : null);
 
+  const draftCoverLetter = async () => {
+    setDrafting(true);
+    try {
+      const result = await generateCoverLetter({
+        title: job.title,
+        company: job.company,
+        location: job.location,
+        description: job.description?.slice(0, 8000),
+      });
+      setCoverLetter(result.coverLetter.slice(0, 4000));
+      void queryClient.invalidateQueries({ queryKey: ["entitlements"] });
+      toast.success("Draft ready. Review and edit it before sending.");
+    } catch (error) {
+      if (isEntitlementError(error)) {
+        showUpgrade({ code: error.code, metric: error.metric, tier: error.tier, resetsAt: error.resetsAt, message: error.message });
+      } else {
+        toast.error((error as Error).message || "Couldn't draft cover letter");
+      }
+    } finally {
+      setDrafting(false);
+    }
+  };
+
   const submit = async () => {
     setSubmitting(true);
     try {
@@ -89,7 +136,9 @@ export default function ApplyDialog({ open, onOpenChange, job, onApplied }: Appl
       });
       toast.success("Application sent", { description: `${job.title} · ${job.company}` });
       onApplied(job.id);
+      void queryClient.invalidateQueries({ queryKey: ["my-applications"] });
       onOpenChange(false);
+      setReviewing(false);
       setCoverLetter("");
       setExpectedSalary("");
       setAvailableFrom("");
@@ -102,18 +151,44 @@ export default function ApplyDialog({ open, onOpenChange, job, onApplied }: Appl
   };
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !submitting && onOpenChange(o)}>
-      <DialogContent className="max-w-lg rounded-2xl">
+    <Dialog open={open} onOpenChange={(o) => {
+      if (!submitting) {
+        if (!o) setReviewing(false);
+        onOpenChange(o);
+      }
+    }}>
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Briefcase className="h-4 w-4 text-coral" /> Apply to {job.title}
           </DialogTitle>
           <DialogDescription>
-            {job.company} — your profile is shared with the employer.
+            {job.company} — {reviewing ? "review everything before sending" : "prepare your application packet"}.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-1">
+        {reviewing ? (
+          <div className="space-y-4 py-1 text-sm">
+            <div className="rounded-xl border border-border p-3">
+              <p className="font-medium">Your Coral profile</p>
+              <p className="text-muted-foreground">Shared with the employer. <Link to="/jobseeker/profile" className="text-coral hover:underline">Review profile</Link></p>
+            </div>
+            <div className="rounded-xl border border-border p-3">
+              <p className="font-medium">Resume</p>
+              <p className="text-muted-foreground">{active?.fileName ?? "No resume attached"}</p>
+              {active?.url && <a href={active.url} target="_blank" rel="noopener noreferrer" className="text-coral hover:underline">Preview resume</a>}
+            </div>
+            <div className="rounded-xl border border-border p-3">
+              <p className="font-medium">Cover note</p>
+              <p className="whitespace-pre-wrap text-muted-foreground">{coverLetter.trim() || "None"}</p>
+            </div>
+            <div className="rounded-xl border border-border p-3 text-muted-foreground">
+              <p>Expected salary: {expectedSalary || "Not provided"}</p>
+              <p>Available from: {availableFrom || "Not provided"}</p>
+            </div>
+            <p className="text-xs text-muted-foreground">Submitting shares this packet with {job.company}. You can withdraw later, but cannot edit it.</p>
+          </div>
+        ) : <div className="space-y-4 py-1">
           {/* Resume — shows exactly what will be sent, and lets you swap it. */}
           <div className="rounded-xl border border-border bg-muted/40 p-3">
             <div className="flex items-start gap-2.5">
@@ -121,6 +196,8 @@ export default function ApplyDialog({ open, onOpenChange, job, onApplied }: Appl
               <div className="min-w-0 flex-1 text-sm">
                 {!resumeChecked ? (
                   <span className="text-muted-foreground">Checking your resume…</span>
+                ) : resumeError ? (
+                  <p className="text-destructive">Couldn't check your resume. Close and reopen this packet to retry.</p>
                 ) : active ? (
                   <>
                     <p className="truncate font-medium text-foreground">{active.fileName}</p>
@@ -162,7 +239,7 @@ export default function ApplyDialog({ open, onOpenChange, job, onApplied }: Appl
                 )}
               </div>
 
-              {resumeChecked && (
+              {resumeChecked && !resumeError && (
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   <Button
                     type="button"
@@ -204,7 +281,14 @@ export default function ApplyDialog({ open, onOpenChange, job, onApplied }: Appl
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="cover-letter">Cover note <span className="text-muted-foreground">(optional)</span></Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="cover-letter">Cover note <span className="text-muted-foreground">(optional)</span></Label>
+              <Button type="button" size="sm" variant="outline" onClick={() => void draftCoverLetter()} disabled={drafting || submitting}>
+                {drafting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                Draft with AI
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">AI uses your Coral profile. Review every claim, especially if you selected a different resume.</p>
             <Textarea
               id="cover-letter"
               value={coverLetter}
@@ -250,14 +334,14 @@ export default function ApplyDialog({ open, onOpenChange, job, onApplied }: Appl
             </Link>
             , but not edit.
           </p>
-        </div>
+        </div>}
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
-            Cancel
+          <Button variant="outline" onClick={() => reviewing ? setReviewing(false) : onOpenChange(false)} disabled={submitting}>
+            {reviewing ? "Back to edit" : "Cancel"}
           </Button>
-          <Button onClick={submit} disabled={submitting}>
-            {submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Sending…</> : "Submit application"}
+          <Button onClick={() => reviewing ? void submit() : setReviewing(true)} disabled={submitting || uploading || !resumeChecked || resumeError || drafting}>
+            {submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Sending…</> : reviewing ? "Confirm and submit" : "Review packet"}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -110,6 +110,21 @@ export const createReview = (input: CreateReviewInput) =>
  */
 export const getEmployerReviews = () => req<CompanyReviews>("employers/reviews");
 
+export interface EmployerReviewOverview {
+  total: number;
+  averageRating: number | null;
+  distribution: { star: number; count: number }[];
+  categoryAverages: Record<string, number | null>;
+  responded: number;
+  unanswered: number;
+  responseRate: number | null;
+  averageResponseHours: number | null;
+  monthly: { month: string; count: number; averageRating: number | null }[];
+}
+
+export const getEmployerReviewOverview = () =>
+  req<EmployerReviewOverview>("employers/reviews/overview");
+
 /** Right of reply. There is no employer delete — by design, not by omission. */
 export const respondToReview = (reviewId: string, body: string) =>
   req<{ id: string; body: string; at: string }>(`employers/reviews/${reviewId}/respond`, {

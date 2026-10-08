@@ -99,7 +99,7 @@ function OutreachRow({ message: m }: { message: OutreachToCandidate }) {
       {/* Saying yes opened a thread; this is the way back into it. */}
       {m.conversationId && (
         <Link
-          to={`/employers/messages?c=${m.conversationId}`}
+          to={`/employers/chat?c=${m.conversationId}`}
           className="mt-2 inline-flex items-center gap-1 text-xs text-accent hover:underline"
         >
           <MessageSquare className="h-3 w-3" aria-hidden="true" />

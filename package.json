@@ -10,7 +10,15 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "typecheck": "tsc -b",
-    "audit:stability": "npm --prefix backend run audit:stability"
+    "audit:stability": "npm --prefix backend run audit:stability",
+    "staging:check": "node scripts/staging/check-config.mjs",
+    "staging:test": "node --test scripts/staging/check-config.test.mjs scripts/staging/run.test.mjs",
+    "staging:build": "node scripts/staging/run.mjs build",
+    "staging:api": "node scripts/staging/run.mjs api",
+    "staging:web": "node scripts/staging/run.mjs web",
+    "staging:db-status": "node scripts/staging/run.mjs db-status",
+    "staging:migrate": "node scripts/staging/run.mjs migrate",
+    "staging:secure-db": "node scripts/staging/secure-database.mjs"
   },
   "dependencies": {
     "@dnd-kit/sortable": "^10.0.0",

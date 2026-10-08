@@ -12,9 +12,10 @@ import type { User } from "@/contexts/AuthContext";
  *                 accounts may go either way.
  * - `seeker` / `employer` — an account that has chosen.
  * - `admin`     — may use both sides.
- * - `other`     — any other role (e.g. freelancer); not restricted here.
+ * - `provider`  — legacy freelancer account, with its own provider setup.
+ * - `other`     — an unrecognized role; not routed on a guess.
  */
-export type AccountSide = "visitor" | "unknown" | "undecided" | "seeker" | "employer" | "admin" | "other";
+export type AccountSide = "visitor" | "unknown" | "undecided" | "seeker" | "provider" | "employer" | "admin" | "other";
 
 export function accountSide(user: User | null | undefined): AccountSide {
   if (!user) return "visitor";
@@ -23,6 +24,7 @@ export function accountSide(user: User | null | undefined): AccountSide {
   // An employer is an employer even before finishing employer setup — that
   // setup lives on the employer side too.
   if (user.role === "EMPLOYER") return "employer";
+  if (user.role === "FREELANCER") return "provider";
   if (user.role === "JOB_SEEKER") {
     return user.status === "PENDING_ONBOARDING" ? "undecided" : "seeker";
   }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { UNDERLINE_TABS_LIST, UNDERLINE_TAB_TRIGGER } from "@/lib/tabStyles";
 import { getMyApplications } from "@/lib/api/applications";
 import { getMySavedJobs } from "@/lib/api/savedJobs";
 import { getMyAlerts } from "@/lib/api/jobAlerts";
@@ -15,6 +16,8 @@ import SkeletonPane from "@/components/talent/jobactivity/SkeletonPane";
 import InterviewsPane from "@/components/talent/jobactivity/InterviewsPane";
 import OffersPane from "@/components/talent/jobactivity/OffersPane";
 import { getMyOffers } from "@/lib/api/myOffers";
+import { getExternalApplications } from "@/lib/api/externalApplications";
+import ExternalApplicationsPane from "@/components/talent/jobactivity/ExternalApplicationsPane";
 import KpiStrip from "@/components/talent/jobactivity/KpiStrip";
 import ReviewablePrompt from "@/components/reviews/ReviewablePrompt";
 import { TABS, isTabId, type TabId } from "@/components/talent/jobactivity/constants";
@@ -49,10 +52,6 @@ function useTabLoader(tab: TabId): { state: LoadState; retry: () => void } {
 }
 
 /* ------------------------------ Page Shell ------------------------------- */
-
-// Mirrors the /jobseeker/settings tab styling exactly (thin orange underline).
-const TRIGGER_CLASS =
-  "group -mb-px rounded-none border-b-2 border-transparent bg-transparent px-4 py-2 hover:text-foreground data-[state=active]:border-orange-500 data-[state=active]:bg-transparent data-[state=active]:text-muted-foreground data-[state=active]:shadow-none";
 
 const Activity = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -106,11 +105,18 @@ const Activity = () => {
     staleTime: 60_000,
     retry: false,
   });
+  const { data: externalApplications } = useQuery({
+    queryKey: ["external-applications"],
+    queryFn: getExternalApplications,
+    staleTime: 60_000,
+    retry: false,
+  });
 
   const counts: Partial<Record<TabId, number>> = {
     saved: mySaved?.length,
     alerts: myAlerts?.length,
     applied: myApps?.length,
+    external: externalApplications?.length,
     // Actionable interviews: pending invitations + confirmed upcoming.
     interviews: myInterviews?.filter((i) => i.status === "proposed" || i.status === "confirmed").length,
     // Only offers still awaiting an answer. A declined one is history, and a
@@ -123,6 +129,7 @@ const Activity = () => {
     // simulated tab loader used by the still-mock tabs.
     if (tab === "applied") return <AppliedPane />;
     if (tab === "saved") return <SavedPane />;
+    if (tab === "external") return <ExternalApplicationsPane />;
     if (tab === "alerts") return <AlertsPane />;
     if (tab === "interviews") return <InterviewsPane />;
     if (tab === "offers") return <OffersPane />;
@@ -161,7 +168,7 @@ const Activity = () => {
             <div className="mb-6">
               <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Job Activity</h1>
               <p className="text-gray-500 dark:text-gray-400 mt-1">
-                Track your saved jobs, applications, alerts, and interview progress all in one place.
+                Track your saved jobs, Coral and external applications, alerts, and interviews in one place.
               </p>
             </div>
 
@@ -175,14 +182,14 @@ const Activity = () => {
               {/* Sticky tab bar — horizontal scroll lives on the wrapper (with a
                   1px bottom pad) so the active underline isn't clipped on mobile. */}
               <div className="sticky top-16 z-10 -mx-4 px-4 pb-px bg-white dark:bg-gray-900 overflow-x-auto no-scrollbar">
-                <TabsList className="h-auto justify-start gap-1 rounded-none border-b border-gray-200 dark:border-gray-700 bg-transparent p-0">
+                <TabsList className={UNDERLINE_TABS_LIST}>
                   {TABS.map((t) => {
                     const count = counts[t.id];
                     return (
-                      <TabsTrigger key={t.id} value={t.id} className={TRIGGER_CLASS}>
+                      <TabsTrigger key={t.id} value={t.id} className={`group ${UNDERLINE_TAB_TRIGGER}`}>
                         {t.label}
                         {typeof count === "number" && count > 0 && (
-                          <span className="ml-2 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-semibold bg-muted text-muted-foreground transition-colors group-data-[state=active]:bg-orange-500/10 group-data-[state=active]:text-orange-600">
+                          <span className="ml-2 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-semibold bg-muted text-muted-foreground transition-colors group-data-[state=active]:bg-orange-500/10 group-data-[state=active]:text-orange-700 dark:group-data-[state=active]:text-orange-400">
                             {count}
                           </span>
                         )}

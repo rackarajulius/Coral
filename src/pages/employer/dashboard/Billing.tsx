@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import {
-  AlertTriangle, Building2, Check, ChevronDown, ExternalLink, FileText, Info, Loader2, Sparkles,
+  AlertTriangle, Building2, Check, ExternalLink, FileText, Info, Loader2, Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { UNDERLINE_TABS_LIST, EMPLOYER_UNDERLINE_TAB_TRIGGER } from "@/lib/tabStyles";
 import { UsageBar } from "@/components/employer-dashboard/billing/UsageBar";
 import {
   amountFor,
@@ -79,10 +80,10 @@ export default function BillingPage() {
            * full plan comparison that only matters when you are changing plan.
            */
           <Tabs defaultValue="plans">
-            <TabsList>
-              <TabsTrigger value="plans">Plan</TabsTrigger>
-              <TabsTrigger value="usage">Usage</TabsTrigger>
-              <TabsTrigger value="invoices">Invoices</TabsTrigger>
+            <TabsList className={cn(UNDERLINE_TABS_LIST, "w-full")}>
+              <TabsTrigger value="plans" className={EMPLOYER_UNDERLINE_TAB_TRIGGER}>Plan</TabsTrigger>
+              <TabsTrigger value="usage" className={EMPLOYER_UNDERLINE_TAB_TRIGGER}>Usage</TabsTrigger>
+              <TabsTrigger value="invoices" className={EMPLOYER_UNDERLINE_TAB_TRIGGER}>Invoices</TabsTrigger>
             </TabsList>
 
             <TabsContent value="plans" className="mt-6 space-y-8">
@@ -90,6 +91,7 @@ export default function BillingPage() {
               <PlanComparison
                 plans={plans.data}
                 loading={plans.isLoading}
+                error={plans.isError}
                 overview={overview.data}
               />
             </TabsContent>
@@ -317,18 +319,15 @@ function UsageCard({ label, line }: { label: string; line: UsageLine }) {
 function PlanComparison({
   plans,
   loading,
+  error,
   overview,
 }: {
   plans?: PlanEntitlement[];
   loading: boolean;
+  error: boolean;
   overview: BillingOverview;
 }) {
   const [interval, setInterval] = useState<BillingInterval>(overview.interval ?? "MONTHLY");
-  /**
-   * Collapsed by default. Someone who came to check a renewal date should not
-   * have to scroll past a plan grid to leave.
-   */
-  const [open, setOpen] = useState(false);
 
   const upgrade = useMutation({
     mutationFn: (plan: PlanEntitlement) => startCheckout(plan.id, interval),
@@ -340,27 +339,13 @@ function PlanComparison({
 
   return (
     <section>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className="flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-card px-5 py-4 text-left transition-colors hover:bg-muted/40"
-      >
-        <span>
-          <span className="text-sm font-medium">View all plans</span>
-          <span className="mt-0.5 block text-xs text-muted-foreground">
-            What each one costs, and the limits the server actually enforces.
-          </span>
-        </span>
-        <ChevronDown
-          className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")}
-          aria-hidden="true"
-        />
-      </button>
+      <SectionHeading
+        eyebrow="Plans"
+        title="Compare plans"
+        description="Compare pricing, features, and limits for your team. Choose monthly or yearly billing to see available prices."
+      />
 
-      {!open ? null : (
-      <div className="mt-6">
-      <div className="inline-flex rounded-lg border border-border p-0.5">
+      <div className="mt-5 inline-flex rounded-lg border border-border p-0.5">
         {(["MONTHLY", "YEARLY"] as BillingInterval[]).map((i) => (
           <button
             key={i}
@@ -382,6 +367,12 @@ function PlanComparison({
             <Skeleton key={i} className="h-56 rounded-xl" />
           ))}
         </div>
+      )}
+
+      {error && (
+        <p className="mt-6 rounded-xl border border-border bg-card p-5 text-sm text-destructive">
+          Couldn't load plan details. Refresh the page to try again.
+        </p>
       )}
 
       {plans && (
@@ -438,8 +429,6 @@ function PlanComparison({
             );
           })}
         </div>
-      )}
-      </div>
       )}
     </section>
   );

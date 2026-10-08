@@ -64,7 +64,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: "Engage",
     items: [
-      { title: "Messages", url: "/employers/messages", icon: MessageSquare },
+      { title: "Chat", url: "/employers/chat", icon: MessageSquare },
       // "Availability" described the mechanism; this describes the job.
       { title: "Scheduling", url: "/employers/availability", icon: CalendarClock },
       { title: "Automations", url: "/employers/automations", icon: Timer },
@@ -170,7 +170,7 @@ export function EmployerSidebar() {
     cn(
       "transition-all duration-150 rounded-lg",
       active
-        ? "bg-coral text-primary-foreground font-medium"
+        ? "bg-orange-500/10 font-medium text-orange-700 hover:bg-orange-500/15 hover:text-orange-700 active:bg-orange-500/15 active:text-orange-700 dark:text-orange-400 dark:hover:text-orange-400 dark:active:text-orange-400"
         : "text-muted-foreground hover:bg-muted hover:text-foreground",
     );
 
@@ -178,7 +178,7 @@ export function EmployerSidebar() {
     item.badge === "notifications" && unreadCount > 0 ? unreadCount : null;
 
   return (
-    <Sidebar collapsible="icon" className="border-r border-border">
+    <Sidebar collapsible="icon" className="!border-r-0">
       {/* Fixed: the brand is the way home, and it should not scroll away. */}
       <SidebarHeader className="px-3 py-3">
         <div className="flex items-center gap-2">
@@ -300,7 +300,7 @@ export function EmployerSidebar() {
                             <span
                               className={cn(
                                 "ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums",
-                                active ? "bg-white/20 text-primary-foreground" : "bg-coral/15 text-coral",
+                                active ? "bg-orange-500/15 text-orange-700 dark:text-orange-400" : "bg-coral/15 text-coral",
                               )}
                             >
                               {count > 99 ? "99+" : count}
@@ -325,7 +325,7 @@ export function EmployerSidebar() {
                             // a pointer.
                             "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                             active
-                              ? "text-primary-foreground/80 hover:bg-white/20 hover:text-primary-foreground"
+                              ? "text-orange-700 hover:bg-orange-500/15 hover:text-orange-800 dark:text-orange-400 dark:hover:text-orange-300"
                               : "text-muted-foreground hover:bg-muted-foreground/15 hover:text-foreground",
                           )}
                         >

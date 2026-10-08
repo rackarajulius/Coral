@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import { isEntitlementError } from "@/lib/api/entitlementError";
 import { createEngine, type InterviewEngine } from "@/data/interview-coach/engine/InterviewEngine";
+import { ApiInterviewEngine } from "@/data/interview-coach/engine/ApiInterviewEngine";
 import { buildReport } from "@/data/interview-coach/engine/reportBuilder";
 import { INITIAL_SCORES } from "@/data/interview-coach/engine/scoring";
 import { STORAGE_KEYS, clearStorage, readStorage, writeStorage } from "@/data/interview-coach/storage";
@@ -20,6 +20,11 @@ import { useInterviewHistoryStore } from "./interviewHistoryStore";
 
 // The engine instance is non-serializable and lives beside the store, not in it.
 let engine: InterviewEngine | null = null;
+let serverBacked = false;
+let pendingReport: SessionReport | null = null;
+let finalizing = false;
+let errorOperation: "answer" | "advance" | "finalize" | "screenIncomplete" | "abandon" | null = null;
+let pendingEvaluation: { questionId: string; transcript: string; durationSec: number; typed: boolean } | null = null;
 
 /** What the AI should be saying right now. `seq` retriggers TTS on replay. */
 export interface Utterance {
@@ -68,6 +73,7 @@ interface SessionState {
      */
     options?: { offline?: boolean },
   ) => Promise<string>;
+  resumeFromServer: (session: api.ServerSession) => Promise<void>;
   /** TTS (or the muted-mode timer) finished delivering the current utterance. */
   onAISpeechEnd: () => void;
   appendFinalChunk: (text: string) => void;
@@ -98,6 +104,7 @@ function snapshot(s: Pick<SessionState, "sessionId" | "config" | "answers" | "qu
   if (!s.sessionId || !s.config) return;
   const snap: SessionSnapshot = {
     sessionId: s.sessionId,
+    serverBacked,
     config: s.config,
     answers: s.answers,
     questionIndex: s.questionIndex,
@@ -117,7 +124,7 @@ export const useInterviewSessionStore = create<SessionState>((set, get) => {
       if (q) {
         set((s) => ({
           currentQuestion: q,
-          questionIndex: s.questionIndex + 1,
+          questionIndex: s.questionIndex + (q.isFollowUp ? 0 : 1),
           askedQuestions: [...s.askedQuestions, q],
           aiState: "speaking",
           utterance: utter(q.text, "question"),
@@ -127,6 +134,7 @@ export const useInterviewSessionStore = create<SessionState>((set, get) => {
         await finalize("completed");
       }
     } catch {
+      errorOperation = "advance";
       set({ aiState: "error", error: "The interviewer lost its train of thought. Try resuming." });
     }
   }
@@ -134,48 +142,53 @@ export const useInterviewSessionStore = create<SessionState>((set, get) => {
   /** Generate the report, save history, and signal the screen to navigate. */
   async function finalize(status: HistoryEntry["status"]) {
     const s = get();
-    if (!engine || !s.config || !s.sessionId) return;
-    set({ aiState: "evaluating", utterance: null, currentQuestion: null });
+    if (!engine || !s.config || !s.sessionId || finalizing) return;
+    finalizing = true;
+    errorOperation = null;
+    set({ aiState: "evaluating", utterance: null, error: null });
+    try {
+      const report = pendingReport ?? await engine.generateReport();
+      pendingReport = report;
 
-    const report = await engine.generateReport();
+      // Decorate trends vs the previous completed interview.
+      const prev = useInterviewHistoryStore
+        .getState()
+        .entries.find((e) => e.status === "completed" && e.report);
+      if (prev?.report) {
+        report.competencies.forEach((c) => {
+          const p = prev.report!.competencies.find((x) => x.id === c.id);
+          if (p) c.trendVsPrev = c.score - p.score;
+        });
+      }
 
-    // Decorate trends vs the previous completed interview.
-    const prev = useInterviewHistoryStore
-      .getState()
-      .entries.find((e) => e.status === "completed" && e.report);
-    if (prev?.report) {
-      report.competencies.forEach((c) => {
-        const p = prev.report!.competencies.find((x) => x.id === c.id);
-        if (p) c.trendVsPrev = c.score - p.score;
-      });
-    }
-
-    const entry: HistoryEntry = {
-      id: s.sessionId,
-      createdAt: stamp(),
-      config: s.config,
-      durationSec: s.elapsedSec,
-      overallScore: report.overallScore,
-      improvementVsPrev: prev ? report.overallScore - prev.overallScore : undefined,
-      status,
-      report,
-      answers: get().answers,
-    };
-    useInterviewHistoryStore.getState().add(entry);
-
-    // Persist the finished run + its report; history then reads from the server.
-    api
-      .completeSession(s.sessionId, {
-        report,
-        overallScore: report.overallScore,
-        readiness: report.readiness,
+      const entry: HistoryEntry = {
+        id: s.sessionId,
+        localOnly: !serverBacked,
+        createdAt: stamp(),
+        config: s.config,
         durationSec: s.elapsedSec,
+        overallScore: report.overallScore,
+        improvementVsPrev: prev ? report.overallScore - prev.overallScore : undefined,
         status,
-      })
-      .catch(() => undefined);
+        report,
+        answers: get().answers,
+      };
+      // Confirm the server write before claiming success or clearing recovery data.
+      if (serverBacked) {
+        await api.completeSession(s.sessionId);
+      }
 
-    clearStorage(STORAGE_KEYS.activeSession);
-    set({ completedEntryId: entry.id });
+      useInterviewHistoryStore.getState().add(entry);
+      pendingReport = null;
+      clearStorage(STORAGE_KEYS.activeSession);
+      set({ aiState: "idle", completedEntryId: entry.id });
+    } catch (error) {
+      errorOperation = "finalize";
+      const detail = (error as Error)?.message?.trim();
+      set({ aiState: "error", error: detail ? `Report wasn't saved: ${detail}. Try again.` : "Report wasn't saved. Try again." });
+    } finally {
+      finalizing = false;
+    }
   }
 
   return {
@@ -203,39 +216,37 @@ export const useInterviewSessionStore = create<SessionState>((set, get) => {
 
     begin: async (config, existingSessionId, options) => {
       get().reset();
+      if (existingSessionId) {
+        const existing = await api.getSession(existingSessionId);
+        if (existing.status === "active" && existing.answers.length > 0) {
+          await get().resumeFromServer(existing);
+          return existing.id;
+        }
+      }
       set({ config, aiState: "connecting", startedAt: now() });
 
-      // Create the server session first: its id both persists the run and tells
-      // createEngine() to use the real LLM interviewer. If that fails (offline
-      // or signed out) we fall back to the local simulator so practice still
-      // works — it just isn't saved.
-      //
-      // A screening session already exists server-side, and must NOT fall back
-      // to the simulator: an unsaved practice run can't be scored for an
-      // employer, so a failure there has to surface rather than pretend.
+      // A server id selects the AI engine. Basic scripted practice is used
+      // only after the person explicitly chooses it in setup.
       let serverId: string | null = existingSessionId ?? null;
       if (!serverId && !options?.offline) {
         try {
           serverId = (await api.startSession(config)).id;
         } catch (error) {
-          /**
-           * A plan refusal is not a connection problem. Falling back quietly
-           * here would hand someone who has used their allowance a scripted
-           * interviewer while they believe it is the AI coach. It is raised so
-           * the caller can explain and offer that choice openly.
-           */
-          // Same for a job that can no longer be practised for: a scripted
-          // run would silently not be about that job.
-          if (isEntitlementError(error) || api.isPracticeJobUnavailable(error)) {
-            set({ aiState: "idle" });
-            throw error;
-          }
-          serverId = null;
+          set({ aiState: "idle" });
+          throw error;
         }
       }
 
+      serverBacked = !!serverId;
       engine = createEngine(serverId);
-      const { sessionId, greeting, totalQuestions } = await engine.startSession(config);
+      let started;
+      try {
+        started = await engine.startSession(config);
+      } catch (error) {
+        set({ aiState: "idle" });
+        throw error;
+      }
+      const { sessionId, greeting, totalQuestions } = started;
       const id = serverId ?? sessionId;
 
       set((s) => ({
@@ -246,6 +257,42 @@ export const useInterviewSessionStore = create<SessionState>((set, get) => {
         transcript: [...s.transcript, { speaker: "ai", text: greeting, at: stamp() }],
       }));
       return id;
+    },
+
+    resumeFromServer: async (session) => {
+      if (session.status !== "active") throw new Error("This interview is no longer active.");
+      get().reset();
+      serverBacked = true;
+      set({ aiState: "connecting", config: session.config });
+      try {
+        const restored = new ApiInterviewEngine(session.id);
+        const { greeting, totalQuestions } = await restored.startSession(session.config);
+        const answers = session.answers ?? [];
+        restored.restore(answers);
+        engine = restored;
+        const startedAt = now() - Math.max(0, session.durationSec) * 1000;
+        set({
+          sessionId: session.id,
+          answers,
+          liveScores: answers[answers.length - 1]?.evaluation.scores ?? { ...INITIAL_SCORES },
+          askedQuestions: answers.map((a) => a.question),
+          transcript: answers.flatMap((a) => [
+            { speaker: "ai" as const, text: a.question.text, at: a.askedAt },
+            { speaker: "you" as const, text: a.transcript, at: a.askedAt },
+          ]),
+          questionIndex: answers.filter((a) => !a.question.isFollowUp).length,
+          totalQuestions,
+          startedAt,
+          elapsedSec: session.durationSec,
+          aiState: "speaking",
+          utterance: utter(greeting, "greeting"),
+        });
+        snapshot(get());
+      } catch (error) {
+        engine = null;
+        set({ aiState: "error", error: (error as Error).message });
+        throw error;
+      }
     },
 
     onAISpeechEnd: () => {
@@ -266,29 +313,29 @@ export const useInterviewSessionStore = create<SessionState>((set, get) => {
       if (s.aiState !== "listening" || !s.currentQuestion || !engine) return;
       const transcriptText = s.answerBuffer.trim();
       const durationSec = s.answerStartedAt ? (now() - s.answerStartedAt) / 1000 : 0;
+      const submission = pendingEvaluation ?? {
+        questionId: s.currentQuestion.id,
+        transcript: transcriptText,
+        durationSec,
+        typed: s.textMode,
+      };
+      pendingEvaluation = submission;
 
       set((st) => ({
         aiState: "thinking",
         answerStartedAt: null,
-        transcript: transcriptText
-          ? [...st.transcript, { speaker: "you", text: transcriptText, at: stamp() }]
-          : st.transcript,
       }));
 
       try {
-        const evaluation = await engine.submitAnswer({
-          questionId: s.currentQuestion.id,
-          transcript: transcriptText,
-          durationSec,
-          typed: s.textMode,
-        });
+        const evaluation = await engine.submitAnswer(submission);
         if (get().aiState === "idle") return;
+        pendingEvaluation = null;
 
         const record: AnswerRecord = {
           questionId: s.currentQuestion.id,
-          transcript: transcriptText,
-          durationSec,
-          typed: s.textMode,
+          transcript: submission.transcript,
+          durationSec: submission.durationSec,
+          typed: submission.typed,
           question: s.currentQuestion,
           evaluation,
           askedAt: stamp(),
@@ -299,23 +346,12 @@ export const useInterviewSessionStore = create<SessionState>((set, get) => {
           lastDelta: evaluation.delta,
           answers: [...st.answers, record],
           answerBuffer: "",
+          transcript: submission.transcript
+            ? [...st.transcript, { speaker: "you", text: submission.transcript, at: record.askedAt }]
+            : st.transcript,
         }));
         snapshot(get());
-
-        // Mirror the answer to the server so a refresh resumes where we left off.
-        const after = get();
-        if (after.sessionId) {
-          api
-            .recordAnswer(after.sessionId, {
-              answer: record,
-              liveScores: evaluation.scores,
-              transcript: [{ speaker: "you", text: transcriptText, at: record.askedAt }],
-              questionIndex: after.questionIndex,
-              durationSec: after.elapsedSec,
-            })
-            .catch(() => undefined);
-        }
-
+        errorOperation = null;
         if (evaluation.followUp) {
           const fu = evaluation.followUp;
           set((st) => ({
@@ -329,14 +365,15 @@ export const useInterviewSessionStore = create<SessionState>((set, get) => {
           await advance();
         }
       } catch (e) {
+        errorOperation = "answer";
         // Surface the server's reason — a generic message hides real causes
         // (bad payload, AI unconfigured) and makes this undebuggable.
         const detail = (e as Error)?.message?.trim();
         set({
           aiState: "error",
           error: detail
-            ? `Evaluation failed: ${detail} You can resume or end the interview.`
-            : "Evaluation failed. You can resume or end the interview.",
+            ? `Evaluation failed: ${detail} Try again or end the interview.`
+            : "Evaluation failed. Try again or end the interview.",
         });
       }
     },
@@ -353,13 +390,25 @@ export const useInterviewSessionStore = create<SessionState>((set, get) => {
 
     pause: () => {
       const s = get();
-      if (s.aiState === "speaking" || s.aiState === "listening" || s.aiState === "error") {
+      if (s.aiState === "speaking" || s.aiState === "listening") {
         set({ aiState: "paused", answerStartedAt: null });
       }
     },
 
     resume: () => {
       const s = get();
+      if (s.aiState === "error") {
+        if (errorOperation === "finalize") void finalize("completed");
+        else if (errorOperation === "answer") {
+          set({ aiState: "listening", error: null, answerStartedAt: now() });
+          void get().finishAnswer();
+        } else if (errorOperation === "screenIncomplete" && s.currentQuestion) {
+          set({ aiState: "speaking", error: null, utterance: utter(s.currentQuestion.text, "question") });
+        } else if (errorOperation === "abandon") {
+          void get().endEarly();
+        } else void advance();
+        return;
+      }
       if (s.aiState !== "paused") return;
       if (s.currentQuestion) {
         // Re-speak the current question so the candidate regains context.
@@ -371,9 +420,23 @@ export const useInterviewSessionStore = create<SessionState>((set, get) => {
 
     endEarly: async () => {
       const s = get();
+      if (s.config?.screenMode && s.answers.filter((answer) => !answer.question.isFollowUp).length < s.totalQuestions) {
+        errorOperation = "screenIncomplete";
+        set({ aiState: "error", error: "Answer every assigned question before submitting this screening." });
+        return;
+      }
       if (s.answers.length >= 1) {
         await finalize("completed");
       } else {
+        if (serverBacked && s.sessionId) {
+          try {
+            await api.abandonSession(s.sessionId);
+          } catch (error) {
+            errorOperation = "abandon";
+            set({ aiState: "error", error: `Couldn't end this interview: ${(error as Error).message}` });
+            return;
+          }
+        }
         engine?.abort();
         clearStorage(STORAGE_KEYS.activeSession);
         set({ aiState: "idle", utterance: null });
@@ -401,6 +464,11 @@ export const useInterviewSessionStore = create<SessionState>((set, get) => {
     reset: () => {
       engine?.abort();
       engine = null;
+      serverBacked = false;
+      pendingReport = null;
+      finalizing = false;
+      errorOperation = null;
+      pendingEvaluation = null;
       set({
         sessionId: null,
         config: null,
@@ -451,6 +519,7 @@ export function recoverPartialReport(snap: SessionSnapshot): HistoryEntry {
   });
   const entry: HistoryEntry = {
     id: snap.sessionId,
+    localOnly: true,
     createdAt: stamp(),
     config: snap.config,
     durationSec: Math.max(

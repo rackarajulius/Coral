@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Skeleton } from '@/components/ui/skeleton';
-import { getFunnel, getInsights, getOverview, getTalent } from '@/lib/api/employerAnalytics';
+import { getInsights, getOverview, getTalent } from '@/lib/api/employerAnalytics';
 import KpiTile from './KpiTile';
 import { AlertTriangle, ArrowRight, Briefcase, Globe2, LayoutDashboard, Megaphone, Sparkles, Filter as FunnelIcon, } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -9,8 +9,9 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import MiniTrendCard, { type TrendPoint } from './MiniTrendCard';
 import JobsTable from '../JobsTable';
-import FunnelPreview, { biggestDrop } from './FunnelPreview';
+import FunnelPreview from './FunnelPreview';
 import MetricBar from './MetricBar';
+import { useAnalyticsRange } from '../AnalyticsRange';
 
 const TABS = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
@@ -23,9 +24,10 @@ const TABS = [
 type TabId = (typeof TABS)[number]["id"];
 
 const OverviewTab = ({ onJump }: { onJump: (t: TabId) => void }) => {
+  const { days } = useAnalyticsRange();
   const overviewQuery = useQuery({
-    queryKey: ["employer-analytics-overview", 30],
-    queryFn: () => getOverview(30),
+    queryKey: ["employer-analytics-overview", days],
+    queryFn: () => getOverview(days),
     retry: false,
   });
   const insightsQuery = useQuery({
@@ -75,15 +77,6 @@ const OverviewTab = ({ onJump }: { onJump: (t: TabId) => void }) => {
     if (id === "profileViews") return d.trend.map((p) => ({ day: p.day, value: p.profileViews }));
     return [];
   };
-
-  // Shared cache key with FunnelPreview, so the header and the chart below it
-  // always describe the same fetch rather than two independent ones.
-  const funnelQuery = useQuery({
-    queryKey: ["employer-analytics-funnel", 30],
-    queryFn: () => getFunnel(30),
-    retry: false,
-  });
-  const worstDrop = funnelQuery.data ? biggestDrop(funnelQuery.data.pipeline) : null;
 
   const talentQuery = useQuery({
     queryKey: ["employer-analytics-talent"],
@@ -227,7 +220,7 @@ function Section({
           */}
           <Section
             title="Performance Snapshot"
-            description="Daily trends over the last 30 days."
+            description={`Daily trends over the last ${days} days.`}
           >
             <div className="grid gap-4 lg:grid-cols-2">
               <MiniTrendCard
@@ -264,11 +257,7 @@ function Section({
               shown to every employer. It's computed now, or omitted. */}
           <Section
             title="Candidate Funnel Preview"
-            description={
-              worstDrop
-                ? `Largest drop-off: ${worstDrop.stage} (${worstDrop.lostPct}% don't reach it).`
-                : "Where candidates fall out between stages."
-            }
+            description="Recent reach and current application statuses."
             action={
               <Button variant="default" size="sm" className="gap-1 text-xs" onClick={() => onJump("funnel")}>
                 View full funnel <ArrowRight className="h-3.5 w-3.5" />
@@ -281,7 +270,7 @@ function Section({
           </Section>
     
           <Section
-            title="Top Performing Jobs"
+            title="Recent Job Performance"
             action={
               <Button variant="default" size="sm" className="gap-1 text-xs" onClick={() => onJump("jobs")}>
                 View job analytics <ArrowRight className="h-3.5 w-3.5" />

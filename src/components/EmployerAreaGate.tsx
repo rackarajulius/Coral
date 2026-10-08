@@ -1,4 +1,4 @@
-import { Outlet } from "react-router-dom";
+import { Navigate, Outlet } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { RedirectWithNotice } from "@/components/auth/RedirectWithNotice";
 import { SEEKER_ON_EMPLOYER_SIDE, accountSide } from "@/lib/accountSide";
@@ -25,5 +25,6 @@ export default function EmployerAreaGate() {
   if (accountSide(user) === "seeker") {
     return <RedirectWithNotice to="/" message={SEEKER_ON_EMPLOYER_SIDE} />;
   }
+  if (accountSide(user) === "provider") return <Navigate to="/provider" replace />;
   return <Outlet />;
 }

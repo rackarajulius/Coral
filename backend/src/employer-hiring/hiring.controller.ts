@@ -237,6 +237,7 @@ export class HiringController {
   @RequiresCapability('messaging:write')
   @Post('outreach/send')
   async sendOutreach(@CurrentUser() user: User, @Body() dto: SendOutreachDto) {
+    if (user.role !== UserRole.ADMIN) await this.verification.assertCanReachCandidates(user.id);
     return { success: true, data: await this.outreach.send(user, dto) };
   }
 
@@ -291,8 +292,7 @@ export class HiringController {
   @RequiresCapability('interviews:write')
   @Post('interviews')
   async proposeInterview(@CurrentUser() user: User, @Body() dto: ProposeInterviewDto) {
-    // Third of the three candidate-facing actions behind verification, along
-    // with posting a job and inviting to a screening.
+    // New candidate-facing invitations require the same verification as outreach.
     if (user.role !== UserRole.ADMIN) await this.verification.assertCanReachCandidates(user.id);
     return { success: true, data: await this.interviews.propose(user, dto) };
   }
@@ -331,6 +331,7 @@ export class HiringController {
   @RequiresCapability('candidates:write')
   @Post('ai-screens')
   async inviteScreen(@CurrentUser() user: User, @Body() dto: InviteScreenDto) {
+    if (user.role !== UserRole.ADMIN) await this.verification.assertCanReachCandidates(user.id);
     return { success: true, data: await this.screens.invite(user, dto) };
   }
 

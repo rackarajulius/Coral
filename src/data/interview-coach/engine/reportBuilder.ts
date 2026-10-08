@@ -7,7 +7,6 @@ import type {
   InterviewConfig,
   LiveScores,
   Readiness,
-  SampleAnswer,
   SessionReport,
 } from "../types";
 import { INITIAL_SCORES, analyzeAnswer, overallScore } from "./scoring";
@@ -61,42 +60,6 @@ const RECOMMENDATIONS: Record<Readiness, string> = {
 
 // ─── Sample answer improvement ────────────────────────────────────────────────
 
-function firstClause(text: string, maxWords = 18): string {
-  const words = text.trim().split(/\s+/).slice(0, maxWords).join(" ");
-  return words.replace(/[.,;:]+$/, "");
-}
-
-function buildImproved(record: AnswerRecord, role: string): SampleAnswer {
-  type Seg = { text: string; highlight: boolean };
-  const gist = record.transcript.trim()
-    ? firstClause(record.transcript).toLowerCase()
-    : "a challenge directly relevant to this question";
-
-  const segs: Seg[] = [
-    { text: `When I was working as a ${role} at my previous company, `, highlight: false },
-    { text: `we faced a concrete situation: ${gist}. `, highlight: true },
-    { text: `My task was to own the outcome end-to-end and deliver something the team could measure. `, highlight: true },
-    { text: `So I broke the problem down, aligned the stakeholders early, and executed in small steps, `, highlight: false },
-    { text: `explaining each trade-off and why I chose it over the alternative. `, highlight: true },
-    { text: `As a result, we improved our key metric by roughly 30% within a quarter, `, highlight: true },
-    { text: `and the approach became the team's standard going forward.`, highlight: false },
-  ];
-
-  let improved = "";
-  const ranges: [number, number][] = [];
-  for (const seg of segs) {
-    if (seg.highlight) ranges.push([improved.length, improved.length + seg.text.length]);
-    improved += seg.text;
-  }
-
-  return {
-    questionText: record.question.text,
-    original: record.transcript || "(no answer given)",
-    improved,
-    improvedRanges: ranges,
-  };
-}
-
 // ─── Report assembly ──────────────────────────────────────────────────────────
 
 export function buildReport(args: {
@@ -105,7 +68,7 @@ export function buildReport(args: {
   answers: AnswerRecord[];
   finalScores?: LiveScores;
 }): SessionReport {
-  const { sessionId, config, answers } = args;
+  const { sessionId, answers } = args;
   const finalScores =
     args.finalScores ??
     (answers.length ? answers[answers.length - 1].evaluation.scores : { ...INITIAL_SCORES });
@@ -151,13 +114,8 @@ export function buildReport(args: {
   const focusAreas = bottom.map((c) => competencyLabel(c.id));
   const resources = bottom.flatMap((c) => LEARNING_RESOURCES[c.id]);
 
-  // Improve the two lowest-scoring answers (main questions preferred).
-  const sampleAnswers = [...answers]
-    .filter((a) => !a.question.isFollowUp)
-    .map((a, i) => ({ a, raw: overallScore(analyses[answers.indexOf(a)]?.raw ?? finalScores), i }))
-    .sort((x, y) => x.raw - y.raw)
-    .slice(0, 2)
-    .map(({ a }) => buildImproved(a, config.role));
+  // Basic practice has no AI rewrite. Never invent projects, employers, or metrics.
+  const sampleAnswers: SessionReport["sampleAnswers"] = [];
 
   const responseDurations = answers.map((a, i) => ({
     label: a.question.isFollowUp ? `Q${i + 1}*` : `Q${i + 1}`,

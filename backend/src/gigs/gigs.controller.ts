@@ -1,41 +1,45 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
-import { Roles } from '../common/decorators/roles.decorator';
 import { User } from '../common/types/user.types';
 import { CreateGigDto, ListGigsQueryDto } from './dto/gig.dto';
 import { GigsService } from './gigs.service';
+import { MarketplaceService } from '../marketplace/marketplace.service';
+import { ListingReportDto, ListingStateDto, ProjectFieldsDto } from '../marketplace/dto/marketplace.dto';
 
 @Controller('gigs')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard)
 export class GigsController {
-  constructor(private readonly gigsService: GigsService) {}
+  constructor(private readonly gigsService: GigsService, private readonly marketplace: MarketplaceService) {}
 
   @Public()
   @Get()
-  listGigs(@Query() query: ListGigsQueryDto) {
+  async listGigs(@Query() query: ListGigsQueryDto) {
     return {
       success: true,
-      ...this.gigsService.listGigs(query),
+      ...await this.gigsService.listGigs(query),
     };
   }
+
+  @Get('mine') async mine(@CurrentUser() user: User, @Query() query: ListGigsQueryDto) { return { success: true, ...await this.marketplace.list('project', query, user.id) }; }
+  @Get('mine/:id') async managed(@Param('id') id: string, @CurrentUser() user: User) { return { success: true, data: await this.marketplace.getManaged('project', id, user.id) }; }
 
   @Public()
   @Get(':id')
-  getGigById(@Param('id') id: string) {
+  async getGigById(@Param('id') id: string) {
     return {
       success: true,
-      data: this.gigsService.getGigById(id),
+      data: await this.gigsService.getGigById(id),
     };
   }
 
-  @Roles(UserRole.EMPLOYER, UserRole.FREELANCER, UserRole.ADMIN)
   @Post()
-  createGig(@CurrentUser() user: User, @Body() dto: CreateGigDto) {
-    return this.gigsService.createGig(user.id, dto);
+  async createGig(@CurrentUser() user: User, @Body() dto: CreateGigDto) {
+    return { success: true, data: await this.gigsService.createGig(user.id, dto) };
   }
+  @Patch(':id') async update(@Param('id') id: string, @CurrentUser() user: User, @Body() dto: ProjectFieldsDto) { return { success: true, data: await this.marketplace.update('project', id, user.id, dto) }; }
+  @Post(':id/state') async state(@Param('id') id: string, @CurrentUser() user: User, @Body() dto: ListingStateDto) { return { success: true, data: await this.marketplace.transition('project', id, user.id, dto.status) }; }
+  @Post(':id/report') async report(@Param('id') id: string, @CurrentUser() user: User, @Body() dto: ListingReportDto) { return { success: true, data: await this.marketplace.report('project', id, user.id, dto) }; }
 }
 

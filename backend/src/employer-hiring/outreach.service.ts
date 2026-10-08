@@ -365,7 +365,7 @@ export class OutreachService {
       type: 'outreach',
       title: RESPONSE_HEADLINE[response](name),
       message: note?.trim() || row.subject,
-      link: conversationId ? `/employers/messages?c=${conversationId}` : '/employers/hiring',
+      link: conversationId ? `/employers/chat?c=${conversationId}` : '/employers/hiring',
     });
 
     return {

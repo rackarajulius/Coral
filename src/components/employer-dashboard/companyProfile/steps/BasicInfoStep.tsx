@@ -215,7 +215,9 @@ export function BasicInfoStep() {
               <Select value={field.value} onValueChange={field.onChange}>
                 <SelectTrigger className="bg-card"><SelectValue placeholder="Select" /></SelectTrigger>
                 <SelectContent>
-                  {COMPANY_SIZES.map((s) => <SelectItem key={s} value={s}>{s} employees</SelectItem>)}
+                  {Array.from(new Set([...COMPANY_SIZES, field.value].filter(Boolean))).map((s) => (
+                    <SelectItem key={s} value={s}>{s} employees</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             )}
@@ -230,7 +232,7 @@ export function BasicInfoStep() {
       <section>
         <Label className="mb-2 block">Industries</Label>
         <div className="flex flex-wrap gap-2">
-          {INDUSTRIES.map((name) => {
+          {Array.from(new Set([...INDUSTRIES, ...industries])).map((name) => {
             const on = industries.includes(name);
             return (
               <button

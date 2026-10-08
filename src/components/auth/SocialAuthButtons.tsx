@@ -2,8 +2,9 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { Loader2, ChevronDown } from "lucide-react";
 import { lastGoogleAccount } from "@/lib/lastGoogleAccount";
+import { enabledSocialAuthProviders, type SocialAuthProvider } from "@/lib/socialAuthProviders";
 
-type Provider = "google" | "apple" | "facebook";
+type Provider = SocialAuthProvider;
 
 interface SocialAuthButtonsProps {
   disabled?: boolean;
@@ -57,7 +58,7 @@ const SocialAuthButtons = ({
   const activeProvider = busyProvider ?? loadingProvider;
 
   const handleClick = (provider: Provider, opts?: { useLastAccount?: boolean }) => {
-    if (disabled || activeProvider) return;
+    if (disabled || activeProvider || !enabledSocialAuthProviders.includes(provider)) return;
     // Popup providers (Google, Facebook) use parent-controlled busyProvider so
     // the spinner clears if the popup is dismissed; redirect-only providers use
     // local loading (the page navigates away anyway).
@@ -70,7 +71,7 @@ const SocialAuthButtons = ({
 
   return (
     <div className="flex flex-col gap-3">
-      {providers.map(({ id, label, icon }) => {
+      {providers.filter(({ id }) => enabledSocialAuthProviders.includes(id)).map(({ id, label, icon }) => {
         const isLoading = activeProvider === id;
         const isOther = activeProvider !== null && activeProvider !== id;
 

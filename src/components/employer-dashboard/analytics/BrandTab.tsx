@@ -1,6 +1,6 @@
 ﻿
 import { cn } from '@/lib/utils';
-import { Lightbulb, TrendingDown, TrendingUp } from 'lucide-react';
+import { TrendingDown, TrendingUp } from 'lucide-react';
 import { CartesianGrid, Cell, Pie, XAxis, YAxis, PieChart,Tooltip as RTooltip, Bar, BarChart, ResponsiveContainer, LineChart, Line } from 'recharts';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useQuery } from '@tanstack/react-query';
@@ -8,28 +8,30 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { getBrand, getGeo, getSources } from '@/lib/api/employerAnalytics';
 import BrandScoreCard from './BrandScoreCard';
 import HiringResponsivenessCard from './HiringResponsivenessCard';
+import { useAnalyticsRange } from './AnalyticsRange';
 import EmployerLayout from '../Layout/EmployerLayout';
 import _CountUpLib from 'react-countup';
 const CountUp = (_CountUpLib as any).default ?? _CountUpLib;
 
 const BrandTab = () => {
+  const { days } = useAnalyticsRange();
   const sourcesQuery = useQuery({
-    queryKey: ['employer-analytics-sources', 30],
-    queryFn: () => getSources(30),
+    queryKey: ['employer-analytics-sources', days],
+    queryFn: () => getSources(days),
     retry: false,
   });
   const channels = sourcesQuery.data?.channels ?? [];
 
   const geoQuery = useQuery({
-    queryKey: ['employer-analytics-geo', 30],
-    queryFn: () => getGeo(30),
+    queryKey: ['employer-analytics-geo', days],
+    queryFn: () => getGeo(days),
     retry: false,
   });
   const places = geoQuery.data?.places ?? [];
 
   const brandQuery = useQuery({
-    queryKey: ['employer-analytics-brand', 30],
-    queryFn: () => getBrand(30),
+    queryKey: ['employer-analytics-brand', days],
+    queryFn: () => getBrand(days),
     retry: false,
   });
 
@@ -161,13 +163,6 @@ const BrandTab = () => {
                   ))
                 )}
               </div>
-            </div>
-            <div>
-              <p className="text-xs uppercase tracking-wider text-muted-foreground">Recommended</p>
-              <ul className="mt-2 space-y-2 text-sm">
-                <li className="flex items-start gap-2"><Lightbulb className="mt-0.5 h-4 w-4 text-accent" /> Publish another culture story this week.</li>
-                <li className="flex items-start gap-2"><Lightbulb className="mt-0.5 h-4 w-4 text-accent" /> Boost engineering posts on LinkedIn.</li>
-              </ul>
             </div>
           </div>
         </Card>

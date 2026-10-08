@@ -31,7 +31,13 @@ export const useInterviewHistoryStore = create<HistoryState>()((set) => ({
     set({ loading: true });
     try {
       const sessions = await listSessions();
-      set({ entries: sessions.map(toHistoryEntry).slice(0, MAX_ENTRIES), loading: false, loaded: true });
+      set((state) => ({
+        entries: [
+          ...state.entries.filter((entry) => entry.localOnly),
+          ...sessions.map(toHistoryEntry),
+        ].slice(0, MAX_ENTRIES),
+        loading: false, loaded: true,
+      }));
     } catch {
       // Keep whatever is on screen; the page shows its own empty/error state.
       set({ loading: false, loaded: true });
@@ -42,8 +48,9 @@ export const useInterviewHistoryStore = create<HistoryState>()((set) => ({
   add: (entry) => set((s) => ({ entries: [entry, ...s.entries].slice(0, MAX_ENTRIES) })),
 
   remove: (id) => {
+    const localOnly = useInterviewHistoryStore.getState().entries.find((e) => e.id === id)?.localOnly;
     set((s) => ({ entries: s.entries.filter((e) => e.id !== id) }));
-    deleteSession(id).catch(() => undefined);
+    if (!localOnly) deleteSession(id).catch(() => undefined);
   },
 
   clear: () => set({ entries: [] }),

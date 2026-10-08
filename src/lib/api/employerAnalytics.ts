@@ -109,9 +109,9 @@ export interface FunnelResponse {
   range: { start: string; end: string; days: number };
   /** From event capture — only exists from when tracking began. */
   reach: FunnelStage[];
-  /** From application records — covers all history. */
+  /** Current statuses of applications submitted in the period. */
   pipeline: FunnelStage[];
-  notes: { reach: string; applyStarted: string };
+  notes: { reach: string; applyStarted: string; pipeline: string };
 }
 
 export interface JobRow {

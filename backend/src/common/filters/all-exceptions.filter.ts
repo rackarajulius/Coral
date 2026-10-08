@@ -36,7 +36,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       success: false,
       statusCode: status,
       message,
-      ...this.entitlementFields(exception),
+      ...this.actionableFields(exception),
       path: request.url,
       timestamp: new Date().toISOString(),
     });
@@ -48,11 +48,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
    * comes back. Whitelisted: an exception's response object can hold anything,
    * and none of the rest belongs in a reply.
    */
-  private entitlementFields(exception: unknown): Record<string, unknown> {
+  private actionableFields(exception: unknown): Record<string, unknown> {
     if (!(exception instanceof HttpException)) return {};
     const body = exception.getResponse();
     if (!body || typeof body !== 'object') return {};
     const b = body as Record<string, unknown>;
+    if (b.code === 'ACCOUNT_CLOSED_CLEANUP_PENDING' && b.accountClosed === true) {
+      return { code: b.code, accountClosed: true };
+    }
     if (b.code !== 'PREMIUM_REQUIRED' && b.code !== 'ALLOWANCE_EXHAUSTED') return {};
     return { code: b.code, metric: b.metric, tier: b.tier, resetsAt: b.resetsAt ?? null };
   }

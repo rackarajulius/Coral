@@ -8,6 +8,9 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/contexts/AuthContext";
+import MarketplaceModeration from "@/components/marketplace/MarketplaceModeration";
+import MarketplaceRequestReports from "@/components/marketplace/MarketplaceRequestReports";
 import {
   dismissReport,
   listReports,
@@ -35,6 +38,7 @@ const TABS: { id: ReportStatus; label: string }[] = [
  * mean this component deciding who is a moderator, and it does not know.
  */
 export default function ModerationPage() {
+  const { user } = useAuth();
   const [status, setStatus] = useState<ReportStatus>("OPEN");
 
   const reports = useQuery({
@@ -105,6 +109,8 @@ export default function ModerationPage() {
           <div className="space-y-3">
             {reports.data?.map((r) => <ReportCard key={r.id} report={r} />)}
           </div>
+          {user?.role === "ADMIN" && <MarketplaceModeration />}
+          {user?.role === "ADMIN" && <MarketplaceRequestReports />}
         </div>
       </main>
     </>

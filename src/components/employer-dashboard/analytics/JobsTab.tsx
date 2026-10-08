@@ -3,16 +3,19 @@ import { Input } from '@/components/ui/input';
 import { useQuery } from '@tanstack/react-query';
 import { getJobsAnalytics, getSources } from '@/lib/api/employerAnalytics';
 import { Bookmark, CheckCircle2, ChevronDown, Clock, Download, Eye, FileText, MousePointerClick, Search, Star, Users } from 'lucide-react';
-import React, { useMemo } from 'react'
+import React, { useMemo, useState } from 'react'
 import { CartesianGrid, Cell, Pie, XAxis, YAxis, PieChart,Tooltip as RTooltip, ResponsiveContainer, Bar, BarChart } from 'recharts';
 import JobsTable from './JobsTable';
 import { cn } from '@/lib/utils';
 import _CountUpLib from 'react-countup';
+import { useAnalyticsRange } from './AnalyticsRange';
 const CountUp = (_CountUpLib as any).default ?? _CountUpLib;
 
 
 
-const JobsTab = () => {
+const JobsTab = ({ onInspectJob }: { onInspectJob: (job: { id: string; title: string }) => void }) => {
+  const { days } = useAnalyticsRange();
+  const [search, setSearch] = useState("");
 
 const CHART_COLORS = [
   "royalblue",
@@ -22,15 +25,15 @@ const CHART_COLORS = [
   "crimson",
 ];
   const jobsQuery = useQuery({
-    queryKey: ["employer-analytics-jobs", 30],
-    queryFn: () => getJobsAnalytics(30),
+    queryKey: ["employer-analytics-jobs", days],
+    queryFn: () => getJobsAnalytics(days),
     retry: false,
   });
   const topJobs = jobsQuery.data?.rows ?? [];
 
   const sourcesQuery = useQuery({
-    queryKey: ['employer-analytics-sources', 30],
-    queryFn: () => getSources(30),
+    queryKey: ['employer-analytics-sources', days],
+    queryFn: () => getSources(days),
     retry: false,
   });
   const channels = sourcesQuery.data?.channels ?? [];
@@ -54,7 +57,7 @@ const CHART_COLORS = [
   const tiles = [
     { label: "Views", value: totals.views.toLocaleString(), icon: Eye },
     { label: "Applications", value: totals.apps.toLocaleString(), icon: FileText },
-    { label: "Interviews", value: totals.interviews.toLocaleString(), icon: Users },
+    { label: "Interview stage", value: totals.interviews.toLocaleString(), icon: Users },
     { label: "Hires", value: totals.hires.toLocaleString(), icon: CheckCircle2 },
   ];
 
@@ -121,21 +124,24 @@ function Card({ className, children }: { className?: string; children: React.Rea
               </Card>
             ))}
           </div>
+          {topJobs.length === 100 && (
+            <p className="text-xs text-muted-foreground">These totals cover the latest 100 jobs shown below.</p>
+          )}
     
           <Section
-            title="Top performing jobs"
-            description="Click a row to drill into detailed analytics."
+            title="Job performance"
+            description="Search your jobs or select one to inspect its application statuses."
             action={
               <div className="flex items-center gap-2">
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                  <Input placeholder="Search jobs" className="h-8 w-56 pl-8 text-xs" />
+                  <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search jobs" className="h-8 w-56 pl-8 text-xs" />
                 </div>
               </div>
             }
           >
             <Card>
-              <JobsTable />
+              <JobsTable search={search} onSelectJob={onInspectJob} />
             </Card>
           </Section>
     

@@ -187,6 +187,8 @@ export interface TranscriptItem {
 
 export interface HistoryEntry {
   id: string;
+  /** Basic scripted practice is kept only for this browser tab. */
+  localOnly?: boolean;
   createdAt: string;
   config: InterviewConfig;
   durationSec: number;
@@ -200,6 +202,8 @@ export interface HistoryEntry {
 /** Minimal crash-recovery snapshot written after each answer. */
 export interface SessionSnapshot {
   sessionId: string;
+  /** Basic practice has no server session and can only produce a local partial report. */
+  serverBacked?: boolean;
   config: InterviewConfig;
   answers: AnswerRecord[];
   questionIndex: number;

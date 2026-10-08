@@ -10,7 +10,7 @@ import { InterviewCoachService } from './interview-coach.service';
 import { SpeechService } from './speech.service';
 import { SpeakDto } from './dto/speak.dto';
 import {
-  BuildReportDto, CompleteSessionDto, EvaluateAnswerDto, RecordAnswerDto, StartSessionDto,
+  EvaluateAnswerDto, StartSessionDto,
 } from './dto/interview-coach.dto';
 
 /** AI Interview Coach (/interview-prep) — owner-scoped mock-interview sessions. */
@@ -74,16 +74,6 @@ export class InterviewCoachController {
     return { success: true, data: await this.coach.start(user, dto) };
   }
 
-  /** Appends one answer + running scores (called after each question). */
-  @Post('sessions/:id/answers')
-  async recordAnswer(
-    @CurrentUser() user: User,
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: RecordAnswerDto,
-  ) {
-    return { success: true, data: await this.coach.recordAnswer(user, id, dto) };
-  }
-
   /* ── AI engine ── */
 
   /** Plans the interview with the AI (greeting + role-specific questions). */
@@ -104,21 +94,13 @@ export class InterviewCoachController {
 
   /** Builds the end-of-interview report from the real transcript. */
   @Post('sessions/:id/report')
-  async report(
-    @CurrentUser() user: User,
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: BuildReportDto,
-  ) {
-    return { success: true, data: await this.coach.report(user, id, dto) };
+  async report(@CurrentUser() user: User, @Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, data: await this.coach.report(user, id) };
   }
 
   @Post('sessions/:id/complete')
-  async complete(
-    @CurrentUser() user: User,
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: CompleteSessionDto,
-  ) {
-    return { success: true, data: await this.coach.complete(user, id, dto) };
+  async complete(@CurrentUser() user: User, @Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, data: await this.coach.complete(user, id) };
   }
 
   @Post('sessions/:id/abandon')

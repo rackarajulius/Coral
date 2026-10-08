@@ -81,8 +81,8 @@ export class CalendarService {
     const withLink = { ...input, existingLink: zoom?.joinUrl };
     const event =
       provider === 'google'
-        ? await this.google.createMeetEvent(ownerUserId, withLink)
-        : await this.microsoft.createTeamsEvent(ownerUserId, withLink);
+        ? await this.google.createMeetEvent(ownerUserId, withLink).catch(() => null)
+        : await this.microsoft.createTeamsEvent(ownerUserId, withLink).catch(() => null);
 
     if (!event) {
       // The calendar failed but Zoom did not — keep the link rather than

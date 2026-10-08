@@ -25,6 +25,7 @@ export interface ResumeMatch {
   location: string;
   source: CandidateJob['source'];
   matchScore: number;
+  scoringMode: 'ai' | 'heuristic';
   reason?: string;
   url?: string;
   salary?: string;
@@ -65,7 +66,13 @@ export class ResumeMatcherService {
   async run(user: User, dto: RunMatchDto) {
     const candidate = await this.loadCandidate(user);
     if (!candidate) {
-      return { hasProfile: false, query: (dto.query || '').trim(), matches: [] as ResumeMatch[] };
+      return {
+        hasProfile: false,
+        query: (dto.query || '').trim(),
+        matches: [] as ResumeMatch[],
+        scope: 'platform' as const,
+        webBlockedReason: null,
+      };
     }
 
     const query = this.buildQuery(candidate, dto.query);
@@ -89,16 +96,16 @@ export class ResumeMatcherService {
     const usedWeb = enabled.some((s) => s.name !== 'platform');
 
     const settled = await Promise.allSettled(enabled.map((s) => s.search(search)));
-    const candidates = this.dedupe(
-      settled.flatMap((r, i) => {
-        if (r.status === 'fulfilled') return r.value;
-        this.logger.warn(`Source ${enabled[i].name} failed: ${r.reason}`);
-        return [];
-      }),
-    ).slice(0, MAX_TO_SCORE);
+    const results = settled.map((r, i) => {
+      if (r.status === 'fulfilled') return r.value;
+      this.logger.warn(`Source ${enabled[i].name} failed: ${r.reason}`);
+      return [];
+    });
+    const candidates = this.selectCandidates(results);
+    const hasWebResults = results.some((jobs, i) => enabled[i].name !== 'platform' && jobs.length > 0);
 
     const matches = await this.scoreAndRank(candidate.parsed, candidates);
-    if (usedWeb) await this.entitlements.record(user.id, 'matcher.web');
+    if (hasWebResults) await this.entitlements.record(user.id, 'matcher.web');
 
     return {
       hasProfile: true,
@@ -215,14 +222,29 @@ export class ResumeMatcherService {
     return provided?.trim() ? '' : c.city.trim();
   }
 
-  private dedupe(jobs: CandidateJob[]): CandidateJob[] {
+  /** Give every source a turn before filling the scoring budget. */
+  private selectCandidates(results: CandidateJob[][]): CandidateJob[] {
     const seen = new Set<string>();
+    const seenIds = new Set<string>();
+    const cursors = results.map(() => 0);
     const out: CandidateJob[] = [];
-    for (const j of jobs) {
-      const key = `${j.title}|${j.company}`.toLowerCase().replace(/\s+/g, ' ').trim();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(j);
+    while (out.length < MAX_TO_SCORE) {
+      let added = false;
+      for (let source = 0; source < results.length; source++) {
+        const jobs = results[source];
+        while (cursors[source] < Math.min(jobs.length, MAX_PER_SOURCE)) {
+          const job = jobs[cursors[source]++];
+          const key = `${job.title}|${job.company}`.toLowerCase().replace(/\s+/g, ' ').trim();
+          if (seen.has(key) || seenIds.has(job.id)) continue;
+          seen.add(key);
+          seenIds.add(job.id);
+          out.push(job);
+          added = true;
+          if (out.length === MAX_TO_SCORE) return out;
+          break;
+        }
+      }
+      if (!added) break;
     }
     return out;
   }
@@ -250,6 +272,7 @@ export class ResumeMatcherService {
           url: j.url,
           salary: j.salary,
           matchScore: ai?.score ?? this.heuristicScore(profile, j),
+          scoringMode: ai ? 'ai' : 'heuristic',
           reason: ai?.reason || undefined,
           description: (j.description || '').slice(0, 1500) || undefined,
         };

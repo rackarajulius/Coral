@@ -1,10 +1,11 @@
-import React from 'react'
+import React, { useState } from 'react'
 import OverviewTab from './Overview/OverviewTab';
 import BrandTab from './BrandTab';
 import JobsTab from './JobsTab';
 import FunnelTab from './FunnelTab';
 import TalentTab from './TalentTab';
 import { cn } from '@/lib/utils';
+import { EMPLOYER_ACTIVE_TAB } from '@/lib/tabStyles';
 import { Briefcase, Globe2, LayoutDashboard, Megaphone,  Filter as FunnelIcon, } from 'lucide-react';
 
 
@@ -18,6 +19,7 @@ const TABS = [
 ] as const;
 
 const Workspace = ({ tab, setTab }: { tab: TabId; setTab: (t: TabId) => void }) => {
+  const [selectedJob, setSelectedJob] = useState<{ id: string; title: string } | null>(null);
 
   return (
     <div className="mt-6 ">
@@ -33,20 +35,14 @@ const Workspace = ({ tab, setTab }: { tab: TabId; setTab: (t: TabId) => void }) 
               key={t.id}
               role="tab"
               aria-selected={active}
-              onClick={() => setTab(t.id)}
+              onClick={() => { setSelectedJob(null); setTab(t.id); }}
               className={cn(
-                "relative flex shrink-0 items-center gap-2 px-4 py-3 text-sm font-medium transition-colors",
-                active ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+                "employer-underline-tab relative -mb-px flex shrink-0 items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors",
+                active ? EMPLOYER_ACTIVE_TAB : "border-transparent text-muted-foreground hover:text-foreground"
               )}
             >
               <Icon className="h-4 w-4" />
               {t.label}
-              <span
-                className={cn(
-                  "absolute inset-x-3 -bottom-px h-0.5 rounded-full transition-all",
-                  active ? "bg-orange-500 opacity-100" : "bg-transparent opacity-0"
-                )}
-              />
             </button>
           );
         })}
@@ -55,8 +51,8 @@ const Workspace = ({ tab, setTab }: { tab: TabId; setTab: (t: TabId) => void }) 
       <div className="mt-6 animate-fade-in">
         {tab === "overview" && <OverviewTab onJump={setTab} />}
         {tab === "brand" && <BrandTab />}
-        {tab === "jobs" && <JobsTab />}
-        {tab === "funnel" && <FunnelTab />}
+        {tab === "jobs" && <JobsTab onInspectJob={(job) => { setSelectedJob(job); setTab("funnel"); }} />}
+        {tab === "funnel" && <FunnelTab selectedJob={selectedJob} onClearJob={() => setSelectedJob(null)} />}
         {tab === "talent" && <TalentTab />}
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from './AuthContext';
 import { onAfterSignOut, onBeforeSignOut } from '@/lib/signOutHooks';
 import { personName } from '@/lib/personName';
@@ -458,10 +459,20 @@ const ProfileContext = createContext<ProfileContextType | undefined>(undefined);
 // Provider component
 export function ProfileProvider({ children }: { children: ReactNode }) {
   const { user, updateUser } = useAuth();
+  const activeProfileOwner = user?.role === 'JOB_SEEKER' && user.status === 'ACTIVE' && !user.provisional
+    ? user.id
+    : null;
+  const queryClient = useQueryClient();
+  const invalidateResumeMatches = useCallback(async () => {
+    // A match started before this save must not make the old profile look fresh.
+    await queryClient.cancelQueries({ queryKey: ['resume-matcher'] });
+    // Refresh on the next visit or explicit search, without spending a web search here.
+    await queryClient.invalidateQueries({ queryKey: ['resume-matcher'], refetchType: 'none' });
+  }, [queryClient]);
 
   // The cached copy for this account only — never the last person's.
   const [profile, setProfile] = useState<ProfileData>(() => {
-    const stored = loadFromStorage(user?.id);
+    const stored = loadFromStorage(activeProfileOwner);
     return stored ? { ...initialProfile, ...stored } : initialProfile;
   });
 
@@ -474,8 +485,9 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
    * into another person's account, whatever else goes wrong.
    */
   const hydratedForRef = useRef<string | null>(null);
-  const currentUserIdRef = useRef<string | null>(user?.id ?? null);
-  currentUserIdRef.current = user?.id ?? null;
+  // Eligibility can change while a debounced save waits, even for the same id.
+  const currentProfileOwnerRef = useRef<string | null>(activeProfileOwner);
+  currentProfileOwnerRef.current = activeProfileOwner;
   /** The debounced save waiting to fire, kept so sign-out can send it now. */
   const pendingSaveRef = useRef<(() => Promise<void>) | null>(null);
   
@@ -516,6 +528,11 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   // (avoids stale closures without churning the action callbacks' identities).
   const syncReadyRef = useRef(false);
   const profileRef = useRef<ProfileData>(profile);
+  const canSyncProfile = useCallback(() => (
+    syncReadyRef.current
+    && hydratedForRef.current !== null
+    && hydratedForRef.current === currentProfileOwnerRef.current
+  ), []);
 
   // Undo/Redo history
   const [history, setHistory] = useState<HistoryState[]>([]);
@@ -604,7 +621,10 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
    */
   useEffect(() => {
     let cancelled = false;
-    const owner = user?.id ?? null;
+    // Setup owns pending-account data. Do not load an empty profile before
+    // onboarding or keep it writable after the account's eligibility changes.
+    // Provider pages use their own API rather than this global jobseeker context.
+    const owner = currentProfileOwnerRef.current;
 
     if (backendSaveRef.current) clearTimeout(backendSaveRef.current);
     if (autoSaveRef.current) clearTimeout(autoSaveRef.current);
@@ -636,7 +656,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       } catch {
         authed = false;
       }
-      if (cancelled) return;
+      if (cancelled || currentProfileOwnerRef.current !== owner) return;
 
       setIsAuthenticated(authed);
       if (!authed) {
@@ -646,7 +666,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
       try {
         const server = await getMyProfile();
-        if (cancelled) return;
+        if (cancelled || currentProfileOwnerRef.current !== owner) return;
 
         const synced = mapServerProfileToSyncedFields(server);
         const skills = synced.skillNames.map((name) => ({ name }));
@@ -762,7 +782,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
         setSyncReady(true);
         // Once a session: lets a recruiter's message be timed for their working
         // hours instead of the recruiter's. See reportTimezone.
-        if (user?.role === 'JOB_SEEKER' && !user.provisional) reportTimezone(owner);
+        reportTimezone(owner);
       } catch (error) {
         if (!cancelled) {
           setSyncError(error instanceof Error ? error.message : 'Failed to load profile');
@@ -776,7 +796,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id]);
+  }, [user?.id, user?.role, user?.status, user?.provisional]);
 
   /**
    * The display name, mirrored from the signed-in account.
@@ -808,7 +828,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     if (!syncReady) return;
     // Only the account this profile was loaded for may receive it.
     const owner = hydratedForRef.current;
-    if (!owner || owner !== user?.id) return;
+    if (!owner || owner !== currentProfileOwnerRef.current) return;
 
     const payload = buildProfileSyncPayload({
       about: profile.about,
@@ -834,14 +854,15 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
     const send = async () => {
       if (pendingSaveRef.current === send) pendingSaveRef.current = null;
-      // Checked again at send time: the account can change during the wait,
-      // and a save that was right a second ago would now land on someone else.
-      if (hydratedForRef.current !== owner || currentUserIdRef.current !== owner) {
+      // Check both identity and eligibility again after the debounce. The same
+      // account may have become pending, inactive or suspended during the wait.
+      if (hydratedForRef.current !== owner || currentProfileOwnerRef.current !== owner) {
         setIsSaving(false);
         return;
       }
       try {
         await updateMyProfile(payload);
+        await invalidateResumeMatches();
         lastSyncedRef.current = snapshot;
         setSyncError(null);
         setLastSaved(new Date());
@@ -875,6 +896,10 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     profile.jobPreferences,
     syncReady,
     user?.id,
+    user?.role,
+    user?.status,
+    user?.provisional,
+    invalidateResumeMatches,
   ]);
 
   /**
@@ -978,17 +1003,21 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       ...prev,
       experiences: [{ ...experience, id: localId }, ...prev.experiences],
     }));
-    if (syncReadyRef.current) {
+    if (canSyncProfile()) {
       const dto = experienceToDto(experience);
       if (dto) {
         apiCreateExperience(dto)
-          .then(server => { attachServerId('experiences', localId, server.id); setSyncError(null); })
+          .then(server => {
+            attachServerId('experiences', localId, server.id);
+            setSyncError(null);
+            void invalidateResumeMatches();
+          })
           .catch(reportSyncError);
       } else {
         setSyncError('Add a date range to save this experience to your profile.');
       }
     }
-  }, [updateProfile, attachServerId, reportSyncError]);
+  }, [updateProfile, attachServerId, reportSyncError, invalidateResumeMatches, canSyncProfile]);
 
   const updateExperience = useCallback((id: number, updates: Partial<Experience>) => {
     updateProfile(prev => ({
@@ -997,16 +1026,19 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
         exp.id === id ? { ...exp, ...updates } : exp
       ),
     }));
-    if (syncReadyRef.current) {
+    if (canSyncProfile()) {
       const existing = profileRef.current.experiences.find(exp => exp.id === id);
       if (existing?.serverId) {
         const dto = experienceToDto({ ...existing, ...updates });
         if (dto) {
-          apiUpdateExperience(existing.serverId, dto).then(() => setSyncError(null)).catch(reportSyncError);
+          apiUpdateExperience(existing.serverId, dto).then(() => {
+            setSyncError(null);
+            void invalidateResumeMatches();
+          }).catch(reportSyncError);
         }
       }
     }
-  }, [updateProfile, reportSyncError]);
+  }, [updateProfile, reportSyncError, invalidateResumeMatches, canSyncProfile]);
 
   const deleteExperience = useCallback((id: number) => {
     const existing = profileRef.current.experiences.find(exp => exp.id === id);
@@ -1014,10 +1046,13 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       ...prev,
       experiences: prev.experiences.filter(exp => exp.id !== id),
     }));
-    if (syncReadyRef.current && existing?.serverId) {
-      apiDeleteExperience(existing.serverId).then(() => setSyncError(null)).catch(reportSyncError);
+    if (canSyncProfile() && existing?.serverId) {
+      apiDeleteExperience(existing.serverId).then(() => {
+        setSyncError(null);
+        void invalidateResumeMatches();
+      }).catch(reportSyncError);
     }
-  }, [updateProfile, reportSyncError]);
+  }, [updateProfile, reportSyncError, invalidateResumeMatches, canSyncProfile]);
   
   // Skills actions
   const addSkill = useCallback((name: string) => {
@@ -1045,17 +1080,21 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       ...prev,
       educations: [{ ...education, id: localId }, ...prev.educations],
     }));
-    if (syncReadyRef.current) {
+    if (canSyncProfile()) {
       const dto = educationToDto(education);
       if (dto) {
         apiCreateEducation(dto)
-          .then(server => { attachServerId('educations', localId, server.id); setSyncError(null); })
+          .then(server => {
+            attachServerId('educations', localId, server.id);
+            setSyncError(null);
+            void invalidateResumeMatches();
+          })
           .catch(reportSyncError);
       } else {
         setSyncError('Add a date range to save this education to your profile.');
       }
     }
-  }, [updateProfile, attachServerId, reportSyncError]);
+  }, [updateProfile, attachServerId, reportSyncError, invalidateResumeMatches, canSyncProfile]);
 
   const updateEducation = useCallback((id: number, updates: Partial<Education>) => {
     updateProfile(prev => ({
@@ -1064,16 +1103,19 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
         edu.id === id ? { ...edu, ...updates } : edu
       ),
     }));
-    if (syncReadyRef.current) {
+    if (canSyncProfile()) {
       const existing = profileRef.current.educations.find(edu => edu.id === id);
       if (existing?.serverId) {
         const dto = educationToDto({ ...existing, ...updates });
         if (dto) {
-          apiUpdateEducation(existing.serverId, dto).then(() => setSyncError(null)).catch(reportSyncError);
+          apiUpdateEducation(existing.serverId, dto).then(() => {
+            setSyncError(null);
+            void invalidateResumeMatches();
+          }).catch(reportSyncError);
         }
       }
     }
-  }, [updateProfile, reportSyncError]);
+  }, [updateProfile, reportSyncError, invalidateResumeMatches, canSyncProfile]);
 
   const deleteEducation = useCallback((id: number) => {
     const existing = profileRef.current.educations.find(edu => edu.id === id);
@@ -1081,10 +1123,13 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       ...prev,
       educations: prev.educations.filter(edu => edu.id !== id),
     }));
-    if (syncReadyRef.current && existing?.serverId) {
-      apiDeleteEducation(existing.serverId).then(() => setSyncError(null)).catch(reportSyncError);
+    if (canSyncProfile() && existing?.serverId) {
+      apiDeleteEducation(existing.serverId).then(() => {
+        setSyncError(null);
+        void invalidateResumeMatches();
+      }).catch(reportSyncError);
     }
-  }, [updateProfile, reportSyncError]);
+  }, [updateProfile, reportSyncError, invalidateResumeMatches, canSyncProfile]);
   
   // Certifications actions
   const addCertification = useCallback((certification: Omit<Certification, 'id'>) => {
@@ -1093,7 +1138,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       ...prev,
       certifications: [{ ...certification, id: localId }, ...prev.certifications],
     }));
-    if (syncReadyRef.current) {
+    if (canSyncProfile()) {
       const dto = certificationToDto(certification);
       if (dto) {
         apiCreateCertification(dto)
@@ -1103,7 +1148,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
         setSyncError('Add an issue date to save this certification to your profile.');
       }
     }
-  }, [updateProfile, attachServerId, reportSyncError]);
+  }, [updateProfile, attachServerId, reportSyncError, canSyncProfile]);
 
   const updateCertification = useCallback((id: number, updates: Partial<Certification>) => {
     updateProfile(prev => ({
@@ -1112,7 +1157,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
         cert.id === id ? { ...cert, ...updates } : cert
       ),
     }));
-    if (syncReadyRef.current) {
+    if (canSyncProfile()) {
       const existing = profileRef.current.certifications.find(cert => cert.id === id);
       if (existing?.serverId) {
         const dto = certificationToDto({ ...existing, ...updates });
@@ -1121,7 +1166,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
         }
       }
     }
-  }, [updateProfile, reportSyncError]);
+  }, [updateProfile, reportSyncError, canSyncProfile]);
 
   const deleteCertification = useCallback((id: number) => {
     const existing = profileRef.current.certifications.find(cert => cert.id === id);
@@ -1129,10 +1174,10 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       ...prev,
       certifications: prev.certifications.filter(cert => cert.id !== id),
     }));
-    if (syncReadyRef.current && existing?.serverId) {
+    if (canSyncProfile() && existing?.serverId) {
       apiDeleteCertification(existing.serverId).then(() => setSyncError(null)).catch(reportSyncError);
     }
-  }, [updateProfile, reportSyncError]);
+  }, [updateProfile, reportSyncError, canSyncProfile]);
   
   // Portfolio actions
   const addPortfolioItem = useCallback((item: Omit<PortfolioItem, 'id'>) => {
@@ -1141,12 +1186,12 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       ...prev,
       portfolioItems: [{ ...item, id: localId }, ...prev.portfolioItems],
     }));
-    if (syncReadyRef.current) {
+    if (canSyncProfile()) {
       apiCreatePortfolioItem(portfolioItemToDto(item))
         .then(server => { attachServerId('portfolioItems', localId, server.id); setSyncError(null); })
         .catch(reportSyncError);
     }
-  }, [updateProfile, attachServerId, reportSyncError]);
+  }, [updateProfile, attachServerId, reportSyncError, canSyncProfile]);
 
   const updatePortfolioItem = useCallback((id: number, updates: Partial<PortfolioItem>) => {
     updateProfile(prev => ({
@@ -1155,7 +1200,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
         item.id === id ? { ...item, ...updates } : item
       ),
     }));
-    if (syncReadyRef.current) {
+    if (canSyncProfile()) {
       const existing = profileRef.current.portfolioItems.find(item => item.id === id);
       if (existing?.serverId) {
         apiUpdatePortfolioItem(existing.serverId, portfolioItemToDto({ ...existing, ...updates }))
@@ -1163,7 +1208,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
           .catch(reportSyncError);
       }
     }
-  }, [updateProfile, reportSyncError]);
+  }, [updateProfile, reportSyncError, canSyncProfile]);
 
   const deletePortfolioItem = useCallback((id: number) => {
     const existing = profileRef.current.portfolioItems.find(item => item.id === id);
@@ -1171,12 +1216,12 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       ...prev,
       portfolioItems: prev.portfolioItems.filter(item => item.id !== id),
     }));
-    if (syncReadyRef.current && existing?.serverId) {
+    if (canSyncProfile() && existing?.serverId) {
       apiDeletePortfolioItem(existing.serverId)
         .then(() => setSyncError(null))
         .catch(reportSyncError);
     }
-  }, [updateProfile, reportSyncError]);
+  }, [updateProfile, reportSyncError, canSyncProfile]);
   
   // Profile info actions
   const updateProfileInfo = useCallback((info: Partial<Pick<ProfileData, 'name' | 'headline' | 'location' | 'openToWork' | 'discoverable' | 'connections' | 'avatarUrl' | 'phone' | 'workEligibility' | 'workPermitExpiry' | 'bannerUrl' | 'introVideoUrl'>>) => {
@@ -1229,12 +1274,12 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       ...prev,
       recommendations: [{ ...recommendation, id: localId }, ...prev.recommendations],
     }));
-    if (syncReadyRef.current) {
+    if (canSyncProfile()) {
       apiCreateRecommendation(recommendationToDto(recommendation))
         .then(server => { attachServerId('recommendations', localId, server.id); setSyncError(null); })
         .catch(reportSyncError);
     }
-  }, [updateProfile, attachServerId, reportSyncError]);
+  }, [updateProfile, attachServerId, reportSyncError, canSyncProfile]);
 
   const updateRecommendation = useCallback((id: number, updates: Partial<Recommendation>) => {
     updateProfile(prev => ({
@@ -1243,7 +1288,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
         rec.id === id ? { ...rec, ...updates } : rec
       ),
     }));
-    if (syncReadyRef.current) {
+    if (canSyncProfile()) {
       const existing = profileRef.current.recommendations.find(rec => rec.id === id);
       if (existing?.serverId) {
         apiUpdateRecommendation(existing.serverId, recommendationToDto({ ...existing, ...updates }))
@@ -1251,7 +1296,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
           .catch(reportSyncError);
       }
     }
-  }, [updateProfile, reportSyncError]);
+  }, [updateProfile, reportSyncError, canSyncProfile]);
 
   const deleteRecommendation = useCallback((id: number) => {
     const existing = profileRef.current.recommendations.find(rec => rec.id === id);
@@ -1259,12 +1304,12 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       ...prev,
       recommendations: prev.recommendations.filter(rec => rec.id !== id),
     }));
-    if (syncReadyRef.current && existing?.serverId) {
+    if (canSyncProfile() && existing?.serverId) {
       apiDeleteRecommendation(existing.serverId)
         .then(() => setSyncError(null))
         .catch(reportSyncError);
     }
-  }, [updateProfile, reportSyncError]);
+  }, [updateProfile, reportSyncError, canSyncProfile]);
 
   // Contact links actions
   const updateContactLinks = useCallback((links: Partial<ContactLinks>) => {

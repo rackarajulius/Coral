@@ -19,9 +19,7 @@ import {
   COMPLETED_KEY,
   OWNER_KEY,
   calcProfileStrength,
-  defaultEmployerBrand,
   employerBrandSchema,
-  normalizeEmployerBrand,
 } from "@/data/companyProfile/employer-brand-schema";
 import { HorizontalStepper } from "@/components/employer-dashboard/companyProfile/HorizontalStepper";
 import { PreviewModal } from "@/components/employer-dashboard/companyProfile/PreviewModal";
@@ -32,142 +30,35 @@ import { CultureEvpStep } from "@/components/employer-dashboard/companyProfile/s
 import { PeopleTestimonialsStep } from "@/components/employer-dashboard/companyProfile/steps/PeopleTestimonialsStep";
 import { ReviewPublishStep } from "@/components/employer-dashboard/companyProfile/steps/ReviewPublishStep";
 import {
-  EmployerCompany,
-  UpdateEmployerCompanyPayload,
   getMyCompany,
   updateMyCompany,
 } from "@/lib/api/employerCompany";
+import { useAuth } from "@/contexts/AuthContext";
+import {
+  brandToCompanyPayload,
+  hydrateEmployerBrand,
+  parseEmployerBrandDraft,
+  serializeEmployerBrandDraft,
+} from "@/data/companyProfile/employer-brand-state";
 import { useEmployerCompanyStore } from "@/stores/employerCompanyStore";
 
-/**
- * Falls back to the already-fetched company from `useEmployerCompanyStore` (warmed by
- * `EmployerLayout` on layout mount) instead of the "Acme Technologies" demo content, so
- * repeat visits to this page render real branding immediately instead of flashing the
- * placeholder while this page's own fetch below is in flight.
- */
-function cachedCompanyDefaults(): EmployerBrand {
+function ownsStoredDraft(ownerId: string | null): boolean {
+  return !!ownerId && typeof window !== "undefined" && window.localStorage.getItem(OWNER_KEY) === ownerId;
+}
+
+function readOwnedDraft(ownerId: string | null): Partial<EmployerBrand> | undefined {
+  if (!ownsStoredDraft(ownerId)) return undefined;
+  return parseEmployerBrandDraft(window.localStorage.getItem(STORAGE_KEY));
+}
+
+function loadDraft(ownerId: string | null): EmployerBrand {
   const cached = useEmployerCompanyStore.getState().company;
-  if (!cached) return defaultEmployerBrand;
-  return normalizeEmployerBrand(mergeDefined(defaultEmployerBrand, companyToBrandPartial(cached)));
-}
-
-function loadDraft(): EmployerBrand {
-  if (typeof window === "undefined") return cachedCompanyDefaults();
+  const company = ownerId && cached?.userId === ownerId ? cached : null;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return cachedCompanyDefaults();
-    const parsed = JSON.parse(raw);
-    return normalizeEmployerBrand({ ...defaultEmployerBrand, ...parsed });
+    return hydrateEmployerBrand(company, readOwnedDraft(ownerId));
   } catch {
-    return cachedCompanyDefaults();
+    return hydrateEmployerBrand(company);
   }
-}
-
-/** Maps the saved EmployerProfile's core branding fields onto the wizard's draft shape. */
-function companyToBrandPartial(company: EmployerCompany): Partial<EmployerBrand> {
-  if (company.companyName === "New Company") return {};
-
-  return {
-    displayName: company.companyName,
-    tagline: company.tagline ?? undefined,
-    logo: company.companyLogo ?? undefined,
-    banner: company.companyBanner ?? undefined,
-    website: company.companyWebsite ?? undefined,
-    companySize: company.companySize ?? undefined,
-    foundedYear: company.foundedYear ? String(company.foundedYear) : undefined,
-    industries: company.industries?.length ? company.industries : undefined,
-    headquarters: company.headquarters ?? undefined,
-    locations: company.locations?.length ? company.locations : undefined,
-    social: company.socialLinks?.length ? company.socialLinks : undefined,
-    overview: company.overview ?? undefined,
-    mission: company.mission ?? undefined,
-    vision: company.vision ?? undefined,
-    visibility: company.visibility,
-    showJobs: company.showJobs,
-    allowFollow: company.allowFollow,
-  };
-}
-
-/** True for a persistable URL — a real link, not a local data:/blob: preview. */
-function isStoredUrl(url?: string): url is string {
-  return !!url && !url.startsWith("data:") && !url.startsWith("blob:");
-}
-
-/** Maps the wizard's core branding fields onto the EmployerProfile update payload. */
-function brandToCompanyPayload(brand: EmployerBrand): UpdateEmployerCompanyPayload {
-  const foundedYear = parseInt(brand.foundedYear, 10);
-
-  return {
-    companyName: brand.displayName,
-    tagline: brand.tagline || undefined,
-    companyLogo: brand.logo || undefined,
-    companyBanner: brand.banner || undefined,
-    companyWebsite: brand.website || undefined,
-    companySize: brand.companySize || undefined,
-    foundedYear: Number.isFinite(foundedYear) ? foundedYear : undefined,
-    industries: brand.industries,
-    headquarters: brand.headquarters || undefined,
-    locations: brand.locations as unknown as UpdateEmployerCompanyPayload["locations"],
-    socialLinks: brand.social as unknown as UpdateEmployerCompanyPayload["socialLinks"],
-    overview: brand.overview || undefined,
-    mission: brand.mission || undefined,
-    vision: brand.vision || undefined,
-    coreValues: brand.values
-      .filter((v) => v.title.trim())
-      .map((v) => ({
-        title: v.title.trim(),
-        description: v.description?.trim() || undefined,
-        icon: v.icon || undefined,
-      })),
-    // Only persist real (uploaded/external) URLs — drop any leftover local
-    // data:/blob: previews that never made it to storage.
-    galleryPhotos: brand.gallery
-      .filter((g) => g.url && !g.url.startsWith("data:") && !g.url.startsWith("blob:"))
-      .map((g) => ({ url: g.url, caption: g.caption || undefined })),
-    cultureVideoUrl: isStoredUrl(brand.cultureVideo) ? brand.cultureVideo : undefined,
-    companyCulture: brand.cultureDescription || undefined,
-    culturePhilosophy: brand.culturePhilosophy || undefined,
-    cultureCollaboration: brand.cultureCollaboration || undefined,
-    cultureImageUrl: isStoredUrl(brand.cultureImage) ? brand.cultureImage : undefined,
-    // Flatten the benefit-categories builder into the public flat benefit list.
-    companyBenefits: brand.benefitCategories
-      .flatMap((c) => c.items.map((i) => i.label.trim()))
-      .filter(Boolean),
-    whyWorkHere: brand.whyWorkHere
-      .filter((w) => w.title.trim())
-      .map((w) => ({
-        icon: w.icon || undefined,
-        title: w.title.trim(),
-        description: w.description?.trim() || undefined,
-      })),
-    awards: brand.awards
-      .filter((a) => a.title.trim() && a.organization.trim())
-      .map((a) => ({
-        title: a.title.trim(),
-        organization: a.organization.trim(),
-        year: a.year.trim(),
-        description: a.description?.trim() || undefined,
-        badgeUrl: a.badgeUrl || undefined,
-      })),
-    diversityStatement: brand.diversityStatement || undefined,
-    deiStats: brand.deiStats
-      .filter((s) => s.label.trim() && s.value.trim())
-      .map((s) => ({ label: s.label.trim(), value: s.value.trim() })),
-    visibility: brand.visibility,
-    showJobs: brand.showJobs,
-    allowFollow: brand.allowFollow,
-  };
-}
-
-/** Merges only the defined (non-undefined) keys of `overrides` onto `base`. */
-function mergeDefined<T extends object>(base: T, overrides: Partial<T>): T {
-  const result = { ...base };
-  for (const [key, value] of Object.entries(overrides)) {
-    if (value !== undefined) {
-      (result as Record<string, unknown>)[key] = value;
-    }
-  }
-  return result;
 }
 
 const STEP_FIELDS: Partial<Record<number, (keyof EmployerBrand)[]>> = {
@@ -176,14 +67,21 @@ const STEP_FIELDS: Partial<Record<number, (keyof EmployerBrand)[]>> = {
 };
 
 const Company = () => {
+  const { user } = useAuth();
+  const ownerId = user?.role === "EMPLOYER" && user.status === "ACTIVE" && !user.provisional ? user.id : null;
+  const currentOwnerRef = useRef(ownerId);
+  currentOwnerRef.current = ownerId;
+  const hydratedOwnerRef = useRef<string | null>(null);
   const [step, setStep] = useState<number>(() => {
     try {
+      if (!ownsStoredDraft(ownerId)) return 1;
       const n = parseInt(window.localStorage.getItem(STEP_KEY) ?? "", 10);
       return n >= 1 && n <= STEPS.length ? n : 1;
     } catch { return 1; }
   });
   const [completed, setCompleted] = useState<Set<number>>(() => {
     try {
+      if (!ownsStoredDraft(ownerId)) return new Set<number>();
       const raw = window.localStorage.getItem(COMPLETED_KEY);
       return raw ? new Set<number>(JSON.parse(raw)) : new Set<number>();
     } catch { return new Set<number>(); }
@@ -192,13 +90,13 @@ const Company = () => {
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [isPublished, setIsPublished] = useState(() => {
-    try { return !!window.localStorage.getItem(PUBLISHED_KEY); } catch { return false; }
+    try { return ownsStoredDraft(ownerId) && !!window.localStorage.getItem(PUBLISHED_KEY); } catch { return false; }
   });
   const [isPublishing, setIsPublishing] = useState(false);
   const [verificationStatus, setVerificationStatus] = useState<"unverified" | "verified">("unverified");
 
   const methods = useForm<EmployerBrand>({
-    defaultValues: loadDraft(),
+    defaultValues: loadDraft(ownerId),
     resolver: zodResolver(employerBrandSchema),
     mode: "onBlur",
   });
@@ -210,12 +108,13 @@ const Company = () => {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const { unsubscribe } = methods.watch((values) => {
-      if (!methods.formState.isDirty) return;
+      if (!methods.formState.isDirty || !ownerId || hydratedOwnerRef.current !== ownerId) return;
       setSaveState("saving");
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
+        if (currentOwnerRef.current !== ownerId || hydratedOwnerRef.current !== ownerId) return;
         try {
-          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(values));
+          window.localStorage.setItem(STORAGE_KEY, serializeEmployerBrandDraft(values as EmployerBrand));
           setSaveState("saved");
           setLastSavedAt(new Date());
         } catch {
@@ -227,7 +126,7 @@ const Company = () => {
       unsubscribe();
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [methods]);
+  }, [methods, ownerId]);
 
   // Reset "saved" indicator to idle after 30s so timestamp doesn't go stale
   useEffect(() => {
@@ -245,34 +144,44 @@ const Company = () => {
     return () => window.removeEventListener("beforeunload", handler);
   }, [methods.formState.isDirty]);
 
-  // Load previously-saved core branding from the server and merge it into the draft
+  // Server values supply the base; only this account's explicit draft edits override it.
   useEffect(() => {
     let cancelled = false;
+    hydratedOwnerRef.current = null;
+    methods.reset(loadDraft(ownerId));
+    if (!ownerId) return;
     (async () => {
       try {
         const company = await getMyCompany();
-        if (cancelled) return;
+        if (cancelled || currentOwnerRef.current !== ownerId || company.userId !== ownerId) return;
         setVerificationStatus(company.verificationStatus);
 
         // The local draft is keyed by browser, not account — if it belongs to a
         // different (or unrecorded, e.g. pre-existing) signed-in user, discard it
         // so this user starts fresh.
-        const ownerId = window.localStorage.getItem(OWNER_KEY);
-        if (ownerId !== company.userId) {
+        if (!ownsStoredDraft(ownerId)) {
           window.localStorage.removeItem(STORAGE_KEY);
           window.localStorage.removeItem(PUBLISHED_KEY);
           window.localStorage.removeItem(STEP_KEY);
           window.localStorage.removeItem(COMPLETED_KEY);
-          methods.reset(defaultEmployerBrand);
           setStep(1);
           setCompleted(new Set());
           setIsPublished(false);
         }
-        window.localStorage.setItem(OWNER_KEY, company.userId);
-
-        const partial = companyToBrandPartial(company);
-        if (Object.keys(partial).length === 0) return;
-        methods.reset(mergeDefined(methods.getValues(), partial));
+        window.localStorage.setItem(OWNER_KEY, ownerId);
+        let draft: Partial<EmployerBrand> | undefined;
+        try { draft = readOwnedDraft(ownerId); } catch { /* malformed local draft */ }
+        // Retain edits made while this account's server request was in flight.
+        if (methods.formState.isDirty) {
+          const current = methods.getValues();
+          const edited: Partial<EmployerBrand> = {};
+          for (const key of Object.keys(methods.formState.dirtyFields) as (keyof EmployerBrand)[]) {
+            (edited as Record<string, unknown>)[key] = current[key];
+          }
+          draft = { ...draft, ...edited };
+        }
+        methods.reset(hydrateEmployerBrand(company, draft));
+        hydratedOwnerRef.current = ownerId;
       } catch {
         // Not signed in yet or backend unreachable — keep the local draft.
       }
@@ -281,16 +190,16 @@ const Company = () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [ownerId]);
 
   // Persist step position so the user resumes where they left off
   useEffect(() => {
-    try { window.localStorage.setItem(STEP_KEY, String(step)); } catch (_) { /* storage unavailable */ }
-  }, [step]);
+    try { if (ownsStoredDraft(ownerId)) window.localStorage.setItem(STEP_KEY, String(step)); } catch (_) { /* storage unavailable */ }
+  }, [step, ownerId]);
 
   useEffect(() => {
-    try { window.localStorage.setItem(COMPLETED_KEY, JSON.stringify([...completed])); } catch (_) { /* storage unavailable */ }
-  }, [completed]);
+    try { if (ownsStoredDraft(ownerId)) window.localStorage.setItem(COMPLETED_KEY, JSON.stringify([...completed])); } catch (_) { /* storage unavailable */ }
+  }, [completed, ownerId]);
 
   function goToStep(id: number) {
     setCompleted((prev) => {
@@ -326,14 +235,19 @@ const Company = () => {
   }
 
   async function handleSaveDraft() {
+    if (!ownerId || currentOwnerRef.current !== ownerId || hydratedOwnerRef.current !== ownerId) {
+      toast.error("Wait for your company profile to finish loading.");
+      return;
+    }
     const values = methods.getValues();
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(values));
+    window.localStorage.setItem(STORAGE_KEY, serializeEmployerBrandDraft(values as EmployerBrand));
     setSaveState("saved");
     setLastSavedAt(new Date());
     toast.success("Draft saved");
 
     try {
       const updated = await updateMyCompany(brandToCompanyPayload(values));
+      if (currentOwnerRef.current !== ownerId) return;
       setVerificationStatus(updated.verificationStatus);
       useEmployerCompanyStore.getState().setCompany(updated);
     } catch {
@@ -344,6 +258,10 @@ const Company = () => {
   async function handlePublish() {
     if (isPublishing) return;
     const valid = await methods.trigger();
+    if (!ownerId || currentOwnerRef.current !== ownerId || hydratedOwnerRef.current !== ownerId) {
+      toast.error("Wait for your company profile to finish loading.");
+      return;
+    }
     if (!valid) {
       toast.error("Some fields need attention before publishing.");
       return;
@@ -352,15 +270,16 @@ const Company = () => {
     const values = methods.getValues();
     // Keep the local draft in sync, but don't mark "Published" until the
     // server confirms the write below.
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(values));
+    window.localStorage.setItem(STORAGE_KEY, serializeEmployerBrandDraft(values as EmployerBrand));
 
     try {
       const updated = await updateMyCompany(brandToCompanyPayload(values));
+      if (currentOwnerRef.current !== ownerId) return;
       setVerificationStatus(updated.verificationStatus);
       useEmployerCompanyStore.getState().setCompany(updated);
 
       // Server confirmed — now it's truly published.
-      window.localStorage.setItem(PUBLISHED_KEY, JSON.stringify(values));
+      window.localStorage.setItem(PUBLISHED_KEY, serializeEmployerBrandDraft(values as EmployerBrand));
       window.localStorage.removeItem(STEP_KEY);
       window.localStorage.removeItem(COMPLETED_KEY);
       setSaveState("saved");

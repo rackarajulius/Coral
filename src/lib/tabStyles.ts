@@ -15,6 +15,12 @@ export const UNDERLINE_TABS_LIST =
 
 export const UNDERLINE_TAB_TRIGGER =
   "-mb-px rounded-none border-b-2 border-transparent bg-transparent px-4 py-2 " +
-  "hover:text-foreground data-[state=active]:border-orange-500 " +
-  "data-[state=active]:bg-transparent data-[state=active]:text-foreground " +
-  "data-[state=active]:shadow-none";
+  "text-muted-foreground hover:text-foreground data-[state=active]:border-orange-500 " +
+  "data-[state=active]:bg-transparent data-[state=active]:text-orange-700 " +
+  "dark:data-[state=active]:text-orange-400 data-[state=active]:shadow-none";
+
+export const EMPLOYER_ACTIVE_TAB =
+  "border-orange-500 text-orange-700 dark:text-orange-400";
+
+export const EMPLOYER_UNDERLINE_TAB_TRIGGER =
+  "employer-underline-tab " + UNDERLINE_TAB_TRIGGER;

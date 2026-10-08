@@ -6,7 +6,6 @@ import type {
   InterviewConfig,
   LiveScores,
   Question,
-  Readiness,
   SessionReport,
   TranscriptItem,
 } from "@/data/interview-coach/types";
@@ -85,10 +84,10 @@ export function getPracticeJob(jobId: string) {
   return req<PracticeJob>(`/practice-job/${encodeURIComponent(jobId)}`, undefined, { practiceJob: true });
 }
 
-export function startSession(config: InterviewConfig, questions: Question[] = []) {
+export function startSession(config: InterviewConfig) {
   return req<ServerSession>(
     "/sessions",
-    { method: "POST", body: JSON.stringify({ config, questions }) },
+    { method: "POST", body: JSON.stringify({ config }) },
     // Starting only 404s when the job being practised for is gone.
     { practiceJob: !!config.practiceJob },
   );
@@ -103,35 +102,9 @@ export function getSession(id: string) {
   return req<ServerSession>(`/sessions/${id}`);
 }
 
-export function recordAnswer(
-  id: string,
-  input: {
-    answer: AnswerRecord;
-    liveScores?: LiveScores;
-    transcript?: TranscriptItem[];
-    questionIndex?: number;
-    durationSec?: number;
-  },
-) {
-  return req<ServerSession>(`/sessions/${id}/answers`, {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
-export function completeSession(
-  id: string,
-  input: {
-    report: SessionReport;
-    overallScore: number;
-    readiness: Readiness;
-    durationSec?: number;
-    status?: "completed" | "abandoned";
-  },
-) {
+export function completeSession(id: string) {
   return req<ServerSession>(`/sessions/${id}/complete`, {
     method: "POST",
-    body: JSON.stringify(input),
   });
 }
 
@@ -201,31 +174,17 @@ export function planSession(id: string) {
 /** Scores one spoken answer; `followUp` is a probe question when warranted. */
 export function evaluateAnswer(
   id: string,
-  input: { question: Question; answer: string; durationSec: number },
+  input: { questionId: string; answer: string; durationSec: number; typed?: boolean },
 ) {
-  return req<{ scores: LiveScores; followUp: string | null; note: string }>(
+  return req<AnswerRecord["evaluation"]>(
     `/sessions/${id}/evaluate`,
     { method: "POST", body: JSON.stringify(input) },
   );
 }
 
 /** AI debrief for the finished interview, grounded in the real transcript. */
-export function buildReport(
-  id: string,
-  input: {
-    finalScores: LiveScores;
-    qa: { question: string; competency: string; answer: string }[];
-  },
-) {
-  return req<{
-    recommendation: string;
-    strengths: string[];
-    weaknesses: string[];
-    repeatedMistakes: string[];
-    focusAreas: string[];
-    competencyInsights: { id: string; insight: string }[];
-    sampleAnswers: { questionText: string; improved: string }[];
-  }>(`/sessions/${id}/report`, { method: "POST", body: JSON.stringify(input) });
+export function buildReport(id: string) {
+  return req<SessionReport>(`/sessions/${id}/report`, { method: "POST" });
 }
 
 export function listSessions() {

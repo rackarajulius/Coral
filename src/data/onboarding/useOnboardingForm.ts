@@ -129,7 +129,8 @@ export function useOnboardingForm(): OnboardingForm {
       }
 
       // Hard navigation so AuthContext + ProfileContext re-hydrate with the new data.
-      window.location.assign("/jobseeker/profile");
+      const next = new URLSearchParams(window.location.search).get('next');
+      window.location.assign(next === 'provider' ? '/provider' : '/jobseeker/profile');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Something went wrong. Please try again.");
       setSubmitting(false);

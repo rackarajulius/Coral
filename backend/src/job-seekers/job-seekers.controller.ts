@@ -83,7 +83,7 @@ export class JobSeekersController {
    * link). Method-level roles override the class default so employers can view;
    * privacy gating happens in the service.
    */
-  @Roles(UserRole.JOB_SEEKER, UserRole.EMPLOYER, UserRole.ADMIN)
+  @Roles(UserRole.JOB_SEEKER, UserRole.FREELANCER, UserRole.EMPLOYER, UserRole.ADMIN)
   @Get(':id/public-profile')
   async getPublicProfile(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: User) {
     return {

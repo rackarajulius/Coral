@@ -1,5 +1,6 @@
 import { NavLink } from "react-router-dom";
 import { cn } from "@/lib/utils";
+import { EMPLOYER_ACTIVE_TAB } from "@/lib/tabStyles";
 import { SETTINGS_TABS, SettingsTabId } from "./shared";
 
 type SettingsShellProps = {
@@ -16,7 +17,7 @@ export function SettingsShell({ children }: SettingsShellProps) {
             Your company record, security, and what Coral emails on your behalf.
           </p>
         </div>
-        <div className="top-14 z-10 -mx-6 lg:-mx-10 px-6 lg:px-10 bg-background/80 backdrop-blur border-b border-border">
+        <div className="top-14 z-10 border-b border-border bg-background/80 backdrop-blur">
           <nav className="flex gap-1 overflow-x-auto no-scrollbar">
             {SETTINGS_TABS.map((t) => (
               <NavLink
@@ -27,7 +28,7 @@ export function SettingsShell({ children }: SettingsShellProps) {
                   cn(
                     "flex items-center gap-2 px-3 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors",
                     isActive
-                      ? "border-orange-500 text-foreground"
+                      ? EMPLOYER_ACTIVE_TAB
                       : "border-transparent text-muted-foreground hover:text-foreground",
                   )
                 }

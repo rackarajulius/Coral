@@ -43,7 +43,7 @@ import {
   Eye,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { UNDERLINE_TABS_LIST, UNDERLINE_TAB_TRIGGER } from "@/lib/tabStyles";
+import { UNDERLINE_TABS_LIST, EMPLOYER_UNDERLINE_TAB_TRIGGER } from "@/lib/tabStyles";
 import { toast } from "sonner";
 import type { Candidate, Stage, TimelineEvent } from "@/data/employer/Candidates/types";
 import { STAGES } from "@/data/employer/Candidates/types";
@@ -244,7 +244,7 @@ export function CandidateDetailPanel({
               { value: "activity", label: "Activity" },
               { value: "notes", label: "Notes" },
             ].map((t) => (
-              <TabsTrigger key={t.value} value={t.value} className={UNDERLINE_TAB_TRIGGER}>
+              <TabsTrigger key={t.value} value={t.value} className={EMPLOYER_UNDERLINE_TAB_TRIGGER}>
                 {t.label}
               </TabsTrigger>
             ))}
@@ -683,7 +683,7 @@ function MessageCandidateButton({ candidateId }: { candidateId: string }) {
         try {
           const { id } = await startConversation(candidateId);
           useMessageStore.getState().setActiveConversation(id);
-          navigate("/employers/messages");
+          navigate("/employers/chat");
         } catch (e) {
           toast.error((e as Error).message || "Couldn't open the conversation");
         } finally {

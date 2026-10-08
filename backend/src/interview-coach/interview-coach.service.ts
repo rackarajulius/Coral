@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -6,8 +6,9 @@ import { User } from '../common/types/user.types';
 import { AiService } from '../services/ai/ai.service';
 import { SeekerEntitlementsService } from '../seeker-entitlements/seeker-entitlements.service';
 import {
-  BuildReportDto, CompleteSessionDto, EvaluateAnswerDto, RecordAnswerDto, StartSessionDto,
+  EvaluateAnswerDto, StartSessionDto,
 } from './dto/interview-coach.dto';
+import { buildCoachSessionReport, COACH_SCORE_KEYS, type CoachAnswer, type CoachQuestion, type CoachScores } from './report';
 import { JobPostingContext, postingContext, practiceJobIdFrom } from './practice-job';
 import { LIVE_JOB_STATUSES } from '../jobs/job-lifecycle.service';
 
@@ -82,7 +83,7 @@ export class InterviewCoachService {
     }
 
     await this.prisma.interviewCoachSession.updateMany({
-      where: { userId: user.id, status: 'active' },
+      where: { userId: user.id, status: 'active', screenId: null },
       data: { status: 'abandoned' },
     });
 
@@ -90,7 +91,7 @@ export class InterviewCoachService {
       data: {
         userId: user.id,
         config: config as Prisma.InputJsonValue,
-        questions: (dto.questions ?? []) as unknown as Prisma.InputJsonValue,
+        questions: [] as Prisma.InputJsonValue,
       },
     });
     return this.shape(session);
@@ -99,7 +100,7 @@ export class InterviewCoachService {
   /** The user's most recent still-active session, for crash/refresh recovery. */
   async getActive(user: User) {
     const session = await this.prisma.interviewCoachSession.findFirst({
-      where: { userId: user.id, status: 'active' },
+      where: { userId: user.id, status: 'active', screenId: null },
       orderBy: { startedAt: 'desc' },
     });
     return session ? this.shape(session) : null;
@@ -111,60 +112,16 @@ export class InterviewCoachService {
     return { ...this.shape(session), report: report?.report ?? null };
   }
 
-  /** Appends one answer + updates running state. Called after each question. */
-  async recordAnswer(user: User, id: string, dto: RecordAnswerDto) {
+  /** Completes a run only after its server-generated report has been saved. */
+  async complete(user: User, id: string) {
     const session = await this.owned(user, id);
-    if (session.status !== 'active') {
-      throw new BadRequestException('This interview has already finished.');
-    }
-
-    const answers = [...asArray(session.answers), dto.answer];
-    const transcript = [...asArray(session.transcript), ...(dto.transcript ?? [])];
-
-    const updated = await this.prisma.interviewCoachSession.update({
-      where: { id },
-      data: {
-        answers: answers as unknown as Prisma.InputJsonValue,
-        transcript: transcript as unknown as Prisma.InputJsonValue,
-        ...(dto.liveScores ? { liveScores: dto.liveScores as Prisma.InputJsonValue } : {}),
-        ...(dto.questionIndex !== undefined ? { questionIndex: dto.questionIndex } : {}),
-        ...(dto.durationSec !== undefined ? { durationSec: dto.durationSec } : {}),
-      },
+    const savedReport = await this.prisma.interviewCoachReport.findUnique({ where: { sessionId: id } });
+    if (!savedReport) throw new BadRequestException('Generate the interview report before completing the session.');
+    if (session.status === 'abandoned') throw new BadRequestException('This interview was abandoned.');
+    const updated = session.status === 'completed' ? session : await this.prisma.interviewCoachSession.update({
+      where: { id }, data: { status: 'completed', completedAt: new Date() },
     });
-    return this.shape(updated);
-  }
-
-  /** Finalizes the run and stores its report. Idempotent per session. */
-  async complete(user: User, id: string, dto: CompleteSessionDto) {
-    const session = await this.owned(user, id);
-
-    const [updated] = await this.prisma.$transaction([
-      this.prisma.interviewCoachSession.update({
-        where: { id },
-        data: {
-          status: dto.status ?? 'completed',
-          completedAt: new Date(),
-          ...(dto.durationSec !== undefined ? { durationSec: dto.durationSec } : {}),
-        },
-      }),
-      this.prisma.interviewCoachReport.upsert({
-        where: { sessionId: id },
-        create: {
-          sessionId: id,
-          userId: user.id,
-          overallScore: dto.overallScore,
-          readiness: dto.readiness,
-          report: dto.report as Prisma.InputJsonValue,
-        },
-        update: {
-          overallScore: dto.overallScore,
-          readiness: dto.readiness,
-          report: dto.report as Prisma.InputJsonValue,
-        },
-      }),
-    ]);
-    void session;
-    return { ...this.shape(updated), report: dto.report };
+    return { ...this.shape(updated), report: savedReport.report };
   }
 
   /** Abandons an in-progress run (user left without finishing). */
@@ -203,6 +160,7 @@ export class InterviewCoachService {
    */
   async plan(user: User, id: string) {
     const session = await this.owned(user, id);
+    if (session.status !== 'active') throw new BadRequestException('This interview has already finished.');
     const cfg = (session.config ?? {}) as Record<string, unknown>;
 
     // An employer screening is not a practice run: the questions were fixed
@@ -322,11 +280,16 @@ export class InterviewCoachService {
     if (claimed.count === 1) {
       await this.entitlements.record(user.id, 'coach.session');
     } else {
-      // Already charged: just keep the latest plan.
-      await this.prisma.interviewCoachSession.update({
-        where: { id },
-        data: { questions: withIds as unknown as Prisma.InputJsonValue },
-      });
+      // Another request won the claim. Return its stored plan so question IDs
+      // never change under answers already in progress.
+      const winner = await this.owned(user, id);
+      const stored = asArray(winner.questions);
+      if (stored.length === 0) throw new ConflictException('Interview planning is still in progress. Please retry.');
+      return {
+        greeting: addressGreeting("I'm Nova, your interview coach today. Let's pick up where we left off.", callNameFrom(cfg)),
+        questions: stored,
+        totalQuestions: stored.length,
+      };
     }
 
     const greeting = addressGreeting(generated, callNameFrom(cfg));
@@ -336,35 +299,139 @@ export class InterviewCoachService {
   /** Scores one answer with the AI and decides whether to probe deeper. */
   async evaluate(user: User, id: string, dto: EvaluateAnswerDto) {
     const session = await this.owned(user, id);
+    const previousAnswers = asArray(session.answers) as CoachAnswer[];
+    const previous = previousAnswers.find((a) => a.questionId === dto.questionId);
+    if (previous) {
+      if (previous.transcript !== dto.answer) throw new ConflictException('This question has already been answered.');
+      return previous.evaluation;
+    }
+    if (session.status !== 'active') throw new BadRequestException('This interview has already finished.');
+    const existingReport = await this.prisma.interviewCoachReport.findUnique({ where: { sessionId: id } });
+    if (existingReport) throw new BadRequestException('This interview already has a report.');
+    const mainQuestions = asArray(session.questions) as CoachQuestion[];
+    if (!mainQuestions.length || (!session.screenId && !session.meteredAt)) {
+      throw new BadRequestException('Plan the interview before answering.');
+    }
+    const last = previousAnswers[previousAnswers.length - 1];
+    const nextMainIndex = previousAnswers.filter((a) => !a.question.isFollowUp).length;
+    const question = last?.evaluation.followUp ?? mainQuestions[nextMainIndex];
+    if (!question || question.id !== dto.questionId) {
+      throw new BadRequestException('This is not the next interview question.');
+    }
     const cfg = (session.config ?? {}) as Record<string, unknown>;
-    const q = dto.question as { text?: string; competency?: string; expectedSec?: number };
-
     const result = await this.ai.evaluateCoachAnswer({
       role: String(cfg.role ?? 'the role'),
-      question: String(q.text ?? ''),
-      competency: String(q.competency ?? 'communication'),
+      question: question.text,
+      competency: question.competency,
       answer: dto.answer,
       durationSec: dto.durationSec,
-      expectedSec: Number(q.expectedSec ?? 120),
+      expectedSec: question.expectedSec,
     });
-    return result;
+
+    // Recheck after the model call: a request retried while its first response
+    // was in flight must not append a second copy of the answer.
+    const fresh = await this.owned(user, id);
+    const freshAnswers = asArray(fresh.answers) as CoachAnswer[];
+    const saved = freshAnswers.find((a) => a.questionId === dto.questionId);
+    if (saved) {
+      if (saved.transcript !== dto.answer) throw new ConflictException('This question has already been answered.');
+      return saved.evaluation;
+    }
+    if (fresh.status !== 'active') throw new BadRequestException('This interview has already finished.');
+    const priorScores = this.coachScores(fresh.liveScores);
+    const scores = {} as CoachScores;
+    const delta: Partial<CoachScores> = {};
+    for (const key of COACH_SCORE_KEYS) {
+      const next = Math.round(priorScores[key] * 0.6 + result.scores[key] * 0.4);
+      scores[key] = next;
+      if (next !== priorScores[key]) delta[key] = next - priorScores[key];
+    }
+    const usedFollowUps = freshAnswers.filter((a) => !!a.evaluation.followUp).length;
+    const followUp = !session.screenId && result.followUp && usedFollowUps < Math.ceil(mainQuestions.length / 3)
+      ? {
+          id: `fu-${question.id}-${usedFollowUps + 1}`,
+          text: result.followUp,
+          competency: question.competency,
+          keywords: question.keywords ?? [],
+          expectedSec: Math.round(question.expectedSec * 0.6),
+          isFollowUp: true,
+          parentId: question.id,
+        }
+      : undefined;
+    const evaluation = {
+      scores, delta,
+      fillerCount: (dto.answer.match(/\b(?:um+|uh+|erm+|like|you know|basically|actually|sort of|kind of|i mean)\b/gi) ?? []).length,
+      wordCount: dto.answer.trim() ? dto.answer.trim().split(/\s+/).length : 0,
+      followUp,
+    };
+    const answer: CoachAnswer = {
+      questionId: question.id,
+      transcript: dto.answer,
+      durationSec: dto.durationSec,
+      typed: dto.typed ?? false,
+      question,
+      evaluation,
+      askedAt: new Date().toISOString(),
+    };
+    const committed = await this.prisma.interviewCoachSession.updateMany({
+      where: { id, status: 'active', updatedAt: fresh.updatedAt },
+      data: {
+        answers: [...freshAnswers, answer] as unknown as Prisma.InputJsonValue,
+        transcript: [...asArray(fresh.transcript), { speaker: 'you', text: dto.answer, at: answer.askedAt }] as Prisma.InputJsonValue,
+        liveScores: scores as unknown as Prisma.InputJsonValue,
+        questionIndex: nextMainIndex + (question.isFollowUp ? 0 : 1),
+        durationSec: fresh.durationSec + Math.round(dto.durationSec),
+      },
+    });
+    if (committed.count !== 1) {
+      const latest = await this.owned(user, id);
+      const retry = (asArray(latest.answers) as CoachAnswer[]).find((a) => a.questionId === dto.questionId);
+      if (retry?.transcript === dto.answer) return retry.evaluation;
+      throw new ConflictException('This interview changed while the answer was being saved. Please retry.');
+    }
+    return evaluation;
   }
 
-  /** Builds the end-of-interview report from the real transcript. */
-  async report(user: User, id: string, dto: BuildReportDto) {
+  /** Builds and stores one authoritative report from persisted answers. */
+  async report(user: User, id: string) {
     const session = await this.owned(user, id);
+    const existing = await this.prisma.interviewCoachReport.findUnique({ where: { sessionId: id } });
+    if (existing) return existing.report;
+    if (session.status !== 'active') throw new BadRequestException('This interview has already finished.');
+    const answers = asArray(session.answers) as CoachAnswer[];
+    if (answers.length === 0) throw new BadRequestException('Answer at least one question before requesting a report.');
     const cfg = (session.config ?? {}) as Record<string, unknown>;
-
-    return this.ai.buildCoachReport({
+    const scores = this.coachScores(session.liveScores);
+    const insights = await this.ai.buildCoachReport({
       role: String(cfg.role ?? 'the role'),
       type: String(cfg.type ?? 'mixed'),
-      finalScores: dto.finalScores,
-      qa: dto.qa.map((x) => ({
-        question: String((x as { question?: string }).question ?? ''),
-        competency: String((x as { competency?: string }).competency ?? 'communication'),
-        answer: String((x as { answer?: string }).answer ?? ''),
-      })),
+      finalScores: { ...scores },
+      qa: answers.map((a) => ({ question: a.question.text, competency: a.question.competency, answer: a.transcript })),
+    }).catch(() => ({
+      recommendation: '', strengths: [], weaknesses: [], repeatedMistakes: [], focusAreas: [],
+      competencyInsights: [], sampleAnswers: [],
+    }));
+    const latest = await this.owned(user, id);
+    if (latest.status !== 'active' || latest.updatedAt.getTime() !== session.updatedAt.getTime()) {
+      throw new ConflictException('The interview changed while the report was being prepared. Please retry.');
+    }
+    const report = buildCoachSessionReport(id, cfg, answers, scores, insights);
+    const saved = await this.prisma.interviewCoachReport.upsert({
+      where: { sessionId: id },
+      create: { sessionId: id, userId: user.id, overallScore: report.overallScore, readiness: report.readiness, report: report as unknown as Prisma.InputJsonValue },
+      update: {},
     });
+    return saved.report;
+  }
+
+  private coachScores(value: Prisma.JsonValue | null): CoachScores {
+    const source = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+    const scores = {} as CoachScores;
+    for (const key of COACH_SCORE_KEYS) {
+      const number = source[key];
+      scores[key] = typeof number === 'number' && Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : 50;
+    }
+    return scores;
   }
 
   /* ---------------------------- practice for a job ---------------------------- */

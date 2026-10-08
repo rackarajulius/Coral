@@ -261,6 +261,38 @@ export class StorageService implements OnModuleInit {
   }
 
   /**
+   * Strict, paginated cleanup for account closure. Unlike routine replacement
+   * cleanup, an unavailable bucket must not silently leave private documents.
+   * `namePrefix` scopes the shared profile-media folders to one user's files.
+   */
+  async deleteFilesUnder(prefix: string, bucket: string, namePrefix?: string): Promise<void> {
+    if (!this.client) throw new Error('Account file cleanup is unavailable');
+    const paths: string[] = [];
+    const client = this.client;
+    const collect = async (folder: string, requiredPrefix?: string): Promise<void> => {
+      for (let offset = 0; ; offset += 100) {
+        const { data, error } = await client.storage.from(bucket).list(folder, { limit: 100, offset });
+        if (error) throw new Error(`Account file cleanup failed for ${bucket}`);
+        const entries = data ?? [];
+        for (const entry of entries) {
+          if (requiredPrefix && !entry.name.startsWith(requiredPrefix)) continue;
+          const path = `${folder}/${entry.name}`;
+          if (entry.id) paths.push(path);
+          else await collect(path);
+        }
+        if (entries.length < 100) break;
+      }
+    };
+    await collect(prefix, namePrefix);
+    // Collect the whole tree before removing so disappearing virtual folders
+    // and files cannot shift pagination offsets in any ancestor.
+    for (let index = 0; index < paths.length; index += 100) {
+      const { error } = await this.client.storage.from(bucket).remove(paths.slice(index, index + 100));
+      if (error) throw new Error(`Account file cleanup failed for ${bucket}`);
+    }
+  }
+
+  /**
    * Uploads a file to a private bucket and returns its storage *path* (not a
    * URL — private files have no public URL). Read access is granted later via
    * {@link createSignedUrl}.

@@ -73,10 +73,17 @@ const ResumeSection = () => {
     void queryClient.invalidateQueries({ queryKey: ['my-resume-summary'] });
   };
 
+  const invalidateResumeMatches = async () => {
+    // Discard matches against the replaced/deleted resume, including an older in-flight run.
+    await queryClient.cancelQueries({ queryKey: ['resume-matcher'] });
+    await queryClient.invalidateQueries({ queryKey: ['resume-matcher'], refetchType: 'none' });
+  };
+
   const upload = useMutation({
     mutationFn: (chosen: File) => parseResume(chosen),
     onSuccess: (result) => {
       refresh();
+      void invalidateResumeMatches();
       toast.success('Resume saved');
       // Straight into review: the file is stored either way, and what it says
       // about your history is a separate, opt-in decision.
@@ -98,6 +105,7 @@ const ResumeSection = () => {
     mutationFn: deleteMyResumeFile,
     onSuccess: () => {
       refresh();
+      void invalidateResumeMatches();
       setConfirmDelete(false);
       toast.success('Resume removed');
     },

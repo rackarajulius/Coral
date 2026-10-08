@@ -42,6 +42,7 @@ function ReviewRow({ review }: { review: CompanyReviews["reviews"][number] }) {
       toast.success("Reply published", { description: "It appears under the review publicly." });
       setOpen(false);
       invalidate();
+      queryClient.invalidateQueries({ queryKey: ["employer-review-overview"] });
     },
     onError: (e) => toast.error((e as Error).message || "Couldn't publish your reply"),
   });
@@ -180,7 +181,7 @@ export function EmployerReviewList() {
         <p className="mt-1 text-xs text-muted-foreground">
           {data.total === 0
             ? "No reviews yet."
-            : `${data.total} review${data.total === 1 ? "" : "s"} · ${data.averageRating}/5 average`}
+            : `${data.total} review${data.total === 1 ? "" : "s"} · ${data.averageRating}/5 average${data.total > data.reviews.length ? ` · Showing latest ${data.reviews.length}` : ""}`}
         </p>
       </div>
 

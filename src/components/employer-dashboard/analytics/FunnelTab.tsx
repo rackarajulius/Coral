@@ -3,6 +3,8 @@ import { Info } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { getFunnel, type FunnelStage } from "@/lib/api/employerAnalytics";
+import { useAnalyticsRange } from "./AnalyticsRange";
+import { Button } from "@/components/ui/button";
 
 function Card({ className, children }: { className?: string; children: React.ReactNode }) {
   return (
@@ -19,8 +21,8 @@ function Card({ className, children }: { className?: string; children: React.Rea
  * reach and pipeline are measured over different periods, so a shared scale
  * would draw a comparison that isn't there.
  */
-function StageList({ stages }: { stages: FunnelStage[] }) {
-  const max = stages[0]?.volume ?? 0;
+function StageList({ stages, distribution = false }: { stages: FunnelStage[]; distribution?: boolean }) {
+  const max = distribution ? Math.max(0, ...stages.map((stage) => stage.volume)) : stages[0]?.volume ?? 0;
   return (
     <div className="mt-4 space-y-2">
       {stages.map((s, i) => {
@@ -29,13 +31,13 @@ function StageList({ stages }: { stages: FunnelStage[] }) {
           <div key={s.stage} className="rounded-lg p-2">
             <div className="mb-1 flex items-center justify-between text-xs">
               <span className="font-medium text-foreground">
-                {i + 1}. {s.stage}
+                {distribution ? s.stage : `${i + 1}. ${s.stage}`}
               </span>
               <div className="flex items-center gap-3 text-muted-foreground">
                 <span className="tabular-nums">{s.volume.toLocaleString()}</span>
-                <span className="tabular-nums">
+                {!distribution && <span className="tabular-nums">
                   {s.conversionFromPrev === null ? "—" : `${s.conversionFromPrev}% of previous`}
-                </span>
+                </span>}
               </div>
             </div>
             <div className="relative h-2 w-full overflow-hidden rounded-md bg-secondary">
@@ -60,10 +62,11 @@ function Note({ children }: { children: React.ReactNode }) {
   );
 }
 
-const FunnelTab = () => {
+const FunnelTab = ({ selectedJob, onClearJob }: { selectedJob: { id: string; title: string } | null; onClearJob: () => void }) => {
+  const { days } = useAnalyticsRange();
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["employer-analytics-funnel", 30],
-    queryFn: () => getFunnel(30),
+    queryKey: ["employer-analytics-funnel", days, selectedJob?.id ?? null],
+    queryFn: () => getFunnel(days, selectedJob?.id),
     retry: false,
   });
 
@@ -89,6 +92,10 @@ const FunnelTab = () => {
 
   return (
     <div className="grid gap-6">
+      {selectedJob && <div className="flex items-center justify-between rounded-lg border border-border bg-card p-3 text-sm">
+        <span>Showing {selectedJob.title}</span>
+        <Button size="sm" variant="outline" onClick={onClearJob}>All jobs</Button>
+      </div>}
       {/*
         Two separate cards on purpose. Reach comes from page tracking that
         started recently; pipeline comes from application records covering all
@@ -112,7 +119,7 @@ const FunnelTab = () => {
       </Card>
 
       <Card className="p-6">
-        <h2 className="text-base font-semibold">Hiring pipeline</h2>
+        <h2 className="text-base font-semibold">Current application status</h2>
         <p className="text-xs text-muted-foreground">
           What happened to applications you received in this period.
         </p>
@@ -121,12 +128,9 @@ const FunnelTab = () => {
             No applications in this period.
           </p>
         ) : (
-          <StageList stages={data.pipeline} />
+          <StageList stages={data.pipeline} distribution />
         )}
-        <Note>
-          Stages are cumulative: someone who reached Interviewed is also counted in
-          Submitted and Screened.
-        </Note>
+        <Note>{data.notes.pipeline}</Note>
       </Card>
     </div>
   );

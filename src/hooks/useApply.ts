@@ -4,6 +4,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
 import { getMyAppliedJobs, type MyJobApplication } from "@/lib/api/applications";
 import { trackEvent } from "@/lib/api/analyticsEvents";
+import { createExternalApplication } from "@/lib/api/externalApplications";
+import { toast } from "sonner";
 
 const EMPTY: Map<string, MyJobApplication> = new Map();
 
@@ -21,7 +23,7 @@ export function useApply() {
   const { user, isAuthenticated } = useAuth();
   const { requireAuth } = useAuthModal();
   const queryClient = useQueryClient();
-  const [target, setTarget] = useState<{ id: string; title: string; company: string } | null>(null);
+  const [target, setTarget] = useState<{ id: string; title: string; company: string; location?: string; description?: string } | null>(null);
 
   // Per account: a shared browser must never show one person's applications to
   // the next. Signing out clears the cache (see signOutHooks), and the query is
@@ -51,6 +53,8 @@ export function useApply() {
       applicationMethod?: "internal" | "external" | "email" | null;
       applicationUrl?: string | null;
       applicationEmail?: string | null;
+      location?: string;
+      description?: string;
     }) => {
       // Recorded before branching so every route counts equally. For external
       // and email applications this is the LAST thing measurable — the rest of
@@ -59,20 +63,39 @@ export function useApply() {
 
       if (job.applicationMethod === "external" && job.applicationUrl) {
         window.open(job.applicationUrl, "_blank", "noopener,noreferrer");
+        if (isAuthenticated && user?.role === "JOB_SEEKER") {
+          void createExternalApplication({
+            sourceKey: `coral:${job.id}`,
+            title: job.title,
+            company: job.company,
+            url: job.applicationUrl,
+          }).then(() => {
+            void queryClient.invalidateQueries({ queryKey: ["external-applications"] });
+            toast.success("Saved to External tracker. Mark applied after you submit.");
+          }).catch(() => toast.error("Couldn't save this job to External tracker"));
+        }
         return;
       }
       if (job.applicationMethod === "email" && job.applicationEmail) {
         const subject = encodeURIComponent(`Application: ${job.title}`);
         window.location.href = `mailto:${job.applicationEmail}?subject=${subject}`;
+        if (isAuthenticated && user?.role === "JOB_SEEKER") {
+          void createExternalApplication({
+            sourceKey: `coral:${job.id}`,
+            title: job.title,
+            company: job.company,
+          }).then(() => void queryClient.invalidateQueries({ queryKey: ["external-applications"] }))
+            .catch(() => toast.error("Couldn't save this job to External tracker"));
+        }
         return;
       }
       requireAuth(() => {
         // After the auth gate: the dialog is genuinely open and being filled in.
         trackEvent("apply_started", { jobId: job.id });
-        setTarget({ id: job.id, title: job.title, company: job.company });
+        setTarget({ id: job.id, title: job.title, company: job.company, location: job.location, description: job.description });
       });
     },
-    [requireAuth],
+    [requireAuth, isAuthenticated, user?.role, queryClient],
   );
 
   /** Written straight into the cache, so every job card sees it at once. */

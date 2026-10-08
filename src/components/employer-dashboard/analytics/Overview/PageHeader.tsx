@@ -1,5 +1,3 @@
-import { Button } from '@/components/ui/button';
-import { Download } from 'lucide-react';
 import FiltersBar from '../FilterBar';
 import React from 'react'
 
@@ -15,11 +13,6 @@ const PageHeader = () => {
             Track employer brand performance, hiring outcomes, candidate engagement, and talent
             market trends from one unified analytics workspace.
           </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="default" className="gap-2">
-            <Download className="h-4 w-4" /> Export
-          </Button>
         </div>
       </div>
       <FiltersBar />

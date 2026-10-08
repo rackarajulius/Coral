@@ -7,13 +7,14 @@ import {
 } from '@nestjs/common';
 import { CronExpression } from '@nestjs/schedule';
 import { ExclusiveCron } from '../common/scheduling/exclusive-cron';
-import { CompanyAuditCategory, OfferStatus } from '@prisma/client';
+import { CompanyAuditCategory, OfferStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
 import { CompanyAuditService } from '../company/company-audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { User } from '../common/types/user.types';
 import { OfferSignalsService } from './offer-signals.service';
+import { stageFromApplicationStatus } from '../common/pipeline-stage';
 
 export interface OfferInput {
   salaryAmount?: number | null;
@@ -122,10 +123,26 @@ export class OffersService {
       throw new BadRequestException('That deadline has already passed. Update it before sending.');
     }
 
-    const updated = await this.prisma.offer.update({
-      where: { id: offerId },
-      data: { status: OfferStatus.SENT, sentAt: new Date() },
-      include: { application: { select: { applicantId: true, job: { select: { title: true } } } } },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      // Claim the transition in the database. Two sends must not both notify
+      // the candidate, even when both requests initially read the same draft.
+      const claimed = await tx.offer.updateMany({
+        where: {
+          id: offerId,
+          status: OfferStatus.DRAFT,
+          OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+        },
+        data: { status: OfferStatus.SENT, sentAt: now },
+      });
+      if (claimed.count !== 1) {
+        throw new BadRequestException('That draft has changed or expired. Refresh before sending.');
+      }
+      await this.moveApplication(tx, offer.applicationId, 'offered', now);
+      return tx.offer.findUniqueOrThrow({
+        where: { id: offerId },
+        include: { application: { select: { applicantId: true, job: { select: { title: true } } } } },
+      });
     });
 
     await this.notify(
@@ -145,10 +162,13 @@ export class OffersService {
     if (offer.status !== OfferStatus.SENT) {
       throw new BadRequestException('Only a sent offer can be withdrawn.');
     }
-    await this.prisma.offer.update({
-      where: { id: offerId },
+    const withdrawn = await this.prisma.offer.updateMany({
+      where: { id: offerId, status: OfferStatus.SENT },
       data: { status: OfferStatus.WITHDRAWN, respondedAt: new Date() },
     });
+    if (withdrawn.count !== 1) {
+      throw new BadRequestException('That offer is no longer open.');
+    }
 
     const application = await this.prisma.application.findUnique({
       where: { id: offer.applicationId },
@@ -219,17 +239,21 @@ export class OffersService {
     }
 
     const status = accept ? OfferStatus.ACCEPTED : OfferStatus.DECLINED;
-    await this.prisma.$transaction([
-      this.prisma.offer.update({
-        where: { id: offerId },
-        data: { status, respondedAt: new Date() },
-      }),
-      // The pipeline should not still say "interviewing" after someone accepts.
-      this.prisma.application.update({
-        where: { id: offer.applicationId },
-        data: { status: accept ? 'hired' : 'rejected' },
-      }),
-    ]);
+    await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const claimed = await tx.offer.updateMany({
+        where: {
+          id: offerId,
+          status: OfferStatus.SENT,
+          OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+        },
+        data: { status, respondedAt: now },
+      });
+      if (claimed.count !== 1) {
+        throw new BadRequestException('That offer is no longer open.');
+      }
+      await this.moveApplication(tx, offer.applicationId, accept ? 'hired' : 'rejected', now);
+    });
 
     await this.notify(
       offer.application.job.postedById,
@@ -260,6 +284,32 @@ export class OffersService {
   }
 
   /* --------------------------------- helpers -------------------------------- */
+
+  /** Commit the offer, application and linked sourcing stage together. */
+  private async moveApplication(
+    tx: Prisma.TransactionClient,
+    applicationId: string,
+    status: 'offered' | 'hired' | 'rejected',
+    now: Date,
+  ) {
+    const moved = await tx.application.updateMany({
+      where: { id: applicationId, status: { notIn: ['hired', 'rejected', 'withdrawn'] } },
+      data: { status },
+    });
+    if (moved.count !== 1) {
+      // Throwing also rolls back the offer transition: a stale offer cannot
+      // reopen a candidacy that the applicant or hiring team already closed.
+      throw new BadRequestException('This application is already closed.');
+    }
+    await tx.application.updateMany({
+      where: { id: applicationId, firstRespondedAt: null },
+      data: { firstRespondedAt: now },
+    });
+    await tx.shortlistItem.updateMany({
+      where: { applicationId },
+      data: { stage: stageFromApplicationStatus(status) },
+    });
+  }
 
   private normalize(input: OfferInput) {
     const amount = input.salaryAmount;

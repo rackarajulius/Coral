@@ -4,6 +4,8 @@ import {
   BarChart3, Building2, CalendarPlus, ChevronRight, ImagePlus, Loader2, Search, Video, X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { Link } from "react-router-dom";
+import { getMarketplaceCapabilities } from "@/lib/api/marketplace";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -19,10 +21,11 @@ import {
 } from "@/components/community/tides/TideFields";
 import { useAuth } from "@/contexts/AuthContext";
 import {
-  createPost, getCompanyVoice, getGifStatus, listSpaces, uploadPostMedia,
-  type MediaKind, type Space,
+  createPost, getAnnouncementOptions, getCompanyVoice, getGifStatus, listSpaces, uploadPostMedia,
+  type MediaKind, type PostPurpose, type Space,
 } from "@/lib/api/community";
 import { GifPicker } from "./GifPicker";
+import { postPurposeLabels } from "./CommunityLinkedCard";
 
 const MAX_LENGTH = 5000;
 /** Four attachments. Past that a post is an album, and reads like one. */
@@ -128,7 +131,7 @@ export function PostComposer({
       </button>
 
       {open && (
-        <ComposerDialog spaceId={spaceId} spaceName={spaceName} onClose={() => setOpen(false)} />
+        <ComposerDialog key={user.id} spaceId={spaceId} spaceName={spaceName} onClose={() => setOpen(false)} />
       )}
     </>
   );
@@ -155,6 +158,10 @@ function ComposerDialog({
   const [uploading, setUploading] = useState(false);
   const [poll, setPoll] = useState<string[] | null>(null);
   const [gifOpen, setGifOpen] = useState(false);
+  const [purpose, setPurpose] = useState<PostPurpose>("general");
+  const [selectedReference, setSelectedReference] = useState("");
+  const [tide, setTide] = useState<TideDraft | null>(null);
+  const [selectedCompanyId, setSelectedCompanyId] = useState("");
   /**
    * Posting in the company's name rather than your own.
    *
@@ -162,13 +169,38 @@ function ComposerDialog({
    * query decides whether to show the choice, never whether it is allowed.
    */
   const companyVoice = useQuery({
-    queryKey: ["community-company-voice"],
+    queryKey: ["community-company-voice", user?.id],
     queryFn: getCompanyVoice,
     staleTime: 10 * 60_000,
     retry: false,
   });
   const [asCompany, setAsCompany] = useState(false);
-  const speakingAs = asCompany ? companyVoice.data : null;
+  const capabilities = useQuery({
+    queryKey: ["marketplace-capabilities", user?.id],
+    queryFn: ({ signal }) => getMarketplaceCapabilities(user!, signal),
+    enabled: !!user,
+    retry: false,
+  });
+  const structured = purpose === "service_announcement" || purpose === "opportunity";
+  const listingsEnabled = capabilities.data?.listingWritesEnabled === true;
+  const usesListingIdentity = !tide && listingsEnabled && (structured || purpose === "showcase");
+  const publishingCompanyId = usesListingIdentity ? selectedCompanyId || (asCompany ? companyVoice.data?.id : undefined) : undefined;
+  const publishingAsCompany = usesListingIdentity ? !!publishingCompanyId : asCompany;
+  const speakingAs = usesListingIdentity && publishingCompanyId
+    ? capabilities.data?.companies.find((company) => company.id === publishingCompanyId) || null
+    : publishingAsCompany ? companyVoice.data : null;
+  const options = useQuery({
+    queryKey: ["community-announcement-options", user?.id, publishingAsCompany, publishingCompanyId],
+    queryFn: ({ signal }) => getAnnouncementOptions(publishingAsCompany, user?.supabaseId, signal, publishingCompanyId),
+    enabled: !!user && listingsEnabled && (structured || purpose === "showcase"),
+    retry: false,
+  });
+  const referenceOptions = purpose === "opportunity"
+    ? [...(options.data?.projects ?? []), ...(options.data?.jobs ?? [])]
+    : options.data?.services ?? [];
+  const reference = referenceOptions.find((record) => `${record.type}:${record.id}` === selectedReference);
+  const referenceReady = (!structured || !!reference) && (!selectedReference || !!reference) && (!structured || listingsEnabled)
+    && (!publishingAsCompany || !!speakingAs) && (!usesListingIdentity || !capabilities.isError);
 
   /**
    * A tide is composed here rather than on its own page.
@@ -178,7 +210,6 @@ function ComposerDialog({
    * So the composer builds both, and the space picker and company voice are
    * already here.
    */
-  const [tide, setTide] = useState<TideDraft | null>(null);
   const photoRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
@@ -222,9 +253,11 @@ function ComposerDialog({
         content: content.trim(),
         mediaUrls: media.map((m) => m.url),
         postType: "TEXT",
+        purpose,
+        ...(reference ? { reference: { type: reference.type, id: reference.id } } : {}),
         ...(poll ? { poll: { options: poll.filter((o) => o.trim()) } } : {}),
-        ...(asCompany ? { asCompany: true } : {}),
-      });
+        ...(publishingAsCompany ? { asCompany: true, ...(publishingCompanyId ? { companyId: publishingCompanyId } : {}) } : {}),
+      }, user?.supabaseId);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["community-posts"] });
@@ -274,7 +307,7 @@ function ComposerDialog({
   // A poll needs two real choices, so the button waits for them rather than
   // letting the server refuse a post someone thought they had finished.
   const pollReady = !poll || poll.filter((o) => o.trim()).length >= 2;
-  const canPost = !!content.trim() && !!target && pollReady && !uploading && !post.isPending;
+  const canPost = !!content.trim() && !!target && pollReady && referenceReady && !uploading && !post.isPending;
   const dirty = !!content.trim() || media.length > 0 || !!poll;
 
   return (
@@ -330,10 +363,20 @@ function ComposerDialog({
 
             <div className="min-w-0 flex-1 pb-2">
               <div className="flex items-center gap-1 text-sm">
-                {companyVoice.data ? (
+                {usesListingIdentity && capabilities.data?.companies.length ? (
+                  <div className="min-w-0 max-w-[65%]">
+                    <label htmlFor="post-publishing-company" className="sr-only">Publishing identity</label>
+                    <select id="post-publishing-company" value={publishingCompanyId || ""} onChange={(event) => {
+                      setSelectedCompanyId(event.target.value); setAsCompany(!!event.target.value); setSelectedReference("");
+                    }} className="w-full rounded-lg border border-border bg-background px-2 py-1 text-sm">
+                      <option value="">{name}</option>
+                      {capabilities.data.companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
+                    </select>
+                  </div>
+                ) : companyVoice.data ? (
                   <button
                     type="button"
-                    onClick={() => setAsCompany((v) => !v)}
+                    onClick={() => { setAsCompany((v) => !v); setSelectedCompanyId(""); setSelectedReference(""); }}
                     className="rounded-full border border-border px-2 py-0.5 font-medium hover:bg-muted"
                     title={
                       asCompany
@@ -357,6 +400,29 @@ function ComposerDialog({
                   This will be published by {speakingAs.name}. Your name stays on it as the
                   person who wrote it.
                 </p>
+              )}
+
+              {!tide && (
+                <div className="mt-3 space-y-2 rounded-xl border border-border p-3">
+                  <label className="block text-xs font-medium" htmlFor="post-purpose">What are you sharing?</label>
+                  <select id="post-purpose" value={purpose} onChange={(event) => {
+                    const next = event.target.value as PostPurpose;
+                    if (!["service_announcement", "opportunity", "showcase"].includes(next) && selectedCompanyId && selectedCompanyId !== companyVoice.data?.id) setAsCompany(false);
+                    setPurpose(next); setSelectedReference("");
+                  }} className="w-full rounded-lg border border-border bg-background px-2 py-2 text-sm">
+                    {(["general", "question", "showcase", ...(listingsEnabled ? ["service_announcement", "opportunity"] : [])] as PostPurpose[]).map((value) => <option key={value} value={value}>{postPurposeLabels[value]}</option>)}
+                  </select>
+                  {listingsEnabled && (structured || purpose === "showcase") && (
+                    <>
+                      <label className="block text-xs font-medium" htmlFor="post-reference">{purpose === "opportunity" ? "Your open project brief or live job" : "Your published service"}{!structured && " (optional)"}</label>
+                      <select id="post-reference" value={selectedReference} onChange={(event) => setSelectedReference(event.target.value)} disabled={options.isPending || options.isError} className="w-full rounded-lg border border-border bg-background px-2 py-2 text-sm disabled:opacity-50">
+                        <option value="">{options.isPending ? "Loading your listings…" : "Choose a listing"}</option>
+                        {referenceOptions.map((record) => <option key={`${record.type}:${record.id}`} value={`${record.type}:${record.id}`}>{record.title}{record.type === "job" ? " · Job" : record.type === "project" ? " · Project" : ""}</option>)}
+                      </select>
+                      {options.isError ? <p className="text-xs text-destructive">{(options.error as Error).message} <button type="button" onClick={() => void options.refetch()} className="underline">Try again</button></p> : !options.isPending && referenceOptions.length === 0 ? <p className="text-xs text-muted-foreground">No published listings are available for this identity. <Link to="/marketplace/manage" className="text-primary underline">Manage listings</Link>{!!capabilities.data?.companies.length && !publishingAsCompany && " or choose your company above for company opportunities."}</p> : <p className="text-xs text-muted-foreground">The card follows the current listing. Its link becomes unavailable when the listing closes or is withdrawn.</p>}
+                    </>
+                  )}
+                </div>
               )}
 
               <textarea
@@ -532,7 +598,10 @@ function ComposerDialog({
                   label="Tide"
                   busy={false}
                   disabled={media.length > 0 || !!poll}
-                  onClick={() => setTide(tide ? null : emptyTide())}
+                  onClick={() => {
+                    if (!tide && selectedCompanyId && selectedCompanyId !== companyVoice.data?.id) setAsCompany(false);
+                    setSelectedCompanyId(""); setTide(tide ? null : emptyTide()); setPurpose("general"); setSelectedReference("");
+                  }}
                 />
 
                 {uploading && (

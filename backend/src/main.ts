@@ -15,7 +15,8 @@ async function bootstrap() {
 
   try {
     // Start server with explicit configuration
-    const server = await app.listen(port);
+    const host = configService.get<string>('HOST');
+    const server = host ? await app.listen(port, host) : await app.listen(port);
 
     // Minimal startup message
     const logger = new Logger('Bootstrap');

@@ -424,6 +424,9 @@ export class JobsService {
     this.assertSalaryRange(nextSalaryMin, nextSalaryMax);
 
     const nextStatus = dto.status ? this.normalizeStatus(dto.status) : undefined;
+    if (nextStatus && nextStatus !== existing.status && actor.role !== UserRole.ADMIN) {
+      this.assertStatusTransition(this.normalizeStatus(existing.status), nextStatus);
+    }
     const movedToActive = nextStatus === 'active' && existing.status !== 'active';
 
     const nextTitle = dto.title?.trim();
@@ -472,7 +475,7 @@ export class JobsService {
         ...(dto.featured !== undefined ? { featured: dto.featured } : {}),
         ...(dto.urgent !== undefined ? { urgent: dto.urgent } : {}),
         ...(nextStatus !== undefined ? { status: nextStatus } : {}),
-        ...(movedToActive ? { publishedAt: new Date() } : {}),
+        ...(movedToActive ? { publishedAt: existing.publishedAt ?? new Date() } : {}),
       },
       include: this.buildJobInclude(),
     });

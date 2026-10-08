@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, ArrowUpDown, ChevronDown, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -251,7 +252,9 @@ function CommentRow({
 
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-x-1.5 text-xs">
-            <span className="font-medium">{authorName(comment.author)}</span>
+            {comment.authorIdentity?.profileUrl ? (
+              <Link to={comment.authorIdentity.profileUrl} className="font-medium hover:underline">{authorName(comment.author)}</Link>
+            ) : <span className="font-medium">{authorName(comment.author)}</span>}
             {/* The backend has always resolved this for replies as well as
                 comments — a verified employer answering a question is exactly
                 what the badge is for — and nothing rendered it until now. */}

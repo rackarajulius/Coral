@@ -6,9 +6,8 @@ import type { AuthorIdentity } from "@/lib/api/community";
 /**
  * Who someone is, under their name.
  *
- * The badge is the point. It appears only when the backend could prove the
- * employment from an active company membership — never from a headline someone
- * typed — so it means something wherever it shows up.
+ * The badge confirms active company membership. Job titles remain the
+ * person's description; membership does not verify employment or skills.
  *
  * When that company has a page, the whole line is a link to it. It used to be
  * plain text while the backend resolved and sent the company all the same: a
@@ -26,10 +25,9 @@ export function IdentityLine({
   const body = (
     <>
       {identity.verified && (
-        <BadgeCheck
-          className="h-3.5 w-3.5 shrink-0 text-coral"
-          aria-label="Employment verified"
-        />
+        <span title="Active company membership confirmed" className="inline-flex shrink-0">
+          <BadgeCheck className="h-3.5 w-3.5 text-coral" aria-label="Active company membership confirmed" />
+        </span>
       )}
       {identity.label}
     </>

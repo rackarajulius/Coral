@@ -1,34 +1,12 @@
-import { Injectable, NotImplementedException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { MarketplaceService } from '../marketplace/marketplace.service';
 import { CreateGigDto, ListGigsQueryDto } from './dto/gig.dto';
 
 @Injectable()
 export class GigsService {
-  listGigs(query: ListGigsQueryDto) {
-    const page = query.page ?? 1;
-    const limit = Math.min(query.limit ?? 20, 100);
-    return {
-      data: [],
-      meta: {
-        page,
-        limit,
-        total: 0,
-        totalPages: 0,
-      },
-      message: 'Gigs module scaffolded. Full persistence is pending gigs schema implementation.',
-    };
-  }
-
-  getGigById(id: string) {
-    return {
-      id,
-      message: 'Gigs module scaffolded. Full persistence is pending gigs schema implementation.',
-    };
-  }
-
-  createGig(_userId: string, _dto: CreateGigDto) {
-    throw new NotImplementedException(
-      'Create gig is planned in backend-architecture.md after gigs tables are added to Prisma schema.',
-    );
-  }
+  constructor(private readonly marketplace: MarketplaceService) {}
+  listGigs(query: ListGigsQueryDto) { return this.marketplace.list('project', query); }
+  getGigById(id: string) { return this.marketplace.getPublic('project', id); }
+  createGig(userId: string, dto: CreateGigDto) { return this.marketplace.create('project', userId, dto); }
 }
 

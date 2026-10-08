@@ -2,7 +2,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import {
   Bookmark, CalendarDays, Heart, Home, Layers, Loader2, PenSquare, Plus, Search, ShieldCheck,
-  User as UserIcon,
+  User as UserIcon, UsersRound, BriefcaseBusiness, Store, FolderKanban, Inbox,
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -139,6 +139,13 @@ export function CommunitySidebar({
         <Row icon={Search} label="Search" active={searching} to="/community/search" />
         {/* Backed by a real listing, like every other row here. */}
         <Row icon={CalendarDays} label="Tides" active={browsingTides} to="/community/tides" />
+        <Row icon={UsersRound} label="Find professionals" to="/providers" />
+        <Row icon={Store} label="Find services" to="/services" />
+        <Row icon={FolderKanban} label="Project work" to="/projects" />
+        <Row icon={BriefcaseBusiness} label="Find work" to="/jobs" />
+        {(!user || user.role === 'JOB_SEEKER' || user.role === 'FREELANCER') && (
+          <Row icon={UserIcon} label="Offer services" to="/provider" />
+        )}
       </div>
 
       {/* Signed-out visitors can read everything and own none of it, so the
@@ -169,6 +176,8 @@ export function CommunitySidebar({
             active={isActive("mine")}
             onClick={() => onView({ filter: "mine", spaceId: null })}
           />
+          <Row icon={Store} label="My listings" to="/marketplace/manage" />
+          <Row icon={Inbox} label="Marketplace inbox" to="/marketplace/inbox" />
           {canModerate.data && (
             <Row icon={ShieldCheck} label="Moderation" to="/community/moderation" />
           )}

@@ -46,10 +46,10 @@ export class InterviewService {
     });
     if (!candidate) throw new NotFoundException('Candidate not found');
 
-    const slots = dto.proposedSlots
-      .map((s) => new Date(s))
-      .filter((d) => !Number.isNaN(d.getTime()));
-    if (slots.length === 0) throw new BadRequestException('At least one valid time slot is required');
+    const slots = dto.proposedSlots.map((s) => new Date(s));
+    if (!slots.length || slots.some((d) => !Number.isFinite(d.getTime()) || d.getTime() <= Date.now())) {
+      throw new BadRequestException('Every proposed time must be a valid future time');
+    }
 
     const company = await this.employerCompany(employer.id);
 
@@ -134,53 +134,26 @@ export class InterviewService {
       throw new BadRequestException('This interview has already been responded to.');
     }
 
-    let updated;
+    let scheduledAt: Date | undefined;
     if (dto.action === 'accept') {
       const slots = (interview.proposedSlots as string[] | null) ?? [];
-      const chosen = dto.slot && slots.includes(dto.slot) ? dto.slot : slots[0];
-      if (!chosen) throw new BadRequestException('No proposed time slots to accept.');
-      updated = await this.prisma.interview.update({
-        where: { id: interview.id },
-        data: { status: 'confirmed', scheduledAt: new Date(chosen) },
-      });
-
-      // Auto-create a Google Meet event when the employer has Calendar connected
-      // (video interviews without a manual link). Both parties are invited;
-      // failure degrades to a confirmed interview without a link.
-      if (updated.medium === 'video' && !updated.meetingLink) {
-        const employerUser = await this.prisma.user.findUnique({
-          where: { id: interview.employerId },
-          select: { email: true },
-        });
-        const company = await this.employerCompany(interview.employerId);
-        // Whichever calendar this employer connected — Google Meet or Teams.
-        const meet = await this.calendar.createMeeting(interview.employerId, {
-          summary: `Interview: ${interview.role ?? 'Interview'} — ${company}`,
-          description: interview.message ?? undefined,
-          startISO: chosen,
-          attendees: [candidate.email, employerUser?.email ?? ''].filter(Boolean) as string[],
-        });
-        if (meet) {
-          updated = await this.prisma.interview.update({
-            where: { id: interview.id },
-            // The provider is stored with the id so cancelling later deletes
-            // from the calendar that actually holds it.
-            data: {
-              meetingLink: meet.meetLink,
-              // Empty when Zoom supplied the link and no calendar is connected.
-              calendarEventId: meet.eventId || null,
-              calendarProvider: meet.provider,
-              zoomMeetingId: meet.zoomMeetingId,
-            },
-          });
-        }
+      const chosen = dto.slot ?? slots[0];
+      if (!chosen || !slots.includes(chosen)) {
+        throw new BadRequestException('Choose one of the proposed time slots');
       }
-    } else {
-      updated = await this.prisma.interview.update({
-        where: { id: interview.id },
-        data: { status: 'declined' },
-      });
+      scheduledAt = new Date(chosen);
+      if (!Number.isFinite(scheduledAt.getTime()) || scheduledAt.getTime() <= Date.now()) {
+        throw new BadRequestException('That time has passed');
+      }
     }
+    const claim = await this.prisma.interview.updateMany({
+      where: { id: interview.id, candidateId: candidate.id, status: 'proposed' },
+      data: { status: dto.action === 'accept' ? 'confirmed' : 'declined', scheduledAt },
+    });
+    if (!claim.count) throw new BadRequestException('This interview has already been responded to.');
+    const updated = dto.action === 'accept'
+      ? await this.createCalendarMeeting(interview.id)
+      : await this.prisma.interview.findUniqueOrThrow({ where: { id: interview.id } });
 
     const candidateName = candidate.displayName || [candidate.firstName, candidate.lastName].filter(Boolean).join(' ') || 'The candidate';
     await this.notifications.create({
@@ -205,6 +178,39 @@ export class InterviewService {
     return updated;
   }
 
+  /** Shared by invitation acceptance and self-service booking. */
+  async createCalendarMeeting(interviewId: string) {
+    const interview = await this.prisma.interview.findUniqueOrThrow({ where: { id: interviewId } });
+    if (interview.status !== 'confirmed' || !interview.scheduledAt || interview.medium !== 'video' || interview.meetingLink) {
+      return interview;
+    }
+    const [employer, candidate, slot, company] = await Promise.all([
+      this.prisma.user.findUnique({ where: { id: interview.employerId }, select: { email: true } }),
+      this.prisma.user.findUnique({ where: { id: interview.candidateId }, select: { email: true } }),
+      this.prisma.availabilitySlot.findFirst({ where: { interviewId } }),
+      this.employerCompany(interview.employerId),
+    ]);
+    const meet = await this.calendar.createMeeting(interview.employerId, {
+      summary: `Interview: ${interview.role ?? 'Interview'} - ${company}`,
+      description: interview.message ?? undefined,
+      startISO: interview.scheduledAt.toISOString(),
+      durationMinutes: slot?.durationMins ?? 30,
+      attendees: [candidate?.email, employer?.email].filter(Boolean) as string[],
+    });
+    if (meet) {
+      const attached = await this.prisma.interview.updateMany({
+        where: { id: interviewId, status: 'confirmed', meetingLink: null },
+        data: { meetingLink: meet.meetLink, calendarEventId: meet.eventId || null,
+          calendarProvider: meet.provider, zoomMeetingId: meet.zoomMeetingId },
+      });
+      // Cancellation may have won while the external provider was responding.
+      if (!attached.count) {
+        await this.calendar.deleteMeeting(interview.employerId, meet.eventId || null, meet.provider, meet.zoomMeetingId);
+      }
+    }
+    return this.prisma.interview.findUniqueOrThrow({ where: { id: interviewId } });
+  }
+
   /** Employer cancels a proposed/confirmed interview. */
   async cancel(employer: User, interviewId: string) {
     const interview = await this.prisma.interview.findFirst({
@@ -215,19 +221,29 @@ export class InterviewService {
       return interview;
     }
 
-    const updated = await this.prisma.interview.update({
-      where: { id: interview.id },
-      data: { status: 'cancelled' },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.interview.updateMany({
+        where: { id: interview.id, status: { in: ['proposed', 'confirmed'] } },
+        data: { status: 'cancelled' },
+      });
+      const result = await tx.interview.findUniqueOrThrow({ where: { id: interview.id } });
+      if (result.status === 'cancelled') {
+        await tx.availabilitySlot.updateMany({
+          where: { interviewId: interview.id, status: 'booked' }, data: { status: 'cancelled' },
+        });
+      }
+      return result;
     });
+    if (updated.status !== 'cancelled') return updated;
 
     // Remove whatever backs the meeting — a calendar event, a Zoom meeting,
     // or both. deleteMeeting handles each being absent.
-    if (interview.calendarEventId || interview.zoomMeetingId) {
+    if (updated.calendarEventId || updated.zoomMeetingId) {
       await this.calendar.deleteMeeting(
-        employer.id,
-        interview.calendarEventId,
-        interview.calendarProvider,
-        interview.zoomMeetingId,
+        interview.employerId,
+        updated.calendarEventId,
+        updated.calendarProvider,
+        updated.zoomMeetingId,
       );
     }
 
@@ -296,9 +312,7 @@ export class InterviewService {
 
   /** Builds a `.ics` calendar file for a scheduled interview (null if no time yet). */
   private async buildInterviewIcs(interview: InterviewRow): Promise<string | null> {
-    const startISO =
-      interview.scheduledAt ??
-      (Array.isArray(interview.proposedSlots) ? (interview.proposedSlots[0] as string) : null);
+    const startISO = interview.scheduledAt;
     if (!startISO) return null;
 
     const company = await this.employerCompany(interview.employerId);
@@ -310,12 +324,13 @@ export class InterviewService {
     const roomUrl = interview.medium === 'video' ? `${frontend}/interview/${interview.id}/room` : undefined;
     const link = interview.meetingLink || roomUrl;
 
+    const slot = await this.prisma.availabilitySlot.findFirst({ where: { interviewId: interview.id } });
     return buildIcs({
       uid: `${interview.id}@coral`,
       title: `Interview${interview.role ? `: ${interview.role}` : ''} — ${company}`,
       description: [interview.message ?? '', link ? `Join: ${link}` : ''].filter(Boolean).join('\n\n') || undefined,
       start: new Date(startISO),
-      durationMins: 30,
+      durationMins: slot?.durationMins ?? 30,
       location: interview.medium === 'onsite' ? interview.location ?? undefined : link,
       url: link,
       organizerEmail: employerUser?.email ?? undefined,
@@ -339,7 +354,7 @@ export class InterviewService {
   /** Best-effort confirmation email to the candidate with the calendar invite attached. */
   async sendConfirmationEmail(interviewId: string): Promise<void> {
     const interview = await this.prisma.interview.findUnique({ where: { id: interviewId } });
-    if (!interview?.scheduledAt) return;
+    if (!interview?.scheduledAt || interview.status !== 'confirmed') return;
     const ics = await this.buildInterviewIcs(interview);
     const candidate = await this.prisma.user.findUnique({
       where: { id: interview.candidateId },

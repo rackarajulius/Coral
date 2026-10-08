@@ -52,7 +52,7 @@ export class SimulatedInterviewEngine implements InterviewEngine {
     await wait(1400, 900);
 
     const greeting =
-      `${salutation(config.callName)}, I'm Nova — your AI interviewer. Today we'll run a ` +
+      `${salutation(config.callName)}, I'm Nova — your basic scripted interviewer. Today we'll run a ` +
       `${difficultyLabel(config.difficulty).toLowerCase()} ${interviewTypeLabel(config.type)} ` +
       `interview for the ${config.role} role, with ${this.total} questions` +
       `${config.adaptive ? " that adapt to how you're doing" : ""}. ` +

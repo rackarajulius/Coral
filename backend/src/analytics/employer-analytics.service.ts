@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
 import { User } from '../common/types/user.types';
@@ -7,15 +7,8 @@ import { GEO_CAVEATS, regionFromTimezone } from './geo';
 
 const DAY_MS = 86_400_000;
 
-/** Application statuses, in pipeline order, as the funnel reads them. */
-const ADVANCED_FROM: Record<string, string[]> = {
-  submitted: ['pending', 'reviewing', 'shortlisted', 'interviewing', 'offered', 'hired', 'rejected'],
-  screened: ['reviewing', 'shortlisted', 'interviewing', 'offered', 'hired'],
-  shortlisted: ['shortlisted', 'interviewing', 'offered', 'hired'],
-  interviewed: ['interviewing', 'offered', 'hired'],
-  offered: ['offered', 'hired'],
-  hired: ['hired'],
-};
+/** Current statuses that imply an application is in interview or later. */
+const CURRENT_INTERVIEW_STATES = ['interviewing', 'interview', 'offered', 'hired'];
 
 export interface Kpi {
   id: string;
@@ -118,7 +111,7 @@ export class EmployerAnalyticsService {
     const sum = (k: 'profileViews' | 'jobViews' | 'applyClicks') =>
       daily.reduce((a, d) => a + d[k], 0);
 
-    const interviews = apps.filter((a) => ADVANCED_FROM.interviewed.includes(a.status)).length;
+    const interviews = apps.filter((a) => CURRENT_INTERVIEW_STATES.includes(a.status)).length;
     const hires = apps.filter((a) => a.status === 'hired').length;
 
     // Time to hire: appliedAt → the change that set 'hired'. updatedAt is the
@@ -170,11 +163,11 @@ export class EmployerAnalyticsService {
       },
       {
         id: 'interviews',
-        label: 'Interviews',
+        label: 'Interview stage',
         value: interviews,
         unit: 'count',
         delta: null,
-        definition: 'Applicants who reached the interview stage or beyond.',
+        definition: 'Applications currently in interviewing, offered, or hired status. Earlier interviews followed by rejection are not recorded as history.',
       },
       {
         id: 'hires',
@@ -267,48 +260,72 @@ export class EmployerAnalyticsService {
   async funnel(user: User, rangeDays: number, jobId?: string) {
     const memberIds = await this.companyContext.memberUserIds(user.id);
     const { start, end } = this.window(rangeDays);
+    if (jobId) {
+      const owned = await this.prisma.job.findFirst({
+        where: { id: jobId, postedById: { in: memberIds } },
+        select: { id: true },
+      });
+      if (!owned) throw new NotFoundException('Job not found');
+    }
     const jobIds = jobId
       ? [jobId]
       : (
           await this.prisma.job.findMany({ where: { postedById: { in: memberIds } }, select: { id: true } })
         ).map((j) => j.id);
 
-    const [daily, apps] = await Promise.all([
-      this.prisma.employerMetricDaily.aggregate({
-        where: { employerId: { in: memberIds }, day: { gte: start, lte: end } },
-        _sum: { jobViews: true, applyClicks: true, applyStarted: true },
-      }),
+    const [reachCounts, apps] = await Promise.all([
+      jobId
+        ? this.prisma.analyticsEvent.groupBy({
+            by: ['type'],
+            where: { jobId, employerId: { in: memberIds }, occurredAt: { gte: start, lte: end } },
+            _count: { _all: true },
+          }).then((rows) => Object.fromEntries(rows.map((row) => [row.type, row._count._all])))
+        : this.prisma.employerMetricDaily.aggregate({
+            where: { employerId: { in: memberIds }, day: { gte: start, lte: end } },
+            _sum: { jobViews: true, applyClicks: true, applyStarted: true },
+          }).then((result) => ({
+            job_view: result._sum.jobViews ?? 0,
+            apply_click: result._sum.applyClicks ?? 0,
+            apply_started: result._sum.applyStarted ?? 0,
+          })),
       this.prisma.application.findMany({
         where: { jobId: { in: jobIds }, appliedAt: { gte: start, lte: end } },
         select: { status: true },
       }),
     ]);
 
-    const stageCount = (key: keyof typeof ADVANCED_FROM) =>
-      apps.filter((a) => ADVANCED_FROM[key].includes(a.status)).length;
-
     const reach = [
-      { stage: 'Job Views', volume: daily._sum.jobViews ?? 0 },
-      { stage: 'Apply Clicks', volume: daily._sum.applyClicks ?? 0 },
-      { stage: 'Application Started', volume: daily._sum.applyStarted ?? 0 },
+      { stage: 'Job Views', volume: reachCounts.job_view ?? 0 },
+      { stage: 'Apply Clicks', volume: reachCounts.apply_click ?? 0 },
+      { stage: 'Application Started', volume: reachCounts.apply_started ?? 0 },
     ];
-    const pipeline = [
-      { stage: 'Submitted', volume: stageCount('submitted') },
-      { stage: 'Screened', volume: stageCount('screened') },
-      { stage: 'Shortlisted', volume: stageCount('shortlisted') },
-      { stage: 'Interviewed', volume: stageCount('interviewed') },
-      { stage: 'Offered', volume: stageCount('offered') },
-      { stage: 'Hired', volume: stageCount('hired') },
-    ];
+    // Application stores only its CURRENT status. These counts are a status
+    // breakdown, not cumulative milestones: a rejected candidate may once have
+    // interviewed, but that history is not stored here.
+    const statuses = [
+      ['Pending', 'pending'], ['Reviewing', 'reviewing'], ['Shortlisted', 'shortlisted'],
+      ['Interviewing', 'interviewing'], ['Interview', 'interview'],
+      ['Offered', 'offered'], ['Hired', 'hired'],
+      ['Rejected', 'rejected'], ['Withdrawn', 'withdrawn'], ['Flagged', 'flagged'],
+    ] as const;
+    const pipeline: { stage: string; volume: number; conversionFromPrev: number | null }[] = statuses.map(([stage, status]) => ({
+      stage,
+      volume: apps.filter((app) => app.status === status).length,
+      conversionFromPrev: null as number | null,
+    }));
+    const known = new Set(statuses.map(([, status]) => status));
+    const other = apps.filter((app) => !known.has(app.status as typeof statuses[number][1])).length;
+    if (other) pipeline.push({ stage: 'Other', volume: other, conversionFromPrev: null });
 
     return {
       range: { start, end, days: rangeDays },
       reach: this.withConversion(reach),
-      pipeline: this.withConversion(pipeline),
+      pipeline,
       notes: {
         reach: 'From page tracking, which began recently — earlier activity is not included.',
         applyStarted:
           'Only counted for on-platform applications. Jobs that apply on a company site cannot report this step.',
+        pipeline: 'Current application statuses for submissions in this period. Historical stage transitions are not stored, so these are not cumulative conversion rates.',
       },
     };
   }
@@ -371,7 +388,7 @@ export class EmployerAnalyticsService {
           /** Lifetime counter, which predates event capture. */
           viewsAllTime: j.viewsCount,
           applications: mine.length,
-          interviews: mine.filter((a) => ADVANCED_FROM.interviewed.includes(a.status)).length,
+          interviews: mine.filter((a) => CURRENT_INTERVIEW_STATES.includes(a.status)).length,
           hires: mine.filter((a) => a.status === 'hired').length,
           /** Applications per view. Null when there were no views to convert. */
           conversion: periodViews > 0 ? Math.round((mine.length / periodViews) * 1000) / 10 : null,

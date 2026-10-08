@@ -41,6 +41,10 @@ const OnboardingGate = () => {
     return <RedirectWithNotice to="/employers/dashboard" message={EMPLOYER_ON_SEEKER_SIDE} />;
   }
 
+  if (isAuthenticated && accountSide(user) === 'provider') {
+    return <Navigate to="/provider" replace />;
+  }
+
   if (isAuthenticated && user?.status === 'PENDING_ONBOARDING' && !user.provisional) {
     return <Navigate to="/onboarding" replace />;
   }

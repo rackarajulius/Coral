@@ -18,6 +18,7 @@ import { PostText } from "./PostText";
 import { CommentThread } from "./CommentThread";
 import { IdentityLine } from "./IdentityLine";
 import { TidePostCard } from "@/components/community/tides/TidePostCard";
+import { CommunityLinkedCard, postPurposeLabels } from "./CommunityLinkedCard";
 import {
   authorName,
   bookmarkPost,
@@ -108,6 +109,7 @@ export function FeedPost({
   });
 
   const mine = user?.id === post.authorId;
+  const canManage = post.canEdit ?? (!post.company && mine);
 
   return (
     <article className="rounded-2xl border border-border bg-card p-5">
@@ -129,17 +131,25 @@ export function FeedPost({
         <div className="min-w-0 flex-1">
           {post.company ? (
             <>
-              <p className="text-sm font-medium">{post.company.name}</p>
+              {post.company.profiles?.[0]?.id ? (
+                <Link to={`/company-profile/${post.company.profiles[0].id}`} className="text-sm font-medium hover:underline">{post.company.name}</Link>
+              ) : <p className="text-sm font-medium">{post.company.name}</p>}
               {/* Who actually wrote it, kept visible on purpose. Hiding it
                   would make the company page a place where nobody is
                   accountable for anything said on it. */}
               <p className="text-xs text-muted-foreground">
-                Posted by {authorName(post.author)}
+                Posted by {post.authorIdentity?.profileUrl ? (
+                  <Link to={post.authorIdentity.profileUrl} className="hover:underline">{authorName(post.author)}</Link>
+                ) : authorName(post.author)}
               </p>
             </>
           ) : (
             <>
-              <p className="text-sm font-medium">{authorName(post.author)}</p>
+              {post.authorIdentity?.profileUrl ? (
+                <Link to={post.authorIdentity.profileUrl} className="text-sm font-medium hover:underline">
+                  {authorName(post.author)}
+                </Link>
+              ) : <p className="text-sm font-medium">{authorName(post.author)}</p>}
               <IdentityLine identity={post.authorIdentity} />
             </>
           )}
@@ -160,20 +170,20 @@ export function FeedPost({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              {mine ? (
+              {canManage ? (
                 <DropdownMenuItem
                   className="gap-2 text-destructive"
                   onSelect={() => remove.mutate()}
                 >
                   <Trash2 className="h-4 w-4" /> Delete
                 </DropdownMenuItem>
-              ) : (
+              ) : !mine ? (
                 // Reporting your own post is refused server-side — you can
                 // delete it — so it is not offered here either.
                 <DropdownMenuItem className="gap-2" onSelect={() => setReporting(true)}>
                   <Flag className="h-4 w-4" /> Report
                 </DropdownMenuItem>
-              )}
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
@@ -185,9 +195,14 @@ export function FeedPost({
         </div>
       )}
 
+      {post.purpose && post.purpose !== "general" && (
+        <p className="mt-2 text-xs font-medium text-muted-foreground">{postPurposeLabels[post.purpose]}</p>
+      )}
+      <CommunityLinkedCard record={post.linkedRecord} unavailable={post.linkedRecordUnavailable} postId={post.id} />
+
       {/* Shown only when there is no media of the author's own — a card about
           someone else's page should not outrank the picture they chose. */}
-      {post.linkPreview && post.mediaUrls.length === 0 && (
+      {post.linkPreview && !post.linkedRecord && !post.linkedRecordUnavailable && post.mediaUrls.length === 0 && (
         <a
           href={post.linkPreview.url}
           target="_blank"
@@ -364,10 +379,8 @@ function ResharedCard({ original }: { original: ResharedPost }) {
   const name = original.company ? original.company.name : authorName(original.author);
 
   return (
-    <Link
-      to={`/community/posts/${original.id}`}
-      className="mt-3 block rounded-xl border border-border p-4 transition-colors hover:border-primary/50"
-    >
+    <div className="mt-3 rounded-xl border border-border p-4">
+      <Link to={`/community/posts/${original.id}`} className="block transition-colors hover:text-primary">
       <div className="flex items-center gap-2">
         {original.company ? (
           <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10">
@@ -399,7 +412,9 @@ function ResharedCard({ original }: { original: ResharedPost }) {
           className="mt-2 max-h-48 w-full rounded-lg object-cover"
         />
       )}
-    </Link>
+      </Link>
+      <CommunityLinkedCard record={original.linkedRecord} unavailable={original.linkedRecordUnavailable} postId={original.id} />
+    </div>
   );
 }
 

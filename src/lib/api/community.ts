@@ -2,8 +2,11 @@ import supabase from "@/lib/supabase";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001/api/v1";
 
-async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function req<T>(path: string, init: RequestInit = {}, expectedSupabaseId?: string): Promise<T> {
   const { data: { session } } = await supabase.auth.getSession();
+  if (expectedSupabaseId && session?.user.id !== expectedSupabaseId) {
+    throw new Error("Your signed-in account changed. Reload before continuing.");
+  }
   const res = await fetch(`${API_BASE_URL}/community${path}`, {
     ...init,
     headers: {
@@ -16,7 +19,12 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
     const body = await res.json().catch(() => ({}));
     throw new Error((body as { message?: string }).message || "Request failed");
   }
-  return res.json() as Promise<T>;
+  const body = await res.json() as T;
+  if (expectedSupabaseId) {
+    const { data: { session: current } } = await supabase.auth.getSession();
+    if (current?.user.id !== expectedSupabaseId) throw new Error("Your signed-in account changed. Reload before continuing.");
+  }
+  return body;
 }
 
 export type SpaceKind = "TOPIC" | "COMPANY";
@@ -91,6 +99,24 @@ export const leaveSpace = (id: string) =>
 export type PostType =
   | "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT" | "JOB" | "CAROUSEL" | "POLL";
 
+export type PostPurpose = "general" | "question" | "showcase" | "service_announcement" | "opportunity";
+export interface AnnouncementReference { type: "service" | "project" | "job"; id: string }
+export interface CommunityLinkedRecord extends AnnouncementReference {
+  title: string;
+  description: string;
+  category: string | null;
+  status: string;
+  url: string;
+  owner: { id: string; displayName: string; avatarUrl: string | null; profileUrl: string | null };
+  company: { id: string; name: string } | null;
+  pricingMode?: string;
+  budgetMode?: string;
+  currency?: string;
+  amountMinor?: number | null;
+  minBudgetMinor?: number | null;
+  maxBudgetMinor?: number | null;
+}
+
 export interface PostAuthor {
   id: string;
   displayName: string | null;
@@ -118,6 +144,8 @@ export interface AuthorIdentity {
    */
   companyProfileId: string | null;
   companyName: string | null;
+  /** Supplied only when the server can resolve an eligible professional page. */
+  profileUrl?: string | null;
 }
 
 export interface PollOption {
@@ -137,8 +165,14 @@ export interface PostPoll {
 }
 
 export interface CommunityPost {
+  purpose?: PostPurpose;
+  /** Fresh, public-only canonical projection; never a stored listing snapshot. */
+  linkedRecord?: CommunityLinkedRecord | null;
+  linkedRecordUnavailable?: boolean;
   id: string;
   authorId: string;
+  /** Server evaluates current company seats; historical authorship is insufficient. */
+  canEdit?: boolean;
   content: string;
   postType: PostType;
   mediaUrls: string[];
@@ -154,7 +188,7 @@ export interface CommunityPost {
    * The author is still present — the byline names the company, and says
    * quietly who wrote it.
    */
-  company: { id: string; name: string } | null;
+  company: { id: string; name: string; profiles?: { id: string }[] } | null;
   /**
    * The post this one passes on, embedded. One level deep, always: a reshare
    * of a reshare points at whatever was originally written.
@@ -245,6 +279,9 @@ export const getPost = (id: string) =>
 
 /** The quoted post inside a reshare. */
 export interface ResharedPost {
+  purpose?: PostPurpose;
+  linkedRecord?: CommunityLinkedRecord | null;
+  linkedRecordUnavailable?: boolean;
   id: string;
   content: string;
   mediaUrls: string[];
@@ -271,6 +308,8 @@ export const resharePost = (id: string, content?: string) =>
   }).then((r) => r.data);
 
 export const createPost = (input: {
+  purpose?: PostPurpose;
+  reference?: AnnouncementReference;
   spaceId: string;
   content: string;
   postType?: PostType;
@@ -284,7 +323,9 @@ export const createPost = (input: {
    * quietly posting as the person instead.
    */
   asCompany?: boolean;
-}) => req<{ data: CommunityPost }>("/posts", { method: "POST", body: JSON.stringify(input) });
+  /** Optional company choice; the server verifies its current publishing seat. */
+  companyId?: string;
+}, expectedSupabaseId?: string) => req<{ data: CommunityPost }>("/posts", { method: "POST", body: JSON.stringify(input) }, expectedSupabaseId);
 
 /**
  * The company this person may publish for, or null.
@@ -296,6 +337,13 @@ export const getCompanyVoice = () =>
   req<{ data: { company: { id: string; name: string } | null } }>("/posts/company-voice").then(
     (r) => r.data.company,
   );
+
+/** Server filters against the caller's current identity and company seat. */
+export const getAnnouncementOptions = (asCompany = false, expectedSupabaseId?: string, signal?: AbortSignal, companyId?: string) =>
+  req<{ data: { services: CommunityLinkedRecord[]; projects: CommunityLinkedRecord[]; jobs: CommunityLinkedRecord[] } }>(
+    `/posts/announcement-options?company=${asCompany ? "true" : "false"}${companyId ? `&companyId=${encodeURIComponent(companyId)}` : ""}`,
+    { signal }, expectedSupabaseId,
+  ).then((r) => r.data);
 
 /* ---------------------------------- polls --------------------------------- */
 
@@ -333,10 +381,10 @@ export const adoptGif = (url: string) =>
     body: JSON.stringify({ url }),
   }).then((r) => r.data);
 
-export const updatePost = (id: string, content: string) =>
+export const updatePost = (id: string, content: string, structured?: { purpose?: PostPurpose; reference?: AnnouncementReference | null }) =>
   req<{ data: CommunityPost }>(`/posts/${id}`, {
     method: "PATCH",
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, ...structured }),
   });
 
 export const deletePost = (id: string) => req<unknown>(`/posts/${id}`, { method: "DELETE" });

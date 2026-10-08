@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit, ServiceUnavailableException, BadGatewayException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient, SupabaseClient, User } from '@supabase/supabase-js';
 
@@ -17,6 +17,8 @@ const VERIFIED_TOKEN_MAX_ENTRIES = 10_000;
 @Injectable()
 export class SupabaseService implements OnModuleInit {
   private client: SupabaseClient;
+  private adminClient: SupabaseClient | undefined;
+  private cacheGeneration = 0;
   /** sha256(token) → the user Supabase returned, until `until`. */
   private readonly verified = new Map<string, { user: User; until: number }>();
   /** Checks already on their way to Supabase, so a page's parallel requests share one. */
@@ -90,15 +92,16 @@ export class SupabaseService implements OnModuleInit {
     const pending = this.inFlight.get(key);
     if (pending) return pending;
 
+    const generation = this.cacheGeneration;
     const check = this.verifyToken(token)
       .then((user) => {
         if (user) {
           const until = Math.min(Date.now() + VERIFIED_TOKEN_TTL_MS, this.expiryOf(token));
-          if (until > Date.now()) this.remember(key, user, until);
+          if (until > Date.now() && generation === this.cacheGeneration) this.remember(key, user, until);
         }
         return user;
       })
-      .finally(() => this.inFlight.delete(key));
+      .finally(() => { if (this.inFlight.get(key) === check) this.inFlight.delete(key); });
     this.inFlight.set(key, check);
     return check;
   }
@@ -106,6 +109,49 @@ export class SupabaseService implements OnModuleInit {
   /** Forgets every remembered token (tests, and anything that must re-check now). */
   forgetVerifiedTokens(): void {
     this.verified.clear();
+    this.cacheGeneration++;
+    this.inFlight.clear();
+  }
+
+  /** Checks privileged configuration before any account data is removed. */
+  assertAccountDeletionConfigured(): void {
+    this.getAdminClient();
+  }
+
+  /** Permanent auth identity deletion; never exposed with a client-supplied ID. */
+  async deleteAuthUser(userId: string): Promise<void> {
+    const admin = this.getAdminClient().auth.admin;
+    let deleted = false;
+    try {
+      const { error } = await admin.deleteUser(userId);
+      deleted = !error || error.code === 'user_not_found';
+    } catch { /* a timeout can lose the response to a completed deletion */ }
+    if (!deleted) {
+      try {
+        const { data, error } = await admin.getUserById(userId);
+        deleted = error?.code === 'user_not_found' || (!error && !data.user);
+      } catch { /* preserve the database account when the provider is unreachable */ }
+    }
+    if (!deleted) {
+      throw new BadGatewayException('Account closure could not reach the authentication provider. Please try again.');
+    }
+    this.forgetVerifiedTokens();
+  }
+
+  private getAdminClient(): SupabaseClient {
+    if (this.adminClient) return this.adminClient;
+    const url = this.configService.get<string>('supabase.url') || this.configService.get<string>('SUPABASE_URL');
+    const key = this.configService.get<string>('supabase.serviceRoleKey') || this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY');
+    if (!url || !key) {
+      throw new ServiceUnavailableException('Account closure is temporarily unavailable. Please try again later.');
+    }
+    this.adminClient = createClient(url, key, {
+      auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+      global: {
+        fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(10_000) }),
+      },
+    });
+    return this.adminClient;
   }
 
   private remember(key: string, user: User, until: number): void {

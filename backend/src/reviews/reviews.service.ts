@@ -206,33 +206,40 @@ export class ReviewsService {
    * company has enough reviews that it can't single anyone out.
    */
   async forCompany(employerId: string | string[]) {
-    const rows = await this.prisma.companyReview.findMany({
-      where: {
-        employerId: Array.isArray(employerId) ? { in: employerId } : employerId,
-        status: 'published',
-      },
-      orderBy: { publishedAt: 'desc' },
-      take: 100,
-      include: { response: true },
-    });
+    const where = {
+      employerId: Array.isArray(employerId) ? { in: employerId } : employerId,
+      status: 'published',
+    };
+    const [rows, ratings] = await Promise.all([
+      this.prisma.companyReview.findMany({
+        where,
+        orderBy: { publishedAt: 'desc' },
+        take: 100,
+        include: { response: true },
+      }),
+      this.prisma.companyReview.findMany({
+        where,
+        select: { rating: true, categoryRatings: true },
+      }),
+    ]);
 
-    const showContext = rows.length >= MIN_REVIEWS_FOR_CONTEXT;
+    const showContext = ratings.length >= MIN_REVIEWS_FOR_CONTEXT;
 
     const distribution = [1, 2, 3, 4, 5].map((star) => ({
       star,
-      count: rows.filter((r) => r.rating === star).length,
+      count: ratings.filter((r) => r.rating === star).length,
     }));
 
     return {
-      total: rows.length,
+      total: ratings.length,
       // Null rather than 0 when there are none — an unrated company is not a
       // company rated zero.
       averageRating:
-        rows.length > 0
-          ? Math.round((rows.reduce((a, r) => a + r.rating, 0) / rows.length) * 10) / 10
+        ratings.length > 0
+          ? Math.round((ratings.reduce((a, r) => a + r.rating, 0) / ratings.length) * 10) / 10
           : null,
       distribution,
-      categoryAverages: this.categoryAverages(rows),
+      categoryAverages: this.categoryAverages(ratings),
       contextHidden: !showContext,
       contextNote: showContext
         ? null
@@ -263,6 +270,63 @@ export class ReviewsService {
    */
   async forEmployer(user: User) {
     return this.forCompany(await this.companyContext.memberUserIds(user.id));
+  }
+
+  /** Metrics for the employer dashboard, across every published company review. */
+  async employerOverview(user: User) {
+    const employerIds = await this.companyContext.memberUserIds(user.id);
+    const rows = await this.prisma.companyReview.findMany({
+      where: { employerId: { in: employerIds }, status: 'published' },
+      select: {
+        rating: true,
+        categoryRatings: true,
+        publishedAt: true,
+        response: { select: { createdAt: true } },
+      },
+    });
+
+    const now = new Date();
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1));
+    const monthly = Array.from({ length: 12 }, (_, index) => {
+      const date = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + index, 1));
+      return { month: date.toISOString().slice(0, 7), count: 0, ratingSum: 0, averageRating: null as number | null };
+    });
+    let responded = 0;
+    let responseHours = 0;
+    let timedResponses = 0;
+    for (const row of rows) {
+      if (row.response) {
+        responded++;
+        if (row.publishedAt) {
+          responseHours += Math.max(0, row.response.createdAt.getTime() - row.publishedAt.getTime()) / 3_600_000;
+          timedResponses++;
+        }
+      }
+      if (!row.publishedAt || row.publishedAt < monthStart) continue;
+      const index = (row.publishedAt.getUTCFullYear() - monthStart.getUTCFullYear()) * 12
+        + row.publishedAt.getUTCMonth() - monthStart.getUTCMonth();
+      if (index >= 0 && index < 12) {
+        monthly[index].count++;
+        monthly[index].ratingSum += row.rating;
+      }
+    }
+
+    const total = rows.length;
+    return {
+      total,
+      averageRating: total ? Math.round(rows.reduce((sum, row) => sum + row.rating, 0) / total * 10) / 10 : null,
+      distribution: [1, 2, 3, 4, 5].map((star) => ({ star, count: rows.filter((row) => row.rating === star).length })),
+      categoryAverages: this.categoryAverages(rows),
+      responded,
+      unanswered: total - responded,
+      responseRate: total ? Math.round(responded / total * 100) : null,
+      averageResponseHours: timedResponses ? Math.round(responseHours / timedResponses * 10) / 10 : null,
+      monthly: monthly.map(({ month, count, ratingSum }) => ({
+        month,
+        count,
+        averageRating: count ? Math.round(ratingSum / count * 10) / 10 : null,
+      })),
+    };
   }
 
   /** Right of reply. There is deliberately no employer delete path. */

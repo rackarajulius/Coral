@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getFunnel, type FunnelStage } from "@/lib/api/employerAnalytics";
+import { getFunnel } from "@/lib/api/employerAnalytics";
+import { useAnalyticsRange } from "../AnalyticsRange";
 
 /**
  * Condensed funnel for the Overview tab.
@@ -10,9 +11,10 @@ import { getFunnel, type FunnelStage } from "@/lib/api/employerAnalytics";
  * shared bar scale would draw a conversion between two different periods.
  */
 const FunnelPreview = () => {
+  const { days } = useAnalyticsRange();
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["employer-analytics-funnel", 30],
-    queryFn: () => getFunnel(30),
+    queryKey: ["employer-analytics-funnel", days],
+    queryFn: () => getFunnel(days),
     retry: false,
   });
 
@@ -30,11 +32,9 @@ const FunnelPreview = () => {
     return <p className="text-sm text-destructive">Couldn't load the funnel.</p>;
   }
 
-  // One representative stage from reach, then the pipeline milestones.
+  // One representative reach metric, then the most common current statuses.
   const reachHead = data.reach[0];
-  const pipeline = data.pipeline.filter((s) =>
-    ["Submitted", "Interviewed", "Hired"].includes(s.stage),
-  );
+  const pipeline = [...data.pipeline].sort((a, b) => b.volume - a.volume).slice(0, 3);
 
   const rows: { stage: string; volume: number; conv: number | null; scale: number }[] = [];
   if (reachHead && reachHead.volume > 0) {
@@ -79,16 +79,5 @@ const FunnelPreview = () => {
     </div>
   );
 };
-
-/** Largest stage-to-stage fall in the pipeline, or null when there isn't one. */
-export function biggestDrop(pipeline: FunnelStage[]): { stage: string; lostPct: number } | null {
-  let worst: { stage: string; lostPct: number } | null = null;
-  for (const s of pipeline) {
-    if (s.conversionFromPrev === null) continue;
-    const lost = Math.round((100 - s.conversionFromPrev) * 10) / 10;
-    if (lost > 0 && (!worst || lost > worst.lostPct)) worst = { stage: s.stage, lostPct: lost };
-  }
-  return worst;
-}
 
 export default FunnelPreview;

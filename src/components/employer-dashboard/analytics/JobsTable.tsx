@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getJobsAnalytics } from "@/lib/api/employerAnalytics";
+import { useAnalyticsRange } from "./AnalyticsRange";
 
 /**
  * Per-job performance.
@@ -13,10 +14,11 @@ import { getJobsAnalytics } from "@/lib/api/employerAnalytics";
  * "Qualified" had no definition anywhere — it was a number with no meaning.
  * Both columns are gone rather than filled with something plausible.
  */
-const JobsTable = ({ compact = false }: { compact?: boolean }) => {
+const JobsTable = ({ compact = false, search = "", onSelectJob }: { compact?: boolean; search?: string; onSelectJob?: (job: { id: string; title: string }) => void }) => {
+  const { days } = useAnalyticsRange();
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["employer-analytics-jobs", 30],
-    queryFn: () => getJobsAnalytics(30),
+    queryKey: ["employer-analytics-jobs", days],
+    queryFn: () => getJobsAnalytics(days),
     retry: false,
   });
 
@@ -34,13 +36,13 @@ const JobsTable = ({ compact = false }: { compact?: boolean }) => {
     return <p className="py-6 text-center text-sm text-destructive">Couldn't load job performance.</p>;
   }
 
-  const all = data.rows;
+  const all = data.rows.filter((job) => job.title.toLowerCase().includes(search.trim().toLowerCase()));
   const rows = compact ? all.slice(0, 5) : all;
 
   if (rows.length === 0) {
     return (
       <p className="py-8 text-center text-sm text-muted-foreground">
-        No jobs posted yet. Post a role to start seeing performance here.
+        {search ? "No jobs match your search." : "No jobs posted yet. Post a role to start seeing performance here."}
       </p>
     );
   }
@@ -54,7 +56,7 @@ const JobsTable = ({ compact = false }: { compact?: boolean }) => {
             {!compact && <TableHead>Department</TableHead>}
             <TableHead className="text-right">Views</TableHead>
             <TableHead className="text-right">Apps</TableHead>
-            <TableHead className="text-right">Interviews</TableHead>
+            <TableHead className="text-right">Interview stage</TableHead>
             <TableHead className="text-right">Hires</TableHead>
             <TableHead className="text-right">Conv.</TableHead>
           </TableRow>
@@ -63,7 +65,9 @@ const JobsTable = ({ compact = false }: { compact?: boolean }) => {
           {rows.map((j) => (
             <TableRow key={j.id} className="hover:bg-muted/50">
               <TableCell>
-                <p className="font-medium">{j.title}</p>
+                {onSelectJob ? (
+                  <button type="button" className="font-medium text-left hover:underline" onClick={() => onSelectJob({ id: j.id, title: j.title })}>{j.title}</button>
+                ) : <p className="font-medium">{j.title}</p>}
                 {compact && j.department && (
                   <p className="text-[11px] text-muted-foreground">{j.department}</p>
                 )}
@@ -95,6 +99,7 @@ const JobsTable = ({ compact = false }: { compact?: boolean }) => {
       </Table>
       {!compact && (
         <p className="mt-3 text-[11px] text-muted-foreground">
+          {data.rows.length === 100 && "Showing the latest 100 jobs. "}
           Views are counted from when page tracking began, so older roles may show fewer views
           than they actually received.
         </p>

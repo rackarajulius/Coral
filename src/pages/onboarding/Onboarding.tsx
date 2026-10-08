@@ -31,6 +31,7 @@ export default function Onboarding() {
   if (accountSide(user) === 'employer') {
     return <RedirectWithNotice to="/employers/dashboard" message={EMPLOYER_ON_SEEKER_SIDE} />;
   }
+  if (accountSide(user) === 'provider') return <Navigate to="/provider" replace />;
   if (!isLoading && user?.status && user.status !== 'PENDING_ONBOARDING') {
     return <Navigate to="/jobseeker/profile" replace />;
   }

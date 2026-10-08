@@ -26,3 +26,26 @@ export async function updateUserRole(role: "EMPLOYER" | "JOB_SEEKER" | "FREELANC
     throw new Error(body.message || "Failed to update role");
   }
 }
+
+/** Permanently closes only the authenticated jobseeker's own account. */
+export interface AccountClosureResult {
+  cleanupPending: boolean;
+  message?: string;
+}
+
+export async function deleteMyAccount(): Promise<AccountClosureResult> {
+  const res = await fetch(`${API_BASE_URL}/auth/account`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+    body: JSON.stringify({ confirmation: "CLOSE" }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (body.code === "ACCOUNT_CLOSED_CLEANUP_PENDING" && body.accountClosed === true) {
+    return { cleanupPending: true, message: body.message };
+  }
+  if (!res.ok || body.success !== true) {
+    const message = Array.isArray(body.message) ? body.message.join(" ") : body.message;
+    throw new Error(message || "Could not close your account. Please try again.");
+  }
+  return { cleanupPending: false };
+}

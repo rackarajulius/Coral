@@ -10,7 +10,7 @@ import {
   Mail,
   Smartphone,
   Link2,
-  Trash2,
+  AlertTriangle,
   Save,
   Briefcase,
   MapPin,
@@ -43,6 +43,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { UNDERLINE_TABS_LIST, UNDERLINE_TAB_TRIGGER } from '@/lib/tabStyles';
 import { DemographicSelfReportCard } from '@/components/jobSeeker/DemographicSelfReportCard';
 import { SubscriptionCard } from '@/components/jobSeeker/SubscriptionCard';
+import { CloseAccountDialog } from '@/components/jobSeeker/CloseAccountDialog';
 import { toast } from 'sonner';
 import Header from '@/components/Header';
 import ProgressSidebar from '@/components/jobSeeker/ProgressSidebar';
@@ -74,6 +75,8 @@ const EXPERIENCE_OPTIONS = [
 
 const SettingsPage = () => {
   const [isLoading, setIsLoading] = useState(false);
+  const [closeAccountOpen, setCloseAccountOpen] = useState(false);
+  const closeAccountButtonRef = useRef<HTMLButtonElement>(null);
   const { theme, setTheme, resolvedTheme } = useTheme();
   const { profile, updateProfileInfo, updateJobPreferences, updateNotificationSettings, updatePrivacySettings } = useProfile();
   const { user, updateUser, changePassword, getLinkedProviders, linkProvider, unlinkProvider } = useAuth();
@@ -269,10 +272,6 @@ const SettingsPage = () => {
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const handleDeleteAccount = () => {
-    toast.error('Account deletion is disabled in demo mode');
   };
 
   return (
@@ -913,29 +912,38 @@ const SettingsPage = () => {
             </div>
 
             {/* Danger Zone */}
-            <Card className="mt-6 border-red-200 dark:border-red-900 bg-red-50/50 dark:bg-red-900/10">
-              <CardHeader>
-                <CardTitle className="text-lg text-red-600 flex items-center gap-2">
-                  <Trash2 className="w-5 h-5" />
+            <Card className="mt-6 rounded-sm border-red-300 bg-transparent shadow-none dark:border-red-500/30">
+              <CardHeader className="space-y-0 p-4 pb-0">
+                <CardTitle className="flex items-center gap-2 text-sm font-medium leading-5 tracking-normal text-red-600 dark:text-red-400">
+                  <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
                   Danger Zone
                 </CardTitle>
-                <CardDescription>Irreversible actions for your account</CardDescription>
               </CardHeader>
-              <CardContent>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium text-gray-900 dark:text-white">Delete Account</p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Permanently delete your account and all data</p>
-                  </div>
-                  <Button variant="destructive" onClick={handleDeleteAccount}>
-                    Delete Account
-                  </Button>
+              <CardContent className="space-y-3 p-4 pt-3">
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-foreground">Close your account</p>
+                  <p className="text-xs text-muted-foreground">Permanently close your account and delete your profile.</p>
                 </div>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="h-7 rounded-md bg-red-600 px-2.5 text-xs text-white hover:bg-red-700 focus-visible:ring-red-500 dark:bg-red-400 dark:text-gray-950 dark:hover:bg-red-500"
+                  onClick={() => setCloseAccountOpen(true)}
+                  ref={closeAccountButtonRef}
+                  disabled={!user || !!user.provisional}
+                >
+                  Close Account
+                </Button>
               </CardContent>
             </Card>
           </main>
         </div>
       </div>
+      <CloseAccountDialog
+        open={closeAccountOpen}
+        onOpenChange={setCloseAccountOpen}
+        returnFocusRef={closeAccountButtonRef}
+      />
     </div>
   );
 };

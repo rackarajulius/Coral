@@ -35,7 +35,7 @@ const VIEW_TITLES: Record<string, string> = {
 };
 
 const VIEW_BLURBS: Record<string, string> = {
-  all: "Questions, advice and what people are learning.",
+  all: "A community where companies find talent, talent finds work, and professionals connect with clients.",
   "my-spaces": "Posts from the spaces you have joined.",
   saved: "Posts you bookmarked.",
   liked: "Posts you liked.",

@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getMyEntitlements, refusalFor, type SeekerMetric } from "@/lib/api/entitlements";
 import { isEntitlementError } from "@/lib/api/entitlementError";
 import { useUpgradePrompt } from "@/stores/upgradePromptStore";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
+import { createExternalApplication } from "@/lib/api/externalApplications";
 import {
   Sparkles,
   Lock,
@@ -20,6 +21,8 @@ import {
   UserPlus,
 } from "lucide-react";
 import Header from "@/components/Header";
+import { useAuth } from "@/contexts/AuthContext";
+import { useAuthModal } from "@/contexts/AuthModalContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -38,6 +41,9 @@ import {
 } from "@/lib/api/resumeMatcher";
 
 const ResumeMatcher = () => {
+  const { user, isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const { openAuth } = useAuthModal();
+  const queryClient = useQueryClient();
   const [searchInput, setSearchInput] = useState("");
   const [activeQuery, setActiveQuery] = useState<string | undefined>(undefined);
 
@@ -46,16 +52,42 @@ const ResumeMatcher = () => {
    * Premium, which would have denied free users the platform matching their
    * tier includes. The server decides which sources to search and says so.
    */
-  const { data: result, isFetching, isError, error } = useQuery({
-    queryKey: ["resume-matcher", "run", activeQuery ?? ""],
-    queryFn: () => runResumeMatch(activeQuery),
+  const { data: result, isFetching, isError, error, refetch } = useQuery({
+    queryKey: ["resume-matcher", "run", user?.id ?? "", activeQuery ?? ""],
+    queryFn: async ({ signal }) => {
+      const data = await runResumeMatch(activeQuery, signal);
+      void queryClient.invalidateQueries({ queryKey: ["entitlements"] });
+      return data;
+    },
+    enabled: isAuthenticated && !isAuthLoading,
     staleTime: 5 * 60 * 1000,
-    placeholderData: keepPreviousData,
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[2] === user?.id ? previousData : undefined,
+    // Each completed web search can consume allowance; retry explicitly.
+    retry: false,
+    refetchOnReconnect: false,
   });
+  const hasHeuristicScores = result?.matches.some((match) => match.scoringMode === "heuristic");
 
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    setActiveQuery(searchInput.trim() || undefined);
+    if (isAuthLoading || isFetching) return;
+    if (!isAuthenticated) {
+      openAuth({ redirectTo: "/resume-matcher" });
+      return;
+    }
+    const nextQuery = searchInput.trim() || undefined;
+    if (nextQuery === activeQuery) {
+      void refetch({ cancelRefetch: false });
+      return;
+    }
+    // An explicit search refreshes even a recently visited query.
+    void queryClient.invalidateQueries({
+      queryKey: ["resume-matcher", "run", user?.id ?? "", nextQuery ?? ""],
+      exact: true,
+      refetchType: "none",
+    });
+    setActiveQuery(nextQuery);
   };
 
   return (
@@ -65,7 +97,7 @@ const ResumeMatcher = () => {
         {/* Title */}
         <div className="mb-6">
           <div className="inline-flex items-center gap-2 rounded-full bg-coral/10 text-coral px-3 py-1 text-xs font-medium mb-3">
-            <Sparkles className="h-3.5 w-3.5" /> AI matcher
+            <Sparkles className="h-3.5 w-3.5" /> {hasHeuristicScores ? "Keyword matcher" : "AI matcher"}
           </div>
           <h1 className="text-2xl font-bold text-foreground">Jobs matched to your resume</h1>
           <p className="text-muted-foreground mt-1">
@@ -86,14 +118,24 @@ const ResumeMatcher = () => {
                   className="border-0 bg-transparent px-0 h-auto shadow-none focus-visible:ring-0"
                 />
               </div>
-              <Button type="submit" variant="coral" className="rounded-full px-6" disabled={isFetching}>
+              <Button type="submit" variant="coral" className="rounded-full px-6" disabled={isFetching || isAuthLoading}>
                 {isFetching ? <Loader2 className="h-4 w-4 animate-spin" /> : "Search"}
               </Button>
             </form>
 
-            {isError ? (
+            {isAuthLoading ? (
+              <Centered><Loader2 className="h-4 w-4 animate-spin" /> Loading…</Centered>
+            ) : !isAuthenticated ? (
+              <Centered>
+                Sign in to match jobs to your profile.
+                <Button variant="coral" onClick={() => openAuth({ redirectTo: "/resume-matcher" })}>Sign in</Button>
+              </Centered>
+            ) : isError ? (
               <Centered>
                 <span className="text-destructive">{(error as Error)?.message || "Something went wrong."}</span>
+                <Button variant="outline" disabled={isFetching} onClick={() => void refetch({ cancelRefetch: false })}>
+                  {isFetching ? "Retrying…" : "Retry"}
+                </Button>
               </Centered>
             ) : result && !result.hasProfile ? (
               <NoProfile />
@@ -106,9 +148,16 @@ const ResumeMatcher = () => {
                 {result.scope === "platform" && result.webBlockedReason && (
                   <WebScopeNotice reason={result.webBlockedReason} />
                 )}
+                {hasHeuristicScores && (
+                  <p role="status" className="mb-5 rounded-2xl border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
+                    AI scoring is temporarily unavailable. Results labeled “Keyword match” use overlap with your saved skills.
+                  </p>
+                )}
                 <MatchList matches={result.matches} loading={isFetching} />
               </>
-            ) : null}
+            ) : (
+              <Centered>Search again to refresh your matches.</Centered>
+            )}
           </>
       </main>
     </div>
@@ -239,6 +288,19 @@ function MatchCard({
   /** Which tools the plan doesn't cover right now; shown with a lock. */
   locked?: { cover: boolean; tailor: boolean; research: boolean };
 }) {
+  const queryClient = useQueryClient();
+  const trackExternal = () => {
+    if (m.source === "platform" || !m.url) return;
+    void createExternalApplication({
+      sourceKey: `match:${m.id}`,
+      title: m.title,
+      company: m.company,
+      url: m.url,
+    }).then(() => {
+      void queryClient.invalidateQueries({ queryKey: ["external-applications"] });
+      toast.success("Saved to External tracker. Mark applied after you submit.");
+    }).catch((error: Error) => toast.error(error.message));
+  };
   return (
     <div className="rounded-2xl border border-border bg-card p-5 transition-all duration-200 hover:shadow-md">
       <div className="flex items-start gap-3">
@@ -252,7 +314,10 @@ function MatchCard({
               <p className="text-sm text-muted-foreground truncate">{m.company}</p>
             </div>
             <div className="flex flex-col items-end gap-1 shrink-0">
-              <span className="text-sm font-bold text-coral">{m.matchScore}%</span>
+              <span className="text-sm font-bold text-coral" aria-label={`${m.scoringMode === "heuristic" ? "Keyword match" : "Match"} score: ${m.matchScore}%`}>
+                {m.matchScore}%
+              </span>
+              {m.scoringMode === "heuristic" && <span className="text-[10px] text-muted-foreground">Keyword match</span>}
               <SourceBadge source={m.source} />
             </div>
           </div>
@@ -285,11 +350,12 @@ function MatchCard({
         {m.url && (
           <a
             href={m.url}
+            onClick={trackExternal}
             target={m.url.startsWith("http") ? "_blank" : undefined}
             rel="noopener noreferrer"
             className="ml-auto text-sm font-medium text-foreground hover:text-coral transition-colors"
           >
-            Apply →
+            {m.source === "platform" ? "View job →" : "Open & track →"}
           </a>
         )}
       </div>

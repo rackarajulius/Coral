@@ -1,6 +1,7 @@
 ﻿import { useState } from "react";
 import Workspace from "@/components/employer-dashboard/analytics/Workspace";
 import PageHeader from "@/components/employer-dashboard/analytics/Overview/PageHeader";
+import { AnalyticsRangeProvider } from "@/components/employer-dashboard/analytics/AnalyticsRange";
 
 const TABS = [
   { id: "overview" },
@@ -16,9 +17,11 @@ export default function Analytics() {
   const [tab, setTab] = useState<TabId>("overview");
 
   return (
+      <AnalyticsRangeProvider>
       <div className="mx-auto w-full max-w-[1200px] px-6 py-10 md:px-10 md:py-12">
         <PageHeader />
         <Workspace tab={tab} setTab={setTab} />
       </div>
+      </AnalyticsRangeProvider>
   );
 }

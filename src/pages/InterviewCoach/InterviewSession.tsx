@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Navigate, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,6 +29,7 @@ import {
   useInterviewSessionStore,
 } from "@/stores/interviewSessionStore";
 import { completeLiveScreen } from "@/lib/api/aiScreen";
+import { completeSession, getSession } from "@/lib/api/interviewCoach";
 
 const SILENCE_MS = 4000; // auto-finish after this much quiet…
 const MIN_ANSWER_MS = 10_000; // …but never before the answer is at least this old
@@ -48,10 +49,41 @@ export default function InterviewSession() {
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   /** Screening only: scoring the run and handing it to the employer. */
   const [submitting, setSubmitting] = useState(false);
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
+  const [reconnectError, setReconnectError] = useState<string | null>(null);
 
   const isActiveSession = !!id && s.sessionId === id;
   const snapshot = !isActiveSession && id ? getRecoverySnapshot() : null;
   const recoverable = !!snapshot && snapshot.sessionId === id && snapshot.answers.length > 0;
+
+  useEffect(() => {
+    if (!id || isActiveSession) return;
+    const local = getRecoverySnapshot();
+    if (local?.sessionId === id && local.serverBacked === false) return;
+    let cancelled = false;
+    setReconnectError(null);
+    void (async () => {
+      let session = await getSession(id);
+      if (cancelled) return;
+      if (session.status === "completed") {
+        navigate(`/interview-prep/report/${id}`, { replace: true });
+        return;
+      }
+      if (session.status !== "active") {
+        navigate("/interview-prep", { replace: true });
+        return;
+      }
+      if (session.report) {
+        await completeSession(id);
+        if (!cancelled) navigate(`/interview-prep/report/${id}`, { replace: true });
+        return;
+      }
+      if (!cancelled) await useInterviewSessionStore.getState().resumeFromServer(session);
+    })().catch((error: Error) => {
+      if (!cancelled) setReconnectError(error.message || "Couldn't reconnect to this interview.");
+    });
+    return () => { cancelled = true; };
+  }, [id, isActiveSession, reconnectAttempt, navigate]);
 
   // ─── Voice: AI speech (TTS) ────────────────────────────────────────────────
   const tts = useTextToSpeech();
@@ -278,7 +310,7 @@ export default function InterviewSession() {
 
   // ─── Guards ────────────────────────────────────────────────────────────────
   if (!isActiveSession) {
-    if (recoverable && snapshot) {
+    if (recoverable && snapshot?.serverBacked === false) {
       return (
         <div className="booth-light min-h-screen bg-booth">
           <AlertDialog open>
@@ -316,8 +348,23 @@ export default function InterviewSession() {
         </div>
       );
     }
-    // Unknown/expired session URL.
-    return <Navigate to="/interview-prep" replace />;
+    return (
+      <div className="booth-light flex min-h-screen flex-col items-center justify-center gap-4 bg-booth px-6 text-center text-ink">
+        <p>{reconnectError ?? "Reconnecting to your interview…"}</p>
+        {reconnectError && (
+          <div className="flex gap-3">
+            <Button onClick={() => setReconnectAttempt((n) => n + 1)}>Try again</Button>
+            {recoverable && snapshot && (
+              <Button variant="outline" onClick={() => {
+                const entry = recoverPartialReport(snapshot);
+                navigate(`/interview-prep/report/${entry.id}`, { replace: true });
+              }}>Grade saved answers locally</Button>
+            )}
+            <Button variant="outline" onClick={() => navigate("/interview-prep", { replace: true })}>Back to coach</Button>
+          </div>
+        )}
+      </div>
+    );
   }
 
   if (s.aiState === "evaluating" || submitting) return <GeneratingReport />;
@@ -340,7 +387,7 @@ export default function InterviewSession() {
         <div className="border-b border-rose-500/30 bg-rose-500/10 px-6 py-2 text-center text-sm text-rose-300">
           {s.error}{" "}
           <button onClick={s.resume} className="font-semibold underline underline-offset-2">
-            Resume
+            Try again
           </button>
         </div>
       )}

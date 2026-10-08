@@ -1,10 +1,8 @@
-import { Badge } from '@/components/ui/badge';
 import { useQuery } from '@tanstack/react-query';
 import { getTalent } from '@/lib/api/employerAnalytics';
 import OutreachStatsCard from './OutreachStatsCard';
 import OfferOutcomesCard from './OfferOutcomesCard';
 import CompetitorsCard from './CompetitorsCard';
-// Still mock: "Talent hotspots" below. Everything else on this tab is measured.
 import {
   ResponsiveContainer,
   BarChart,
@@ -53,12 +51,10 @@ const CHART_COLORS = [
 
   return (
     <div className="grid gap-6">
-          {/* Measured — first, so real numbers are what someone reads before
-              the one illustrative card (hotspots) further down. */}
           <OutreachStatsCard />
           <OfferOutcomesCard />
-          <div className="grid gap-6 lg:grid-cols-3">
-            <Card className="p-5 lg:col-span-2">
+          <div className="grid gap-6">
+            <Card className="p-5">
               <h2 className="text-base font-semibold">Talent supply vs demand</h2>
               <p className="text-xs text-muted-foreground">
                 {talentQuery.data?.note ??
@@ -93,23 +89,6 @@ const CHART_COLORS = [
               )}
             </Card>
     
-            <Card className="p-5">
-              <h2 className="text-base font-semibold">Talent hotspots</h2>
-              <div className="mt-3 space-y-2">
-                {[
-                  { city: "Berlin", score: 92 },
-                  { city: "Lisbon", score: 88 },
-                  { city: "Austin", score: 84 },
-                  { city: "Toronto", score: 79 },
-                  { city: "Bengaluru", score: 76 },
-                ].map((h) => (
-                  <div key={h.city} className="flex items-center justify-between rounded-md border border-border p-2.5">
-                    <span className="text-sm font-medium">{h.city}</span>
-                    <Badge variant="secondary" className="tabular-nums">{h.score}</Badge>
-                  </div>
-                ))}
-              </div>
-            </Card>
           </div>
     
           {/* Replaced an invented radar ("Industry avg 71"), a made-up salary

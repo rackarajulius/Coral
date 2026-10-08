@@ -5,6 +5,7 @@ import {
 } from "@/components/ui/breadcrumb";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { EMPLOYER_ACTIVE_TAB } from "@/lib/tabStyles";
 import type { TeamTab } from "./tabs";
 
 /**
@@ -49,7 +50,7 @@ export function TeamShell({
           </p>
         </div>
 
-        <div className="-mx-6 border-b border-border bg-background/80 px-6 backdrop-blur lg:-mx-10 lg:px-10">
+        <div className="border-b border-border bg-background/80 backdrop-blur">
           <nav className="no-scrollbar flex gap-1 overflow-x-auto">
             {tabs.map((t) => (
               <NavLink
@@ -62,7 +63,7 @@ export function TeamShell({
                   cn(
                     "flex items-center gap-2 whitespace-nowrap border-b-2 px-3 py-3 text-sm font-medium transition-colors",
                     isActive
-                      ? "border-orange-500 text-foreground"
+                      ? EMPLOYER_ACTIVE_TAB
                       : "border-transparent text-muted-foreground hover:text-foreground",
                   )
                 }

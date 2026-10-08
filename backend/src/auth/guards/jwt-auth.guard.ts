@@ -61,7 +61,8 @@ export class JwtAuthGuard implements CanActivate {
         try {
           const supabaseUser = await this.supabaseService.verifyTokenCached(token);
           if (supabaseUser) {
-            const user = await this.authService.findOrCreateUser(supabaseUser);
+            const user = await this.authService.findOrCreateUser(supabaseUser, async () =>
+              (await this.supabaseService.verifyToken(token))?.id === supabaseUser.id);
             if (user.status !== 'SUSPENDED' && user.status !== 'BANNED') {
               request.user = user;
             }
@@ -89,7 +90,8 @@ export class JwtAuthGuard implements CanActivate {
       }
 
       // Get or create user in our database
-      const user = await this.authService.findOrCreateUser(supabaseUser);
+      const user = await this.authService.findOrCreateUser(supabaseUser, async () =>
+        (await this.supabaseService.verifyToken(token))?.id === supabaseUser.id);
 
       if (user.status === 'SUSPENDED') {
         throw new UnauthorizedException('Your account has been suspended');

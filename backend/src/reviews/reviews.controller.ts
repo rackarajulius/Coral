@@ -65,6 +65,11 @@ export class ReviewsController {
 export class EmployerReviewsController {
   constructor(private readonly reviews: ReviewsService) {}
 
+  @Get('overview')
+  async overview(@CurrentUser() user: User) {
+    return { success: true, data: await this.reviews.employerOverview(user) };
+  }
+
   @Get()
   async mine(@CurrentUser() user: User) {
     return { success: true, data: await this.reviews.forEmployer(user) };

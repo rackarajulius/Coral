@@ -57,7 +57,8 @@ export class AvailabilityService {
     if (slot.status === 'booked') {
       throw new BadRequestException('That slot is already booked — cancel the interview instead.');
     }
-    await this.prisma.availabilitySlot.delete({ where: { id } });
+    const removed = await this.prisma.availabilitySlot.deleteMany({ where: { id, employerId: employer.id, status: { not: 'booked' } } });
+    if (!removed.count) throw new BadRequestException('That slot is no longer removable');
     return { ok: true };
   }
 
@@ -96,27 +97,22 @@ export class AvailabilityService {
     if (slot.startAt.getTime() <= Date.now()) throw new BadRequestException('That time has passed');
     if (slot.employerId === candidate.id) throw new BadRequestException("You can't book your own availability");
 
-    const interview = await this.prisma.interview.create({
-      data: {
-        employerId: slot.employerId,
-        candidateId: candidate.id,
-        role: slot.role,
-        medium: slot.medium,
-        proposedSlots: [slot.startAt.toISOString()],
-        scheduledAt: slot.startAt,
-        status: 'confirmed',
-      },
+    const interview = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.interview.create({
+        data: {
+          employerId: slot.employerId, candidateId: candidate.id, role: slot.role,
+          medium: slot.medium, proposedSlots: [slot.startAt.toISOString()],
+          scheduledAt: slot.startAt, status: 'confirmed',
+        },
+      });
+      const claim = await tx.availabilitySlot.updateMany({
+        where: { id: slot.id, status: 'open', startAt: { gt: new Date() } },
+        data: { status: 'booked', interviewId: created.id },
+      });
+      if (!claim.count) throw new BadRequestException('That time was just taken. Please pick another.');
+      return created;
     });
-
-    // Claim the slot only if still open; otherwise we lost a race → roll back.
-    const claim = await this.prisma.availabilitySlot.updateMany({
-      where: { id: slot.id, status: 'open' },
-      data: { status: 'booked', interviewId: interview.id },
-    });
-    if (claim.count === 0) {
-      await this.prisma.interview.delete({ where: { id: interview.id } }).catch(() => undefined);
-      throw new BadRequestException('That time was just taken — please pick another.');
-    }
+    const scheduled = await this.interviews.createCalendarMeeting(interview.id);
 
     const candidateName =
       candidate.displayName ||
@@ -131,6 +127,6 @@ export class AvailabilityService {
     });
     await this.interviews.sendConfirmationEmail(interview.id);
 
-    return interview;
+    return scheduled;
   }
 }

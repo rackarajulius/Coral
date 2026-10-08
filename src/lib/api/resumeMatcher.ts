@@ -37,6 +37,8 @@ export interface MatchedJob {
   location: string;
   source: "platform" | "adzuna" | "jsearch" | "talent" | "greenhouse" | "lever" | string;
   matchScore: number;
+  /** Optional for compatibility with older API responses. */
+  scoringMode?: "ai" | "heuristic";
   reason?: string;
   url?: string;
   salary?: string;
@@ -114,11 +116,12 @@ export async function getResumeMatcherAccess(): Promise<{ isPremium: boolean }> 
  * Matches the seeker's stored profile to jobs. Pass an optional role/keyword
  * (from the search bar) to search for something specific instead.
  */
-export async function runResumeMatch(query?: string): Promise<MatchRunResult> {
+export async function runResumeMatch(query?: string, signal?: AbortSignal): Promise<MatchRunResult> {
   const res = await fetch(`${API_BASE_URL}/resume-matcher/run`, {
     method: "POST",
     headers: await authHeaders(),
     body: JSON.stringify(query ? { query } : {}),
+    signal,
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { EMPLOYER_ACTIVE_TAB } from "@/lib/tabStyles";
 import type { NotificationTab } from "./types";
 
 const TABS: { id: NotificationTab; label: string; countKey?: "unread" }[] = [
@@ -26,9 +27,9 @@ export function NotificationsTabs({ tab, unreadCount, onTabChange }: Notificatio
               type="button"
               onClick={() => onTabChange(t.id)}
               className={cn(
-                "relative -mb-px flex items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors",
+                "employer-underline-tab relative -mb-px flex items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors",
                 tab === t.id
-                  ? "border-foreground text-foreground"
+                  ? EMPLOYER_ACTIVE_TAB
                   : "border-transparent text-muted-foreground hover:text-foreground"
               )}
             >

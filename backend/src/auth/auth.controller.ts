@@ -2,19 +2,26 @@ import {
   Controller,
   Get,
   Post,
+  Delete,
   Body,
   UseGuards,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
+import { AccountClosureService } from './account-closure.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { Public } from '../common/decorators/public.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { User } from '../common/types/user.types';
 import { UserRole } from '@prisma/client';
-import { IsEnum, IsObject, IsOptional, IsUUID } from 'class-validator';
+import { Equals, IsEnum, IsObject, IsOptional, IsUUID, ValidateIf } from 'class-validator';
+
+class CloseAccountDto {
+  @Equals('CLOSE')
+  confirmation!: string;
+}
 
 class UpdateRoleDto {
   @IsEnum(UserRole)
@@ -29,14 +36,17 @@ class OnboardingDto {
   @IsEnum(UserRole)
   role!: UserRole;
 
-  @IsOptional()
+  @ValidateIf((_object, value) => value !== undefined)
   @IsObject()
   profileData?: Record<string, unknown>;
 }
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly accountClosure: AccountClosureService,
+  ) {}
 
   /**
    * Public health check
@@ -137,6 +147,14 @@ export class AuthController {
       success: true,
       message: 'Account deactivated successfully',
     };
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Delete('account')
+  @HttpCode(HttpStatus.OK)
+  async closeAccount(@CurrentUser() user: User, @Body() dto: CloseAccountDto) {
+    await this.accountClosure.closeAccount(user, dto.confirmation);
+    return { success: true, message: 'Account closed permanently' };
   }
 
 }

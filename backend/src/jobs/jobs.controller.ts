@@ -173,33 +173,42 @@ export class JobsController {
   @Roles(UserRole.EMPLOYER, UserRole.ADMIN)
   @RequiresCapability('jobs:write')
   @Patch(':id')
-  updateJob(
+  async updateJob(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: User,
     @Body() dto: UpdateJobDto,
   ) {
+    if (dto.status === 'active' && user.role !== UserRole.ADMIN) {
+      await this.verification.assertCanReachCandidates(user.id);
+    }
     return this.jobsService.updateJob(id, user, dto);
   }
 
   @Roles(UserRole.EMPLOYER, UserRole.ADMIN)
   @RequiresCapability('jobs:write')
   @Patch(':id/status')
-  updateJobStatus(
+  async updateJobStatus(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: User,
     @Body() dto: UpdateJobManagementStatusDto,
   ) {
+    if (dto.status === 'active' && user.role !== UserRole.ADMIN) {
+      await this.verification.assertCanReachCandidates(user.id);
+    }
     return this.jobsService.updateJobStatus(id, user, dto);
   }
 
   @Roles(UserRole.EMPLOYER, UserRole.ADMIN)
   @RequiresCapability('jobs:write')
   @Post(':id/duplicate')
-  duplicateJob(
+  async duplicateJob(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: User,
     @Body() dto: DuplicateJobDto,
   ) {
+    if (dto?.status === 'active' && user.role !== UserRole.ADMIN) {
+      await this.verification.assertCanReachCandidates(user.id);
+    }
     return this.jobsService.duplicateJob(id, user, dto ?? {});
   }
 

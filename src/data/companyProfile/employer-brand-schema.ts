@@ -247,7 +247,9 @@ export function normalizeEmployerBrand(brand: EmployerBrand): EmployerBrand {
   };
 }
 
-export const defaultEmployerBrand: EmployerBrand = {
+// Kept only to identify untouched values in older automatically saved drafts.
+// Never use this example company as the starting state of a real profile.
+const legacyDemoEmployerBrand: EmployerBrand = {
   banner: undefined,
   logo: undefined,
   displayName: "Acme Technologies",
@@ -480,6 +482,78 @@ export const defaultEmployerBrand: EmployerBrand = {
   showJobs: true,
   allowFollow: true,
 };
+
+export const defaultEmployerBrand: EmployerBrand = {
+  banner: undefined,
+  logo: undefined,
+  displayName: "",
+  tagline: "",
+  industries: [],
+  companySize: "",
+  foundedYear: "",
+  headquarters: "",
+  locations: [],
+  website: "",
+  social: [],
+  overview: "",
+  mission: "",
+  vision: "",
+  values: [],
+  gallery: [],
+  cultureVideo: "",
+  whyWorkHere: [],
+  benefits: [],
+  benefitCategories: [],
+  cultureDescription: "",
+  culturePhilosophy: "",
+  cultureCollaboration: "",
+  cultureImage: "",
+  awards: [],
+  testimonials: [],
+  videoTestimonials: [],
+  deiStats: [],
+  diversityStatement: "",
+  visibility: "public",
+  showJobs: true,
+  allowFollow: true,
+};
+
+/** Remove unchanged template content from a v1 local draft, retaining edits. */
+export function cleanLegacyEmployerBrandDraft(draft: Partial<EmployerBrand>): Partial<EmployerBrand> {
+  // Field-array controls can regenerate row ids without changing their content.
+  const content = (value: unknown) => JSON.stringify(value, (key, item) => key === "id" ? undefined : item);
+  const same = (left: unknown, right: unknown) => content(left) === content(right);
+  const fingerprints: (keyof EmployerBrand)[] = [
+    "overview", "gallery", "benefitCategories", "testimonials", "locations", "social",
+  ];
+  // A generic company value alone is not evidence of an inherited template.
+  if (fingerprints.filter((key) => same(draft[key], legacyDemoEmployerBrand[key])).length < 2) return draft;
+
+  const cleaned = { ...draft };
+  const contentFields: (keyof EmployerBrand)[] = [
+    "displayName", "tagline", "industries", "companySize", "foundedYear", "headquarters",
+    "locations", "website", "social", "overview", "mission", "vision", "values", "gallery",
+    "whyWorkHere", "benefits", "benefitCategories", "cultureDescription", "testimonials",
+    "videoTestimonials", "deiStats",
+  ];
+  for (const key of contentFields) {
+    if (same(draft[key], legacyDemoEmployerBrand[key])) {
+      delete cleaned[key];
+    } else if (Array.isArray(draft[key]) && Array.isArray(legacyDemoEmployerBrand[key])) {
+      const seedItems = legacyDemoEmployerBrand[key] as unknown[];
+      (cleaned as Record<string, unknown>)[key] = (draft[key] as unknown[])
+        .filter((item) => !seedItems.some((seed) => same(item, seed)));
+    }
+  }
+  // An edited category may still contain unchanged automatically supplied perks.
+  if (cleaned.benefitCategories) {
+    const seedItems = legacyDemoEmployerBrand.benefitCategories.flatMap((category) => category.items);
+    cleaned.benefitCategories = cleaned.benefitCategories.map((category) => ({
+      ...category, items: category.items.filter((item) => !seedItems.some((old) => same(item, old))),
+    }));
+  }
+  return cleaned;
+}
 
 /** Profile strength: weighted completeness 0–100 */
 export function calcProfileStrength(b: EmployerBrand): number {

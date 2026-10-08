@@ -636,13 +636,15 @@ export class AiScreenService {
     const screen = await this.ownedByCandidate(candidate, id);
     if (screen.mode !== 'live') throw new BadRequestException('This screening is not a live interview.');
     if (screen.status === 'completed') return this.forCandidate(screen, undefined);
+    if (screen.status !== 'invited' || !screen.consentAt) throw new BadRequestException('This interview cannot be submitted.');
 
     const session = await this.prisma.interviewCoachSession.findUnique({ where: { screenId: screen.id } });
     if (!session) throw new BadRequestException('This interview has not been started.');
 
     const qa = this.transcriptToQa(session.answers);
-    if (qa.length === 0) {
-      throw new BadRequestException('No answers were recorded, so this interview cannot be scored.');
+    const questions = this.questionsOf(screen.questions);
+    if (!questions.length || qa.length !== questions.length || qa.some((entry, i) => entry.question !== questions[i])) {
+      throw new BadRequestException('Record an answer to every assigned question before submitting.');
     }
 
     const evaluation = await this.ai.evaluateScreen({
@@ -655,8 +657,8 @@ export class AiScreenService {
       language: await this.screenLanguage(screen.jobId),
     });
 
-    const updated = await this.prisma.aiScreen.update({
-      where: { id: screen.id },
+    const committed = await this.prisma.aiScreen.updateMany({
+      where: { id: screen.id, status: 'invited' },
       data: {
         answers: qa as unknown as Prisma.InputJsonValue,
         evaluation: evaluation as unknown as Prisma.InputJsonValue,
@@ -667,6 +669,8 @@ export class AiScreenService {
         completedAt: new Date(),
       },
     });
+    if (!committed.count) throw new BadRequestException('This screening is no longer awaiting submission.');
+    const updated = await this.prisma.aiScreen.findUniqueOrThrow({ where: { id: screen.id } });
 
     const name =
       candidate.displayName || [candidate.firstName, candidate.lastName].filter(Boolean).join(' ') || 'A candidate';
@@ -859,7 +863,10 @@ export class AiScreenService {
       return this.forCandidate(updated, undefined);
     }
 
-    if (!dto.answers) throw new BadRequestException('Please answer every question before submitting.');
+    if (screen.mode !== 'text') throw new BadRequestException('Complete live interviews through the live interview flow.');
+    if (!questions.length || !dto.answers || dto.answers.length !== questions.length) {
+      throw new BadRequestException('Please provide exactly one answer for every question.');
+    }
     const qa = questions.map((question, i) => ({
       question,
       answer: (dto.answers?.[i] ?? '').trim(),
@@ -878,8 +885,8 @@ export class AiScreenService {
       language: await this.screenLanguage(screen.jobId),
     });
 
-    const updated = await this.prisma.aiScreen.update({
-      where: { id: screen.id },
+    const committed = await this.prisma.aiScreen.updateMany({
+      where: { id: screen.id, status: 'invited' },
       data: {
         answers: qa as unknown as Prisma.InputJsonValue,
         evaluation: evaluation as unknown as Prisma.InputJsonValue,
@@ -889,6 +896,8 @@ export class AiScreenService {
         completedAt: new Date(),
       },
     });
+    if (!committed.count) throw new BadRequestException('This screening is no longer awaiting submission.');
+    const updated = await this.prisma.aiScreen.findUniqueOrThrow({ where: { id: screen.id } });
 
     const candidateName =
       candidate.displayName || [candidate.firstName, candidate.lastName].filter(Boolean).join(' ') || 'A candidate';
@@ -908,7 +917,9 @@ export class AiScreenService {
     const screen = await this.prisma.aiScreen.findFirst({ where: { id, candidateId: candidate.id } });
     if (!screen) throw new NotFoundException('Screening not found');
     if (screen.status !== 'invited') throw new ForbiddenException('This screening can no longer be declined.');
-    const updated = await this.prisma.aiScreen.update({ where: { id: screen.id }, data: { status: 'declined' } });
+    const claim = await this.prisma.aiScreen.updateMany({ where: { id: screen.id, status: 'invited' }, data: { status: 'declined' } });
+    if (!claim.count) throw new ForbiddenException('This screening can no longer be declined.');
+    const updated = await this.prisma.aiScreen.findUniqueOrThrow({ where: { id: screen.id } });
 
     const company = await this.employerCompany(screen.employerId);
     await this.notifications.create({
