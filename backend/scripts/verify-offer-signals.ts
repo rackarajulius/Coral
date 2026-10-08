@@ -119,6 +119,7 @@ const skipped = (f: OfferFacts, id: string) => offerSignals(f).notChecked.find((
         await tx.job.update({ where: { id: app.job.id }, data: { salaryMin: 90_000, salaryMax: 110_000, salaryCurrency: 'CAD', salaryPeriod: 'yearly' } });
         await tx.jobSeekerProfile.updateMany({ where: { userId: app.applicantId }, data: { salaryExpectation: '$120k', privacySettings: { showSalaryExpectations: false } } });
         await tx.offer.deleteMany({ where: { applicationId: app.id } });
+        await tx.application.update({ where: { id: app.id }, data: { status: 'interviewing' } });
 
         const ctx = new CompanyContextService(tx);
         const signals = new OfferSignalsService(tx, ctx);
@@ -146,7 +147,16 @@ const skipped = (f: OfferFacts, id: string) => offerSignals(f).notChecked.find((
           check("another company can't read these signals", refused === 'Application not found', refused);
         }
 
-        const offers = new OffersService(tx, ctx, { recordFor: async () => undefined, record: async () => undefined } as any, { create: async () => ({ id: 'n' }) } as any, signals);
+        // Offers now commit their pipeline changes transactionally. Reuse this
+        // script's outer, always-rolled-back transaction instead of committing
+        // anything through the root client (Prisma has no nested transactions).
+        const transactional = new Proxy(tx, {
+          get(target, key) {
+            if (key === '$transaction') return (work: (scope: any) => Promise<unknown>) => work(target);
+            return Reflect.get(target, key);
+          },
+        });
+        const offers = new OffersService(transactional, ctx, { recordFor: async () => undefined, record: async () => undefined } as any, { create: async () => ({ id: 'n' }) } as any, signals);
         const draft = await offers.upsertDraft(employer, app.id, { salaryAmount: 8_500_000, salaryCurrency: 'cad', salaryPeriod: 'yearly' });
         await offers.send(employer, draft.id);
         const sent = await tx.offer.findUnique({ where: { id: draft.id } });

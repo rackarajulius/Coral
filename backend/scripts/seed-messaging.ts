@@ -81,7 +81,7 @@ async function run() {
     }
     candidateIsReal = true;
     if (candidate.role !== 'JOB_SEEKER') {
-      console.warn(`  ! ${candidate.email} is ${candidate.role}; they can still open the thread at /jobseeker/messages.`);
+      console.warn(`  ! ${candidate.email} is ${candidate.role}; they can still open the thread at /jobseeker/chat.`);
     }
   } else {
     candidate = await prisma.user.upsert({
@@ -189,9 +189,9 @@ async function run() {
   console.log(`  Job      : ${job.title}`);
   console.log(`  Thread   : conversation ${convo.id} (${existing === 0 ? 'seeded 3 messages' : 'already had messages'})\n`);
   console.log('  Test it:');
-  console.log('    • Employer: log in, then /employers/messages (open the thread) or /employers/candidates → Message.');
+  console.log('    • Employer: log in, then /employers/chat (open the thread) or /employers/candidates → Message.');
   if (candidateIsReal) {
-    console.log(`    • Candidate: log in as ${candidate.email}, then /jobseeker/messages → reply, attach a file, watch it appear live.\n`);
+    console.log(`    • Candidate: log in as ${candidate.email}, then /jobseeker/chat → reply, attach a file, watch it appear live.\n`);
   } else {
     console.log('    • Candidate is DB-only — pass CANDIDATE_EMAIL of a real job seeker to test both sides.\n');
   }

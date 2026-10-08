@@ -2,9 +2,11 @@
   "moduleFileExtensions": ["js", "json", "ts"],
   "rootDir": ".",
   "testEnvironment": "node",
-  "testRegex": ".e2e-spec.ts$",
+  "testRegex": "\\.e2e-spec\\.ts$",
+  "maxWorkers": 1,
+  "testTimeout": 60000,
   "transform": {
-    "^.+\\.(t|j)s$": "ts-jest"
+    "^.+\\.ts$": ["ts-jest", { "tsconfig": "test/tsconfig.transform.json" }]
   }
 }
 

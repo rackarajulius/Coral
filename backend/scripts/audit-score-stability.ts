@@ -27,7 +27,7 @@
 import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
-import { AppModule } from '../src/app.module';
+import { ConfigService } from '@nestjs/config';
 import { AiService } from '../src/services/ai/ai.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { FIXTURES } from './fixtures/screening-transcripts';
@@ -123,14 +123,16 @@ function loadFixtures(): Transcript[] {
 
 async function main() {
   Logger.overrideLogger(['error']); // the report is the output; suppress boot noise
-  const app = await NestFactory.createApplicationContext(AppModule, { logger: ['error'] });
+  // Synthetic audits need only the AI client: no database, schedulers or delivery workers.
+  const app = process.env.SOURCE === 'fixtures' ? null : await NestFactory.createApplicationContext(
+    (await import('../src/app.module')).AppModule, { logger: ['error'] },
+  );
 
   try {
-    const ai = app.get(AiService);
-    const prisma = app.get(PrismaService);
+    const ai = app?.get(AiService) ?? new AiService(new ConfigService());
 
     const forced = process.env.SOURCE;
-    const real = forced === 'fixtures' ? [] : await loadReal(prisma);
+    const real = app ? await loadReal(app.get(PrismaService)) : [];
     const transcripts = real.length > 0 ? real : loadFixtures();
     const source = real.length > 0 ? 'real completed screens' : 'synthetic fixtures';
 
@@ -298,7 +300,7 @@ async function main() {
       }
     }
   } finally {
-    await app.close();
+    await app?.close();
   }
 }
 

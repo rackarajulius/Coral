@@ -4,13 +4,64 @@ What we have measured about `AiService.evaluateScreen`, the model that produces
 the 0–100 score and `strong_yes | yes | maybe | no` recommendation shown on the
 job screening board.
 
-**Status: not validated.** Reliability has been measured and one defect fixed.
-Calibration has a known, measured defect with an unverified fix. No bias audit
-and no validity study exist.
+**Status: not validated for hiring outcomes.** Runtime and workflow validation
+have automated coverage. A 2026-09-29 synthetic calibration check supports the
+evidence-over-eloquence fix; it is one run per fixture, not a stability study.
+No completed bias audit or predictive-validity study exists.
 
 Run the harness with `npm run audit:stability` (see
 `scripts/audit-score-stability.ts`). It uses real completed screens when the
 database has any, and synthetic fixtures otherwise.
+
+## Response and workflow validation — 2026-09-29
+
+Hiring score outputs now have strict runtime validation. Scores must be numeric
+integers from 0 through 100, recommendations must match the documented score
+bands, and every assigned question must have one score and explanation in order.
+Missing scores no longer become zero. Batch job/candidate matching requires one
+result per requested ID and rejects missing, duplicate and unknown IDs.
+
+An invalid screening result returns a retryable 503 and leaves the screening
+unscored. Text submission cannot bypass the live interview flow. Live completion
+requires consent and answers to the assigned questions. Conditional writes prevent
+late or competing evaluations from overwriting a completed or declined screening.
+Concurrent requests can still consume multiple model calls; only one result commits.
+
+Automated tests exercise these contracts, candidate scorecard privacy, integrity
+signals remaining outside scoring, and video submissions remaining unscored.
+These checks establish software behavior, not predictive validity, calibration,
+fairness or resistance to every form of prompt injection. Existing stored scores
+are not retroactively validated or changed.
+
+For a synthetic-only live check, use `SOURCE=fixtures RUNS=1 npm run audit:stability`.
+Fixture mode now initializes only the AI client; it does not start the application,
+connect to the database, run schedulers or read real candidate answers. This makes
+five model evaluations with the bundled fixture set; repeated runs are needed to
+measure stability.
+
+## Latest live synthetic check — 2026-09-29
+
+Five synthetic transcripts, one live evaluation each, using the current scoring
+prompt and strict response validator. All five returned valid scorecards.
+Configured primary: Gemini `gemini-2.5-flash`, temperature 0; provider fallback
+was enabled. The harness does not yet record per-response provider provenance.
+
+| Fixture | Score | Recommendation |
+|---|---:|---|
+| strong-detailed | 92 | strong_yes |
+| mixed-uneven | 50 | maybe |
+| borderline-generic | 33 | no |
+| weak-short | 10 | no |
+| strong-spoken-disfluent | 92 | strong_yes |
+
+The generic answer is now 59 points below the detailed answer, and below the
+previously stated target of 50. The written/spoken pair has a zero-point gap in
+this run. These results support the prompt correction on these fixtures only.
+They do not establish repeatability, general calibration, accent fairness, or
+prediction of job performance. The mixed fixture sits exactly on a recommendation
+boundary and especially needs repeated runs. The August measurements below are
+historical; their statements that the prompt fix and spoken fixture were unmeasured
+describe the state before this run.
 
 ---
 
@@ -19,7 +70,7 @@ database has any, and synthetic fixtures otherwise.
 | | Question | Status |
 |---|---|---|
 | **Reliability** | Does it agree with itself? | Measured; defect fixed |
-| **Calibration** | Does the number mean what it says? | Measured; **defect open** |
+| **Calibration** | Does the number mean what it says? | Synthetic single-run check improved; replication pending |
 | **Validity** | Does it predict anything real? | **Not started** |
 
 A bias audit (adverse impact across protected groups) is a fourth question and
