@@ -64,16 +64,23 @@ const KpiCard = ({
         </span>
       </div>
       <div className="flex items-baseline gap-2">
-        <CountUp
-          end={parseFloat(String(value).replace(/,/g, ""))}
-          duration={2}
+        {/* An unmeasured figure is an em dash, and CountUp would read that as
+            NaN, render 0, then append the dash — "0—". Anything without a
+            number in it is printed as it is. */}
+        {Number.isNaN(parseFloat(String(value).replace(/,/g, ""))) ? (
+          <span className="text-3xl font-bold tracking-tight text-muted-foreground">{value}</span>
+        ) : (
+          <CountUp
+            end={parseFloat(String(value).replace(/,/g, ""))}
+            duration={2}
             enableScrollSpy
             scrollSpyOnce
-          separator=","
-          decimals={String(value).includes(".") ? 1 : 0}
-          suffix={String(value).replace(/,/g, "").replace(/^[\d.-]+/, "")}
-          className="text-3xl font-bold text-foreground tracking-tight"
-        />
+            separator=","
+            decimals={String(value).includes(".") ? 1 : 0}
+            suffix={String(value).replace(/,/g, "").replace(/^[\d.-]+/, "")}
+            className="text-3xl font-bold text-foreground tracking-tight"
+          />
+        )}
         <p className="text-xs text-muted-foreground">{unit}</p>
       </div>
       <p className="text-sm font-medium text-foreground mt-1">{label}</p>

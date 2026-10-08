@@ -6,35 +6,51 @@ import ActivityFeed from "@/components/employer-dashboard/overview/ActivityFeed"
 import NextBestActions from "@/components/employer-dashboard/overview/NextBestActions";
 import FinishSetupCard from "@/components/employer-dashboard/overview/FinishSetupCard";
 import UpgradeBanner from "@/components/employer-dashboard/overview/UpgradeBanner";
-import { employer } from "@/data/employer/overview/data";
 import { useAuth } from "@/contexts/AuthContext";
+import { personName } from "@/lib/personName";
 import { useJobsStore } from "@/stores/jobsStore";
 import { useEmployerCompanyStore } from "@/stores/employerCompanyStore";
 
 const Dashboard = () => {
   const { user } = useAuth();
   const { jobs, fetchJobs } = useJobsStore();
-  const { company, fetchCompany } = useEmployerCompanyStore();
+  const { identity, loaded, fetchCompany } = useEmployerCompanyStore();
 
   useEffect(() => {
     fetchJobs().catch(() => {});
     fetchCompany().catch(() => {});
   }, [fetchJobs, fetchCompany]);
 
-  const hasBranding = !!company && company.companyName !== "New Company";
-  const companyName = hasBranding ? company.companyName : employer.companyName;
-  const tagline = hasBranding ? company.tagline : null;
-  const bannerUrl = hasBranding ? company.companyBanner : null;
-  const userName = user?.firstName || user?.displayName?.split(" ")[0] || employer.user;
+  /**
+   * What we actually know, or nothing.
+   *
+   * These fell back to a fixture — "Acme Inc." and "John" — so an employer who
+   * had not finished setting up their company was greeted by another company's
+   * name and someone else's first name.
+   *
+   * `identity` is the last known name, read from localStorage before the first
+   * paint, so a returning employer sees "Airtel Uganda" immediately rather than
+   * "Your dashboard" for a second while the fetch is in flight. It is null on a
+   * first visit, and `loaded` is what tells that apart from "no company" — the
+   * heading waits rather than asserting either.
+   */
+  const companyName = identity?.companyName ?? null;
+  const tagline = identity?.tagline ?? null;
+  const bannerUrl = identity?.companyBanner ?? null;
+  const knowsCompany = loaded || identity !== null;
+  // First name only, through the one naming rule — which returns nothing
+  // rather than the email's local part. See lib/personName.
+  const userName = personName(user).split(" ")[0];
 
   const activeJobsCount = jobs.filter((j) => j.status === "Open").length;
   const totalApplicants = jobs.reduce((sum, j) => sum + j.applicants, 0);
 
   return (
-    <div className="bg-white dark:bg-background">
+    <div className="bg-background">
         <div className="mx-auto max-w-[1400px] space-y-6 p-4 sm:p-6 lg:p-8">
           <HeroBanner
             companyName={companyName}
+            knowsCompany={knowsCompany}
             userName={userName}
             summary={`${activeJobsCount} active job${activeJobsCount === 1 ? "" : "s"} · ${totalApplicants} total applicant${totalApplicants === 1 ? "" : "s"}`}
             bannerUrl={bannerUrl}

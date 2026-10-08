@@ -57,7 +57,10 @@ const EmployerLayout = ({ children, mainClassName }: EmployerLayoutProps) => {
       await logout();
       // Clear cached company/jobs/analytics data so the next account doesn't briefly see
       // the previous employer's stale company name, banner, or KPI counts.
-      useEmployerCompanyStore.setState({ company: null, loading: false, loaded: false });
+      // The company store owns a localStorage copy of the name now, so ask it
+      // to forget rather than resetting the fields this file happens to know
+      // about — a partial reset would leave that copy on disk.
+      useEmployerCompanyStore.getState().forgetIdentity();
       useJobsStore.setState({ jobs: [], loading: false, loaded: false });
       useEmployerAnalyticsStore.setState({ analytics: null, loading: false, loaded: false });
       toast.success("Signed out successfully");
@@ -70,7 +73,7 @@ const EmployerLayout = ({ children, mainClassName }: EmployerLayoutProps) => {
     <SidebarProvider data-employer className="h-svh max-h-svh overflow-hidden">
       <div className="flex h-full min-h-0 w-full bg-white dark:bg-background">
         <EmployerSidebar />
-        <div className="flex h-full min-h-0 flex-1 flex-col min-w-0 bg-white dark:bg-background">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-white dark:bg-background md:my-2 md:mr-2 md:overflow-hidden md:rounded-md md:border md:border-border">
           <header className="z-30 flex h-14 shrink-0 items-center justify-between border-b border-border bg-card/60 px-4 backdrop-blur-md">
             <SidebarTrigger className="text-muted-foreground hover:text-foreground" />
              <div className="flex items-center gap-2">
@@ -116,7 +119,7 @@ const EmployerLayout = ({ children, mainClassName }: EmployerLayoutProps) => {
           <main
             className={cn(
               "relative flex min-h-0 flex-1 flex-col bg-white dark:bg-background",
-              isFullHeightMain ? "overflow-hidden" : "overflow-auto",
+              isFullHeightMain ? "overflow-hidden" : "employer-workspace-scroll overflow-auto",
               mainClassName
             )}
           >

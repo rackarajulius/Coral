@@ -1,10 +1,11 @@
-import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { runAfterSignOut, runBeforeSignOut } from '@/lib/signOutHooks';
 import { User as SupabaseUser, Session } from '@supabase/supabase-js';
-import supabase from '@/lib/supabase';
+import supabase, { SUPABASE_AUTH_STORAGE_KEY } from '@/lib/supabase';
 import { oneTapSuppression } from '@/lib/oneTapSuppression';
 import { lastGoogleAccount } from '@/lib/lastGoogleAccount';
 import MfaChallengeDialog from '@/components/auth/MfaChallengeDialog';
+import { deleteMyAccount, type AccountClosureResult } from '@/lib/api/auth';
 import {
   ALREADY_REGISTERED_MESSAGE,
   AuthFlowError,
@@ -32,6 +33,13 @@ const readCachedUser = (): User | null => {
     return null;
   }
 };
+
+/**
+ * Who the cache currently belongs to, for other caches that must not outlive a
+ * sign-out. Reading it synchronously is what lets them hydrate before paint
+ * while still refusing to show one account's data to the next.
+ */
+export const cachedUserId = (): string | null => readCachedUser()?.id ?? null;
 
 const writeCachedUser = (user: User | null): void => {
   try {
@@ -104,6 +112,8 @@ interface AuthContextType {
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  /** Permanently deletes the signed-in jobseeker account, then clears local state. */
+  closeAccount: () => Promise<AccountClosureResult>;
   loginWithGoogle: () => Promise<void>;
   loginWithFacebook: () => Promise<void>;
   /** Completes a Google sign-in using an ID token from the GIS popup chooser. */
@@ -135,6 +145,7 @@ interface AuthContextType {
   completeOnboarding: (
     role: 'JOB_SEEKER' | 'EMPLOYER' | 'FREELANCER',
     profileData?: Record<string, unknown>,
+    expectedSupabaseId?: string,
   ) => Promise<void>;
 }
 
@@ -226,12 +237,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Signed in, but the second factor hasn't been cleared. The API refuses these
   // sessions, so the app has to challenge rather than carry on.
   const [mfaRequired, setMfaRequired] = useState(false);
+  // A delayed /auth/me response must never restore an identity we just deleted.
+  const closedIdentitiesRef = useRef(new Set<string>());
+  const authRevisionRef = useRef(0);
+  const closingAccountRef = useRef(false);
 
   // Keep the cache in sync with every user change (supports value + updater forms).
   const setUser = useCallback(
     (next: User | null | ((prev: User | null) => User | null)) => {
       setUserState((prev) => {
-        const resolved = typeof next === 'function' ? (next as (p: User | null) => User | null)(prev) : next;
+        const candidate = typeof next === 'function' ? (next as (p: User | null) => User | null)(prev) : next;
+        const resolved = candidate && closedIdentitiesRef.current.has(candidate.supabaseId) ? null : candidate;
         writeCachedUser(resolved);
         return resolved;
       });
@@ -255,6 +271,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
+      authRevisionRef.current += 1;
+      if (session?.user && closedIdentitiesRef.current.has(session.user.id)) return;
       if (event === 'SIGNED_IN' && session?.user) {
         // Signed in on purpose (any method), so automatic sign-in is welcome
         // again next time — see oneTapSuppression.
@@ -314,8 +332,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     const check = async () => {
+      const revision = authRevisionRef.current;
       const { data, error } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-      if (cancelled) return;
+      if (cancelled || revision !== authRevisionRef.current) return;
       if (error || !data) {
         setMfaRequired(false);
         return;
@@ -409,6 +428,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error) throw error;
     } catch (error) {
       console.error('Logout error:', error);
+    }
+  };
+
+  const closeAccount = async () => {
+    if (closingAccountRef.current) throw new Error('Account closure is already in progress.');
+    if (!user || user.provisional) throw new Error('Please sign in again before closing your account.');
+    const identity = user.supabaseId;
+    closingAccountRef.current = true;
+    try {
+      const result = await deleteMyAccount();
+      closedIdentitiesRef.current.add(identity);
+      authRevisionRef.current += 1;
+      oneTapSuppression.suppress();
+      lastGoogleAccount.clear();
+      setMfaRequired(false);
+      setUser(null);
+      setIsLoading(false);
+      // No before-sign-out saves: the account and profile have already gone.
+      let localSignOutFailed = false;
+      try {
+        const { error } = await supabase.auth.signOut({ scope: 'local' });
+        if (error) localSignOutFailed = true;
+      } catch (error) {
+        localSignOutFailed = true;
+      }
+      if (localSignOutFailed) {
+        await supabase.auth.stopAutoRefresh().catch(() => undefined);
+        try {
+          localStorage.removeItem(SUPABASE_AUTH_STORAGE_KEY);
+          localStorage.removeItem(`${SUPABASE_AUTH_STORAGE_KEY}-user`);
+          localStorage.removeItem(`${SUPABASE_AUTH_STORAGE_KEY}-code-verifier`);
+        } catch {
+          // The server has already revoked the identity; cached credentials
+          // can no longer authorize any request.
+        }
+      }
+      // Also run when Supabase has already revoked the session and emits no event.
+      await runAfterSignOut();
+      // Restart the SDK too if it could not remove its in-memory session.
+      if (localSignOutFailed) window.location.replace('/');
+      return result;
+    } finally {
+      closingAccountRef.current = false;
     }
   };
 
@@ -706,9 +768,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const completeOnboarding = async (
     role: 'JOB_SEEKER' | 'EMPLOYER' | 'FREELANCER',
     profileData: Record<string, unknown> = {},
+    expectedSupabaseId?: string,
   ) => {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.access_token) throw new Error('You must be signed in to continue.');
+    if (expectedSupabaseId && session.user.id !== expectedSupabaseId) {
+      throw new Error('Your signed-in account changed. Reload this page before continuing.');
+    }
 
     const res = await fetch(`${import.meta.env.VITE_API_URL}/auth/onboarding`, {
       method: 'POST',
@@ -733,6 +799,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isAuthenticated: !!user,
     login,
     logout,
+    closeAccount,
     loginWithGoogle,
     loginWithFacebook,
     signInWithGoogleIdToken,

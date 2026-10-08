@@ -11,14 +11,30 @@ const getGreeting = () => {
 };
 
 interface HeroBannerProps {
-  companyName: string;
+  /** Null until the company has been named — never a stand-in name. */
+  companyName: string | null;
+  /**
+   * False only while we genuinely don't know yet: a first visit with nothing
+   * cached and the fetch still in flight. Without it, "unnamed" and "not
+   * loaded yet" look identical and the heading flickers through the empty
+   * state on the way to the real name.
+   */
+  knowsCompany?: boolean;
+  /** Empty when we don't know it; the greeting then carries no name. */
   userName: string;
   summary: string;
   bannerUrl?: string | null;
   tagline?: string | null;
 }
 
-const HeroBanner = ({ companyName, userName, summary, bannerUrl, tagline }: HeroBannerProps) => (
+const HeroBanner = ({
+  companyName,
+  knowsCompany = true,
+  userName,
+  summary,
+  bannerUrl,
+  tagline,
+}: HeroBannerProps) => (
   <section
     className="relative overflow-hidden rounded-3xl border border-border"
     aria-label="Welcome banner"
@@ -31,11 +47,26 @@ const HeroBanner = ({ companyName, userName, summary, bannerUrl, tagline }: Hero
     />
     <div className="absolute inset-0 bg-gradient-to-r from-[hsl(239_84%_15%/0.95)] via-[hsl(239_84%_22%/0.85)] to-[hsl(239_84%_30%/0.55)]" />
     <div className="relative p-6 sm:p-8 lg:p-12">
+      {/* "Good morning, John" where John is a fixture is worse than no name,
+          so the greeting simply stops when we don't know who is reading. */}
       <p className="text-sm font-medium text-white/50 mb-2 tracking-wide">
-        {getGreeting()}, {userName}
+        {getGreeting()}
+        {userName ? `, ${userName}` : ""}
       </p>
+      {/* Their own dashboard is true whatever the company is called. A
+          stand-in company name is not, and FinishSetupCard below already
+          prompts for the real one. While we don't yet know which it is, a
+          placeholder block holds the space rather than asserting either and
+          then swapping. */}
       <h1 className="text-3xl md:text-4xl lg:text-5xl font-bold text-white tracking-tight max-w-3xl">
-        {companyName}
+        {knowsCompany ? (
+          companyName ?? "Your dashboard"
+        ) : (
+          <span
+            className="inline-block h-[1em] w-64 max-w-full animate-pulse rounded-lg bg-white/15 align-middle"
+            aria-label="Loading your company"
+          />
+        )}
       </h1>
       {tagline && (
         <p className="mt-2 text-sm md:text-base text-white/80 max-w-2xl">{tagline}</p>

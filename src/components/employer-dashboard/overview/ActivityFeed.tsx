@@ -5,6 +5,8 @@ import { Bell, Briefcase, Clock, Loader2, MessageCircle, Sparkles, UsersRound } 
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EMPLOYER_UNDERLINE_TAB_TRIGGER } from "@/lib/tabStyles";
+import { cn } from "@/lib/utils";
 import FeedItem from "./FeedItem";
 import SectionHeader from "./SectionHeader";
 import { getMyNotifications, markNotificationRead } from "@/lib/api/notifications";
@@ -107,7 +109,7 @@ const ActivityFeed = () => {
                   <TabsTrigger
                     key={cat}
                     value={cat}
-                    className="rounded-none border-b-2 border-transparent px-3 text-xs font-medium text-muted-foreground data-[state=active]:border-primary data-[state=active]:text-foreground data-[state=active]:shadow-none bg-transparent"
+                    className={cn(EMPLOYER_UNDERLINE_TAB_TRIGGER, "px-3 text-xs")}
                   >
                     {cat}
                     {count > 0 && <span className="ml-1 text-[10px] text-muted-foreground">{count}</span>}
