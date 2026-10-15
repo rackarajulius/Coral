@@ -310,7 +310,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               firstName: metadata.first_name || metadata.full_name?.split(' ')[0] || currentUser.firstName,
               lastName: metadata.full_name?.split(' ').slice(1).join(' ') || metadata.last_name || currentUser.lastName,
               displayName: metadata.full_name || metadata.name || session.user.email?.split('@')[0] || currentUser.displayName,
-              avatarUrl: metadata.avatar_url || metadata.picture || currentUser.avatarUrl,
+              // Once the backend has answered, its photo stands: it is our own
+              // copy, an uploaded one, or deliberately none. The session's is the
+              // raw Google address and would put a removed photo back.
+              avatarUrl: currentUser.provisional
+                ? metadata.avatar_url || metadata.picture || currentUser.avatarUrl
+                : currentUser.avatarUrl,
               lastLoginAt: session.user.last_sign_in_at || currentUser.lastLoginAt,
             };
           });

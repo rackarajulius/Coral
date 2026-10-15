@@ -6,6 +6,7 @@ import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
 import { UpdateFreelancerProfileDto } from '../freelancers/dto/update-freelancer-profile.dto';
 import { User } from '../common/types/user.types';
+import { ProviderAvatarService } from './provider-avatar.service';
 
 /** Every new account starts as this role, awaiting onboarding. */
 const DEFAULT_NEW_ACCOUNT_ROLE: UserRole = 'JOB_SEEKER';
@@ -23,6 +24,7 @@ export class AuthService {
   constructor(
     private prisma: PrismaService,
     private configService: ConfigService,
+    private providerAvatars?: ProviderAvatarService,
   ) {}
 
   /**
@@ -80,6 +82,9 @@ export class AuthService {
           ...(isDefaultAdmin ? { role: 'ADMIN', status: 'ACTIVE' } : {}),
         },
       });
+      // Riding the same few-minutes cadence copies the photos of accounts
+      // made before copying existed, and retries one that failed.
+      this.providerAvatars?.mirrorInBackground(user.id, user.avatarUrl);
       return user as User;
     }
 
@@ -126,6 +131,7 @@ export class AuthService {
       });
 
       this.logger.log(`Linked Supabase account to existing user: ${user.id} (${email})`);
+      this.providerAvatars?.mirrorInBackground(user.id, user.avatarUrl);
       return user as User;
     }
 
@@ -152,6 +158,7 @@ export class AuthService {
     });
 
     this.logger.log(`Created new user via ${provider}: ${user.id} (${email})`);
+    this.providerAvatars?.mirrorInBackground(user.id, user.avatarUrl);
 
     return user as User;
   }

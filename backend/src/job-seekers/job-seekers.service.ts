@@ -981,6 +981,15 @@ export class JobSeekersService {
 
   private async deleteProfileMedia(userId: string, field: 'avatarUrl' | 'bannerUrl') {
     const profile = await this.getOrCreateProfile(userId, false);
+    if (field === 'avatarUrl') {
+      // Removing the photo removes it everywhere. Before, the sign-in photo
+      // on the account stayed behind and the profile went straight back to it.
+      const accountPhoto = await this.accountPhoto(userId);
+      const updated = await this.setAvatar(userId, profile.id, null);
+      await this.deleteOwnAvatarFiles(userId, [profile.avatarUrl, accountPhoto]);
+      return updated;
+    }
+
     const oldPath = this.storageService.pathFromPublicUrl(profile[field], PROFILE_BUCKET);
 
     const updated = await this.prisma.jobSeekerProfile.update({
@@ -993,6 +1002,39 @@ export class JobSeekersService {
     }
 
     return updated;
+  }
+
+  /**
+   * The profile photo is also the account photo.
+   *
+   * Posts, comments, chat, the team list and every other page read the
+   * account's photo, not the job-seeker profile's. Kept apart, an uploaded
+   * photo showed on the profile and nowhere else.
+   */
+  private setAvatar(userId: string, profileId: string, url: string | null) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id: userId }, data: { avatarUrl: url } });
+      return tx.jobSeekerProfile.update({ where: { id: profileId }, data: { avatarUrl: url } });
+    });
+  }
+
+  private async accountPhoto(userId: string): Promise<string | null> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { avatarUrl: true } });
+    return user?.avatarUrl ?? null;
+  }
+
+  /**
+   * Deletes replaced photos, but only this person's own files. The account
+   * photo can be set to any address, so one naming someone else's file in
+   * our bucket must not get that file deleted.
+   */
+  private async deleteOwnAvatarFiles(userId: string, urls: Array<string | null>) {
+    const paths = new Set(
+      urls
+        .map((url) => this.storageService.pathFromPublicUrl(url, PROFILE_BUCKET))
+        .filter((path): path is string => !!path && path.startsWith(`avatars/${userId}-`)),
+    );
+    for (const path of paths) await this.storageService.deletePublicFile(path, PROFILE_BUCKET);
   }
 
   private async uploadProfileMedia(
@@ -1011,6 +1053,13 @@ export class JobSeekersService {
       file.mimetype,
       PROFILE_BUCKET,
     );
+    if (field === 'avatarUrl') {
+      const accountPhoto = await this.accountPhoto(userId);
+      const updated = await this.setAvatar(userId, profile.id, publicUrl);
+      await this.deleteOwnAvatarFiles(userId, [profile.avatarUrl, accountPhoto]);
+      return updated;
+    }
+
     const oldPath = this.storageService.pathFromPublicUrl(profile[field], PROFILE_BUCKET);
 
     const updated = await this.prisma.jobSeekerProfile.update({
