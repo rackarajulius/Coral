@@ -186,9 +186,10 @@ export class SeekerBillingService {
     const has = (key: string) => Boolean(this.config.get<string>(key, '').trim());
     const webSource =
       (has('ADZUNA_APP_ID') && has('ADZUNA_APP_KEY')) ||
-      has('JSEARCH_API_KEY') ||
+      has('RAPID_API_KEY') ||
       has('GREENHOUSE_BOARDS') ||
-      has('LEVER_COMPANIES');
+      has('LEVER_COMPANIES') ||
+      has('ASHBY_BOARDS');
     return {
       'coach.session': true,
       'matcher.web': webSource,

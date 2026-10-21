@@ -318,6 +318,70 @@ export async function getMyHiringStats(): Promise<HiringStats | null> {
   return (json.data ?? null) as HiringStats | null;
 }
 
+/**
+ * Hiring commitments, checked: what a company's live postings state, and
+ * whether interviewed candidates hear back within 45 days. Read from postings
+ * and interviews, so the company can't edit them.
+ */
+export interface HiringCommitments {
+  postings: {
+    /** Live postings the facts are drawn from. */
+    open: number;
+    withPay: number;
+    vacancyStated: number;
+    /** Of those, gathering candidates for future openings rather than open now. */
+    futureOpenings: number;
+    usingAi: number;
+  };
+  afterInterview: {
+    /** False below the sample threshold; the figures are then null. */
+    available: boolean;
+    /** Interviews judged: answered, or past the deadline without an answer. */
+    measured: number;
+    deadlineDays: number;
+    /** Share told where they stand within the deadline, 0-100. */
+    withinDeadlineRate: number | null;
+    medianDaysToOutcome: number | null;
+  };
+}
+
+export interface JobRef {
+  id: string;
+  title: string;
+}
+
+/** The employer's own view adds what they can fix. */
+export interface MyHiringCommitments extends HiringCommitments {
+  toFix: {
+    missingPay: JobRef[];
+    payRangeTooWide: JobRef[];
+    vacancyUnstated: JobRef[];
+    canadianExperience: JobRef[];
+    outcomesDueSoon: number;
+    outcomesOverdue: number;
+  };
+}
+
+/** Public: a company's checked hiring commitments. */
+export async function getCompanyHiringCommitments(id: string): Promise<HiringCommitments | null> {
+  const res = await fetch(
+    `${API_BASE_URL}/employers/companies/${encodeURIComponent(id)}/hiring-commitments`,
+  );
+  if (!res.ok) return null;
+  const json = await res.json();
+  return (json.data ?? null) as HiringCommitments | null;
+}
+
+/** The signed-in employer's own, with what to fix. */
+export async function getMyHiringCommitments(): Promise<MyHiringCommitments | null> {
+  const res = await fetch(`${API_BASE_URL}/employers/me/hiring-commitments`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) return null;
+  const json = await res.json();
+  return (json.data ?? null) as MyHiringCommitments | null;
+}
+
 export interface FollowStatus {
   isFollowing: boolean;
   followerCount: number;

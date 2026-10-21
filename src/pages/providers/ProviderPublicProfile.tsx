@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
-import Header from "@/components/Header";
 import ProviderProfileContent from "@/components/providers/ProviderProfileContent";
 import { Button } from "@/components/ui/button";
 import { getPublicProviderProfile, ProviderApiError } from "@/lib/api/providers";
@@ -20,8 +19,7 @@ export default function ProviderPublicProfile() {
 
   return (
     <>
-      <Header />
-      <main className="mx-auto w-full max-w-4xl px-4 pb-16 pt-24 sm:px-6">
+      <main className="mx-auto w-full max-w-4xl px-4 pb-16 pt-6 sm:px-6">
         <Link to="/providers" className="mb-5 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" aria-hidden="true" />Find professionals</Link>
         {profile.isPending && <div className="flex items-center gap-2 rounded-xl border p-8 text-sm text-muted-foreground" role="status"><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />Loading profile…</div>}
         {profile.isError && <div className="rounded-2xl border p-8 text-center">

@@ -4,6 +4,7 @@ import {
   IsBoolean,
   IsIn,
   IsInt,
+  IsNotEmpty,
   IsOptional,
   IsString,
   IsUrl,
@@ -329,8 +330,10 @@ export class CreateEmployerCompanyDto {
 }
 
 export class UpdateEmployerCompanyDto {
+  // Omit it to leave the name alone; a blank one is a wipe, not an edit.
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MaxLength(255)
   companyName?: string;
 

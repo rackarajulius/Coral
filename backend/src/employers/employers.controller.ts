@@ -35,6 +35,7 @@ import { NextActionsService } from './next-actions.service';
 import { OnboardingService } from './onboarding.service';
 import { EmployerVerificationService } from './employer-verification.service';
 import { HiringStatsService } from '../analytics/hiring-stats.service';
+import { HiringCommitmentsService } from '../analytics/hiring-commitments.service';
 import { SaveCompanyStepDto } from './dto/onboarding.dto';
 import { CompanyCapabilityGuard, RequiresCapability } from '../company/company-capability.guard';
 
@@ -48,6 +49,7 @@ export class EmployersController {
     private readonly onboarding: OnboardingService,
     private readonly verification: EmployerVerificationService,
     private readonly hiringStats: HiringStatsService,
+    private readonly hiringCommitments: HiringCommitmentsService,
   ) {}
 
   /**
@@ -76,6 +78,25 @@ export class EmployersController {
   @Get('me/hiring-stats')
   async myHiringStats(@CurrentUser() user: User) {
     return { success: true, data: await this.hiringStats.forCompany(user.id) };
+  }
+
+  /**
+   * Hiring commitments, checked: pay stated, real vacancies, AI disclosed, and
+   * interviewed candidates told within 45 days — read from the company's
+   * postings and interviews, so the company can't edit them. Aggregates only.
+   */
+  @Public()
+  @Get('companies/:id/hiring-commitments')
+  async companyHiringCommitments(@Param('id') id: string) {
+    const company = await this.employersService.getCompanyById(id);
+    return { success: true, data: await this.hiringCommitments.forCompany(company.userId) };
+  }
+
+  /** The same, for the company itself, with the postings and interviews to fix. */
+  @Roles(UserRole.EMPLOYER, UserRole.ADMIN)
+  @Get('me/hiring-commitments')
+  async myHiringCommitments(@CurrentUser() user: User) {
+    return { success: true, data: await this.hiringCommitments.forEmployer(user.id) };
   }
 
   /* ── Verification (phase 4) ── */

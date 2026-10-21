@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { BadgeCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { AuthorIdentity } from "@/lib/api/community";
+import { companyPath, type AuthorIdentity } from "@/lib/api/community";
 
 /**
  * Who someone is, under their name.
@@ -44,7 +44,9 @@ export function IdentityLine({
 
   return (
     <Link
-      to={`/company-profile/${identity.companyProfileId}`}
+      // The company's page in the community, where its careers page is one
+      // step on — the reader stays in the place they were reading.
+      to={companyPath(identity.companyProfileId)}
       className={cn(classes, "hover:text-foreground hover:underline")}
       // The name alone would read as "Recruiter at" pointing somewhere; saying
       // where it goes is what a screen reader needs and sighted readers get

@@ -102,6 +102,8 @@ export function transformBackendJob(job: Record<string, unknown>): Job {
     applicationUrl: (job.applicationUrl as string | null) ?? null,
     applicationEmail: (job.applicationEmail as string | null) ?? null,
     companyProfile: mapCompanyProfile(job),
+    existingVacancy: typeof job.existingVacancy === "boolean" ? job.existingVacancy : null,
+    usesAi: job.usesAi === true,
   };
 }
 

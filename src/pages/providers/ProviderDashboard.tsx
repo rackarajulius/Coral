@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Check, ExternalLink, Eye, Loader2, Lock } from "lucide-react";
+import { Check, ExternalLink, Eye, Loader2, Lock } from "lucide-react";
 import { Link } from "react-router-dom";
-import Header from "@/components/Header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -264,9 +263,7 @@ export default function ProviderDashboard() {
 
   return (
     <>
-      <Header />
-      <main className="mx-auto w-full max-w-5xl px-4 pb-16 pt-24 sm:px-6">
-        <Link to="/community" className="mb-5 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" aria-hidden="true" />Back to the community</Link>
+      <main className="mx-auto w-full max-w-5xl px-4 pb-16 pt-6 sm:px-6">
         <div className="mb-7 flex flex-wrap items-start justify-between gap-4">
           <div><p className="mb-2 text-xs font-semibold uppercase tracking-wider text-coral">Your professional presence</p><h1 className="text-3xl font-semibold tracking-tight">Offer your expertise</h1><p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">Introduce your work to companies and clients. Start with a private draft and choose when to share it.</p></div>
           <div className="flex flex-wrap gap-2"><Button asChild variant="outline"><Link to="/providers">Find professionals</Link></Button>{user?.status === "ACTIVE" && <><Button asChild variant="outline"><Link to="/marketplace/manage?kind=service">Manage my services</Link></Button><Button asChild variant="outline"><Link to="/marketplace/inbox">Marketplace inbox</Link></Button></>}</div>
@@ -336,7 +333,7 @@ export default function ProviderDashboard() {
             <div className="flex flex-wrap items-center gap-3"><Button type="submit" disabled={busy || (!isDirty && !!profile.data)}>{save.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}{save.isPending ? "Saving…" : "Save provider profile"}</Button>{isDirty && <Button type="button" variant="ghost" disabled={busy} onClick={() => { setForm({ ownerId: user.id, values: toDraft(profile.data ?? null) }); setValidationError(""); setMessage(""); save.reset(); withdraw.reset(); }}>Discard changes</Button>}</div>
           </form>
 
-          <aside className="space-y-4 lg:sticky lg:top-24">
+          <aside className="space-y-4 lg:sticky lg:top-20">
             <Card className="rounded-2xl"><CardHeader><CardTitle className="flex items-center gap-2 text-base">{savedIsPublic ? <Eye className="h-4 w-4" aria-hidden="true" /> : <Lock className="h-4 w-4" aria-hidden="true" />}{savedIsPublic ? "Public profile" : "Private profile"}</CardTitle></CardHeader><CardContent className="space-y-4"><p className="text-sm leading-6 text-muted-foreground">{savedIsPublic ? "Visitors can discover the work details in your saved provider profile." : "Your saved provider profile is visible only to you. Build your introduction before sharing."}</p>{profile.data && <Button asChild variant="outline" className="w-full"><Link to="/provider/preview"><Eye className="mr-2 h-4 w-4" aria-hidden="true" />Preview saved profile</Link></Button>}{savedIsPublic && <><Button asChild variant="ghost" className="w-full"><Link to={`/providers/${profile.data.userId}`}>View public profile<ExternalLink className="ml-2 h-3.5 w-3.5" aria-hidden="true" /></Link></Button><Button variant="outline" className="w-full" disabled={busy} onClick={() => { setValidationError(""); setMessage(""); save.reset(); withdraw.mutate({ id: user.id, supabaseId: user.supabaseId }); }}>{withdraw.isPending ? "Withdrawing access…" : "Make saved profile private"}</Button></>}{isDirty && <p className="text-xs text-muted-foreground">Save your changes before previewing them.</p>}</CardContent></Card>
             <div className="px-2 text-xs leading-6 text-muted-foreground"><p>Your provider introduction uses your Coral name and profile photo.</p>{user?.role === "JOB_SEEKER" && <Link to="/jobseeker/profile" className="text-primary underline underline-offset-4">Manage your personal profile</Link>}</div>
           </aside>

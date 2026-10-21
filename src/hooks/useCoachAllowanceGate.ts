@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getMyEntitlements, metricOf } from "@/lib/api/entitlements";
+import { getMyEntitlements, limitApplied, metricOf } from "@/lib/api/entitlements";
 import { useUpgradePrompt } from "@/stores/upgradePromptStore";
 import { useInterviewSetupStore } from "@/stores/interviewSetupStore";
 
@@ -26,7 +26,7 @@ export function useCoachAllowanceGate() {
   const guard = useCallback(
     (open: () => void) => {
       const coach = metricOf(entitlements, "coach.session");
-      if (entitlements?.enforced && coach && !coach.allowed && coach.reason) {
+      if (entitlements && coach && limitApplied(entitlements, coach) && !coach.allowed && coach.reason) {
         showUpgrade({
           code: coach.reason,
           metric: "coach.session",

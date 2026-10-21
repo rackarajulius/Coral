@@ -87,20 +87,32 @@ export class TidesService {
         include: this.include(),
       });
 
+      // Announced whether or not it is in a space: without one the
+      // announcement is for everyone, like any post. A space that is named
+      // must be open, and the host joins it, as anyone posting there does.
       if (dto.spaceId) {
-        await tx.post.create({
-          data: {
-            authorId: userId,
-            companyId,
-            spaceId: dto.spaceId,
-            tideId: tide.id,
-            postType: 'TIDE',
-            // The card carries the title, time and place. Repeating them in
-            // the text would be the same thing said twice.
-            content: dto.announcement?.trim() || '',
-          },
+        const space = await tx.space.findUnique({ where: { id: dto.spaceId }, select: { archivedAt: true } });
+        if (!space) throw new NotFoundException('Space not found');
+        if (space.archivedAt) throw new BadRequestException('That space has been archived.');
+        await tx.spaceMember.upsert({
+          where: { spaceId_userId: { spaceId: dto.spaceId, userId } },
+          create: { spaceId: dto.spaceId, userId },
+          update: {},
         });
       }
+
+      await tx.post.create({
+        data: {
+          authorId: userId,
+          companyId,
+          spaceId: dto.spaceId ?? null,
+          tideId: tide.id,
+          postType: 'TIDE',
+          // The card carries the title, time and place. Repeating them in
+          // the text would be the same thing said twice.
+          content: dto.announcement?.trim() || '',
+        },
+      });
 
       return tide;
     });

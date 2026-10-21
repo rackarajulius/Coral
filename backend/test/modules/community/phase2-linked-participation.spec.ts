@@ -29,7 +29,7 @@ function harness() {
     getAnnouncementOptions: jest.fn().mockResolvedValue({ services: [card], projects: [], jobs: [] }),
   };
   const context = { forUser: jest.fn().mockResolvedValue(null) };
-  const service = new PostsService(cast(prisma), cast({ assertPostable: jest.fn() }), cast({ resolve: jest.fn().mockResolvedValue(new Map()) }), cast({ assertOwnMedia: jest.fn() }), cast({}), cast({ firstUrl: jest.fn().mockReturnValue(null) }), cast(context), cast({}), cast(marketplace));
+  const service = new PostsService(cast(prisma), cast({ assertPostable: jest.fn(), joinOnPost: jest.fn() }), cast({ resolve: jest.fn().mockResolvedValue(new Map()) }), cast({ assertOwnMedia: jest.fn() }), cast({}), cast({ firstUrl: jest.fn().mockReturnValue(null) }), cast(context), cast({}), cast(marketplace));
   return { service, prisma, record, marketplace, context };
 }
 

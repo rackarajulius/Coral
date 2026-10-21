@@ -80,11 +80,11 @@ export class CreateTideDto {
   asCompany?: boolean;
 
   /**
-   * Announce it here as you create it.
+   * The space to announce it in, when it is for one.
    *
-   * A tide nobody is told about is a tide nobody comes to, and the post is how
-   * it reaches the feed. Creating both together means the announcement cannot
-   * fail separately and leave a tide that exists but was never mentioned.
+   * A tide is always announced — one nobody is told about is one nobody
+   * comes to, and the post is how it reaches the feed. Without a space the
+   * announcement is for everyone; with one, the host joins it.
    */
   @IsOptional()
   @IsUUID()

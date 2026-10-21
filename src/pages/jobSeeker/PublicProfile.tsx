@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
@@ -30,6 +30,11 @@ import { useAuth } from '@/contexts/AuthContext';
 import { getWorkEligibilityOption } from '@/lib/workEligibility';
 import VideoModel from '@/components/jobSeeker/VideoModel';
 import { ProfileAvatar, ProfileBanner } from '@/components/jobSeeker/ProfileVisuals';
+import Header from '@/components/Header';
+import { useAuthModal } from '@/contexts/AuthModalContext';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { BRAND_NAME } from '@/lib/brand';
+import { personPath } from '@/lib/api/community';
 
 /**
  * Public, read-only, recruiter-facing profile.
@@ -38,12 +43,26 @@ import { ProfileAvatar, ProfileBanner } from '@/components/jobSeeker/ProfileVisu
  * as a "this is how recruiters see you" preview. With a user id, it fetches
  * that candidate's profile from the privacy-gated backend endpoint instead.
  */
+/** "Back to the community", when that is where the reader came from. */
+const BackLink = ({ to }: { to: string | null }) =>
+  to ? (
+    <Link to={to} className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+      <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+      Back to the community
+    </Link>
+  ) : null;
+
 const PublicProfile = () => {
   const { id } = useParams<{ id: string }>();
   const isOwnPreview = !id || id === 'me';
   const { profile: ownProfile, isAuthenticated } = useProfile();
-  const { user } = useAuth();
+  const { user, isAuthenticated: signedIn, isLoading: authLoading } = useAuth();
+  const { openAuth } = useAuthModal();
+  const location = useLocation();
   const [isVideoOpen, setIsVideoOpen] = useState(false);
+  // Set by the community's person page, so this page can offer the way back.
+  const from = location.state as { from?: string; personId?: string } | null;
+  const backToCommunity = from?.from === 'community' ? personPath(from.personId ?? id ?? '') : null;
 
   const {
     data: fetchedProfile,
@@ -53,12 +72,15 @@ const PublicProfile = () => {
   } = useQuery({
     queryKey: ['public-profile', id],
     queryFn: () => getPublicProfile(id!),
-    enabled: !isOwnPreview,
+    // The endpoint is for signed-in people only; asking signed out is a
+    // guaranteed failure dressed up as "couldn't load".
+    enabled: !isOwnPreview && signedIn,
     staleTime: 5 * 60 * 1000,
     retry: false, // a 404 here means "not allowed to view" — don't hammer it
   });
 
   const profile = isOwnPreview ? ownProfile : fetchedProfile;
+  useDocumentTitle(profile?.name ?? null);
 
   /**
    * The account photo backs up the profile one only in your own preview.
@@ -69,31 +91,60 @@ const PublicProfile = () => {
     ? profile?.avatarUrl || user?.avatarUrl || undefined
     : profile?.avatarUrl;
 
-  if (!isOwnPreview && isLoading) {
+  // Signed out: the profile is for people with an account, and saying so
+  // beats a failed load. After signing in they come straight back here.
+  if (!isOwnPreview && !authLoading && !signedIn) {
     return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-        <Loader2 className="w-4 h-4 animate-spin" /> Loading profile…
-      </div>
+      <>
+        <Header />
+        <div className="min-h-screen bg-background px-4 pt-28">
+          <div className="mx-auto max-w-sm text-center">
+            <BackLink to={backToCommunity} />
+            <h1 className="text-lg font-semibold text-foreground">Sign in to see this profile</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Professional profiles on {BRAND_NAME} are shown to people with an account.
+            </p>
+            <Button className="mt-5 rounded-full" onClick={() => openAuth({ redirectTo: location.pathname })}>
+              Sign in
+            </Button>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  if (!isOwnPreview && (isLoading || authLoading)) {
+    return (
+      <>
+        <Header />
+        <div className="min-h-screen bg-background flex items-center justify-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading profile…
+        </div>
+      </>
     );
   }
 
   if (!isOwnPreview && (isError || !profile)) {
     return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center px-4">
+      <>
+      <Header />
+      <div className="min-h-screen bg-background flex items-center justify-center px-4">
         <div className="text-center max-w-sm">
-          <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <BackLink to={backToCommunity} />
+          <h1 className="text-lg font-semibold text-foreground">
             {(error as Error)?.message === 'Profile not available'
               ? 'This profile isn’t available'
               : 'Couldn’t load this profile'}
           </h1>
-          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-            The candidate may have made their profile private or it no longer exists.
+          <p className="mt-2 text-sm text-muted-foreground">
+            They may have made their profile private, or it no longer exists.
           </p>
           <Button asChild variant="outline" className="mt-5">
-            <Link to="/">Go back</Link>
+            <Link to={backToCommunity ?? "/"}>Go back</Link>
           </Button>
         </div>
       </div>
+      </>
     );
   }
 
@@ -114,7 +165,7 @@ const PublicProfile = () => {
   const handleShare = async () => {
     try {
       if (navigator.share) {
-        await navigator.share({ title: `${profile.name} — ProHire`, url: shareUrl });
+        await navigator.share({ title: `${profile.name} — ${BRAND_NAME}`, url: shareUrl });
         return;
       }
       await navigator.clipboard.writeText(shareUrl);
@@ -125,10 +176,12 @@ const PublicProfile = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <>
+    <Header />
+    <div className="min-h-screen bg-background pt-16">
       {/* Owner preview bar — only when previewing your own profile */}
       {isOwnPreview && isAuthenticated && (
-        <div className="bg-blue-600 text-white">
+        <div className="bg-primary text-primary-foreground">
           <div className="max-w-4xl mx-auto px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
             <span className="flex items-center gap-2 text-sm font-medium">
               <Eye className="w-4 h-4" />
@@ -138,7 +191,7 @@ const PublicProfile = () => {
               asChild
               variant="ghost"
               size="sm"
-              className="h-8 text-white hover:bg-white/15 hover:text-white"
+              className="h-8 text-primary-foreground hover:bg-primary-foreground/15 hover:text-primary-foreground"
             >
               <Link to="/jobseeker/profile">
                 <ArrowLeft className="w-4 h-4 mr-1.5" />
@@ -150,15 +203,16 @@ const PublicProfile = () => {
       )}
 
       <div className="max-w-4xl mx-auto px-4 py-6 space-y-4">
+        <BackLink to={backToCommunity} />
         {/* Hero */}
-        <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-          <div className="relative h-40 sm:h-52 w-full bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20">
+        <section className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
+          <div className="relative h-40 sm:h-52 w-full bg-gradient-to-br from-primary/10 via-coral/10 to-transparent">
             <ProfileBanner bannerUrl={profile.bannerUrl} />
           </div>
 
           <div className="relative -mt-14 px-6 pb-6">
             <div className="relative inline-block">
-              <div className="w-28 h-28 sm:w-32 sm:h-32 rounded-full ring-4 ring-white dark:ring-gray-800 shadow-lg overflow-hidden">
+              <div className="w-28 h-28 sm:w-32 sm:h-32 rounded-full ring-4 ring-card shadow-lg overflow-hidden">
                 <ProfileAvatar
                   name={profile.name}
                   avatarUrl={avatarSrc}
@@ -169,7 +223,7 @@ const PublicProfile = () => {
               {profile.introVideoUrl && (
                 <button
                   onClick={() => setIsVideoOpen(true)}
-                  className="absolute bottom-1 right-1 w-10 h-10 rounded-full bg-blue-600 hover:bg-blue-700 shadow-md flex items-center justify-center transition-all duration-200 hover:scale-105"
+                  className="absolute bottom-1 right-1 w-10 h-10 rounded-full bg-primary hover:bg-primary/90 shadow-md flex items-center justify-center transition-all duration-200 hover:scale-105"
                   aria-label="Play video introduction"
                 >
                   <Play className="w-4 h-4 text-white ml-0.5" fill="currentColor" />
@@ -179,10 +233,10 @@ const PublicProfile = () => {
 
             <div className="mt-4 flex flex-wrap items-start justify-between gap-4">
               <div className="min-w-0">
-                <h1 className="text-2xl font-bold text-gray-900 dark:text-white tracking-tight">
+                <h1 className="text-2xl font-bold text-foreground tracking-tight">
                   {profile.name}
                 </h1>
-                <p className="text-gray-600 dark:text-gray-300 mt-1 font-medium">{profile.headline}</p>
+                <p className="text-muted-foreground mt-1 font-medium">{profile.headline}</p>
                 {eligibility && (
                   <div className="mt-2">
                     <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 text-xs font-semibold border border-red-200 dark:border-red-800">
@@ -194,7 +248,7 @@ const PublicProfile = () => {
                     </span>
                   </div>
                 )}
-                <div className="flex flex-wrap items-center gap-3 mt-2 text-sm text-gray-500 dark:text-gray-400">
+                <div className="flex flex-wrap items-center gap-3 mt-2 text-sm text-muted-foreground">
                   {profile.location && (
                     <span className="flex items-center gap-1.5">
                       <MapPin className="w-4 h-4" />
@@ -203,8 +257,8 @@ const PublicProfile = () => {
                   )}
                   {profile.openToWork && (
                     <>
-                      <span className="text-gray-300 dark:text-gray-600">•</span>
-                      <span className="flex items-center gap-1.5 text-blue-600 dark:text-blue-400 font-medium">
+                      <span className="text-muted-foreground/50">•</span>
+                      <span className="flex items-center gap-1.5 text-link font-medium">
                         <Briefcase className="w-4 h-4" />
                         Open to work
                       </span>
@@ -212,7 +266,7 @@ const PublicProfile = () => {
                   )}
                   {profile.connections && (
                     <>
-                      <span className="text-gray-300 dark:text-gray-600">•</span>
+                      <span className="text-muted-foreground/50">•</span>
                       <span>{profile.connections} connections</span>
                     </>
                   )}
@@ -228,14 +282,14 @@ const PublicProfile = () => {
                     rel="noreferrer"
                     title={label}
                     aria-label={label}
-                    className="h-10 w-10 flex items-center justify-center rounded-full border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:border-blue-600 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                    className="h-10 w-10 flex items-center justify-center rounded-full border border-border text-muted-foreground hover:border-primary hover:text-primary transition-colors"
                   >
                     <Icon className="w-4 h-4" />
                   </a>
                 ))}
                 <Button
                   onClick={handleShare}
-                  className="h-10 px-5 rounded-full bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-md"
+                  className="h-10 px-5 rounded-full bg-primary hover:bg-primary/90 text-primary-foreground font-medium shadow-md"
                 >
                   <Share2 className="w-4 h-4 mr-2" />
                   Share
@@ -247,21 +301,21 @@ const PublicProfile = () => {
 
         {/* About */}
         {profile.about && (
-          <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">About</h2>
-            <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed whitespace-pre-line">
+          <section className="bg-card rounded-xl shadow-sm border border-border p-6">
+            <h2 className="text-lg font-semibold text-foreground mb-3">About</h2>
+            <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-line">
               {profile.about}
             </p>
             {profile.languages.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700 flex flex-wrap items-center gap-2">
-                <span className="flex items-center gap-1.5 text-sm font-medium text-gray-700 dark:text-gray-300">
+              <div className="mt-4 pt-4 border-t border-border flex flex-wrap items-center gap-2">
+                <span className="flex items-center gap-1.5 text-sm font-medium text-foreground/80">
                   <Globe className="w-4 h-4" />
                   Languages:
                 </span>
                 {profile.languages.map((lang) => (
                   <span
                     key={lang}
-                    className="px-2.5 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 text-xs font-medium"
+                    className="px-2.5 py-0.5 rounded-full bg-muted text-muted-foreground text-xs font-medium"
                   >
                     {lang}
                   </span>
@@ -273,23 +327,23 @@ const PublicProfile = () => {
 
         {/* Experience */}
         {profile.experiences.length > 0 && (
-          <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-5">Experience</h2>
+          <section className="bg-card rounded-xl shadow-sm border border-border p-6">
+            <h2 className="text-lg font-semibold text-foreground mb-5">Experience</h2>
             <div className="space-y-6">
               {profile.experiences.map((exp, index) => (
                 <div key={exp.id} className="flex gap-4 relative">
                   {index < profile.experiences.length - 1 && (
-                    <div className="absolute left-[22px] top-12 bottom-[-24px] w-0.5 bg-gray-200 dark:bg-gray-600" />
+                    <div className="absolute left-[22px] top-12 bottom-[-24px] w-0.5 bg-border" />
                   )}
-                  <div className="flex-shrink-0 w-12 h-12 rounded-xl bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-600 flex items-center justify-center text-lg font-bold text-gray-700 dark:text-gray-200 shadow-sm border border-gray-100 dark:border-gray-600">
+                  <div className="flex-shrink-0 w-12 h-12 rounded-xl bg-muted flex items-center justify-center text-lg font-bold text-foreground/80 shadow-sm border border-border">
                     {exp.company.charAt(0)}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <h3 className="text-base font-semibold text-gray-900 dark:text-white">{exp.title}</h3>
-                        <p className="text-sm text-gray-700 dark:text-gray-300 font-medium">{exp.company}</p>
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        <h3 className="text-base font-semibold text-foreground">{exp.title}</h3>
+                        <p className="text-sm text-foreground/80 font-medium">{exp.company}</p>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-muted-foreground">
                           {exp.period && (
                             <span className="flex items-center gap-1">
                               <Calendar className="w-3.5 h-3.5" />
@@ -312,7 +366,7 @@ const PublicProfile = () => {
                       )}
                     </div>
                     {exp.description && (
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-3 leading-relaxed">
+                      <p className="text-sm text-muted-foreground mt-3 leading-relaxed">
                         {exp.description}
                       </p>
                     )}
@@ -325,8 +379,8 @@ const PublicProfile = () => {
 
         {/* Education */}
         {profile.educations.length > 0 && (
-          <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-5">Education</h2>
+          <section className="bg-card rounded-xl shadow-sm border border-border p-6">
+            <h2 className="text-lg font-semibold text-foreground mb-5">Education</h2>
             <div className="space-y-6">
               {profile.educations.map((edu) => (
                 <div key={edu.id} className="flex gap-4">
@@ -336,9 +390,9 @@ const PublicProfile = () => {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <h3 className="text-base font-semibold text-gray-900 dark:text-white">{edu.degree}</h3>
-                        <p className="text-sm text-gray-700 dark:text-gray-300 font-medium">{edu.school}</p>
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        <h3 className="text-base font-semibold text-foreground">{edu.degree}</h3>
+                        <p className="text-sm text-foreground/80 font-medium">{edu.school}</p>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-muted-foreground">
                           {edu.period && (
                             <span className="flex items-center gap-1">
                               <Calendar className="w-3.5 h-3.5" />
@@ -360,7 +414,7 @@ const PublicProfile = () => {
                       )}
                     </div>
                     {edu.description && (
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-3 leading-relaxed">
+                      <p className="text-sm text-muted-foreground mt-3 leading-relaxed">
                         {edu.description}
                       </p>
                     )}
@@ -373,13 +427,13 @@ const PublicProfile = () => {
 
         {/* Skills */}
         {profile.skills.length > 0 && (
-          <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Skills</h2>
+          <section className="bg-card rounded-xl shadow-sm border border-border p-6">
+            <h2 className="text-lg font-semibold text-foreground mb-4">Skills</h2>
             <div className="flex flex-wrap gap-2">
               {profile.skills.map((skill) => (
                 <span
                   key={skill.name}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-gradient-to-r from-blue-50 to-blue-100 dark:from-blue-900/30 dark:to-blue-800/30 text-blue-700 dark:text-blue-300 text-sm font-medium border border-blue-200 dark:border-blue-700"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-primary/10 text-primary text-sm font-medium border border-primary/20"
                 >
                   {skill.name}
                 </span>
@@ -390,17 +444,17 @@ const PublicProfile = () => {
 
         {/* Certifications */}
         {profile.certifications.length > 0 && (
-          <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Certifications</h2>
+          <section className="bg-card rounded-xl shadow-sm border border-border p-6">
+            <h2 className="text-lg font-semibold text-foreground mb-4">Certifications</h2>
             <div className="space-y-3">
               {profile.certifications.map((cert) => (
                 <div
                   key={cert.id}
-                  className="flex items-start justify-between gap-3 p-3 rounded-lg border border-gray-200 dark:border-gray-600"
+                  className="flex items-start justify-between gap-3 p-3 rounded-lg border border-border"
                 >
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-900 dark:text-white">{cert.name}</p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                    <p className="text-sm font-medium text-foreground">{cert.name}</p>
+                    <p className="text-xs text-muted-foreground">
                       {cert.issuer}
                       {cert.issueDate ? ` · ${cert.issueDate}` : ''}
                     </p>
@@ -410,7 +464,7 @@ const PublicProfile = () => {
                       href={cert.credentialUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="flex-shrink-0 text-blue-600 dark:text-blue-400 hover:underline text-xs flex items-center gap-1"
+                      className="flex-shrink-0 text-link hover:underline text-xs flex items-center gap-1"
                     >
                       View <ExternalLink className="w-3 h-3" />
                     </a>
@@ -423,10 +477,10 @@ const PublicProfile = () => {
 
         {/* Recommendations */}
         {profile.recommendations.length > 0 && (
-          <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+          <section className="bg-card rounded-xl shadow-sm border border-border p-6">
+            <h2 className="text-lg font-semibold text-foreground mb-4">
               Recommendations
-              <span className="ml-2 text-sm font-normal text-gray-400 dark:text-gray-500">
+              <span className="ml-2 text-sm font-normal text-muted-foreground">
                 ({profile.recommendations.length})
               </span>
             </h2>
@@ -434,17 +488,17 @@ const PublicProfile = () => {
               {profile.recommendations.map((rec) => (
                 <div
                   key={rec.id}
-                  className="p-4 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50/50 dark:bg-gray-700/30"
+                  className="p-4 rounded-xl border border-border bg-muted/40"
                 >
-                  <Quote className="w-5 h-5 text-blue-300 dark:text-blue-700 mb-2" />
-                  <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed italic">"{rec.text}"</p>
+                  <Quote className="w-5 h-5 text-primary/40 mb-2" />
+                  <p className="text-sm text-foreground/80 leading-relaxed italic">"{rec.text}"</p>
                   <div className="mt-3 flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-100 to-blue-200 dark:from-blue-900/40 dark:to-blue-800/40 flex items-center justify-center text-sm font-bold text-blue-700 dark:text-blue-300 flex-shrink-0">
+                    <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-sm font-bold text-primary flex-shrink-0">
                       {rec.author.charAt(0)}
                     </div>
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{rec.author}</p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                      <p className="text-sm font-semibold text-foreground truncate">{rec.author}</p>
+                      <p className="text-xs text-muted-foreground truncate">
                         {rec.authorTitle}
                         {rec.relationship ? ` · ${rec.relationship}` : ''}
                         {rec.date ? ` · ${rec.date}` : ''}
@@ -459,24 +513,24 @@ const PublicProfile = () => {
 
         {/* Portfolio */}
         {profile.portfolioItems.length > 0 && (
-          <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Portfolio</h2>
+          <section className="bg-card rounded-xl shadow-sm border border-border p-6">
+            <h2 className="text-lg font-semibold text-foreground mb-4">Portfolio</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {profile.portfolioItems.map((item) => (
                 <div
                   key={item.id}
-                  className="p-4 rounded-lg border border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 transition-colors"
+                  className="p-4 rounded-lg border border-border hover:border-foreground/20 transition-colors"
                 >
-                  <p className="text-sm font-medium text-gray-900 dark:text-white">{item.title}</p>
+                  <p className="text-sm font-medium text-foreground">{item.title}</p>
                   {item.description && (
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{item.description}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{item.description}</p>
                   )}
                   {item.link && (
                     <a
                       href={item.link.startsWith('http') ? item.link : `https://${item.link}`}
                       target="_blank"
                       rel="noreferrer"
-                      className="mt-2 inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                      className="mt-2 inline-flex items-center gap-1 text-xs text-link hover:underline"
                     >
                       Open <ExternalLink className="w-3 h-3" />
                     </a>
@@ -487,8 +541,8 @@ const PublicProfile = () => {
           </section>
         )}
 
-        <p className="text-center text-xs text-gray-400 dark:text-gray-500 pt-2">
-          Want to reach {firstName}? They're on ProHire.
+        <p className="text-center text-xs text-muted-foreground pt-2">
+          Want to reach {firstName}? They're on {BRAND_NAME}.
         </p>
       </div>
 
@@ -499,6 +553,7 @@ const PublicProfile = () => {
         title={`${profile.name}'s Video Introduction`}
       />
     </div>
+    </>
   );
 };
 

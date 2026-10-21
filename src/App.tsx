@@ -67,6 +67,7 @@ import { AdminProvider } from "./contexts/AdminContext";
 import CommunityPage from "./pages/community/page";
 import CommunityModerationPage from "./pages/community/moderation";
 import TidePage from "./pages/community/TidePage";
+import CommunityShell from "./components/community/shell/CommunityShell";
 import Companies from "./pages/Companies";
 import CompanyProfile from "./pages/CompanyProfile";
 import EmployerCompanyProfile from "./pages/employer/dashboard/CompanyProfile";
@@ -205,24 +206,46 @@ const App = () => (
           <Route path="/jobs" element={<FindJobs />} />
            <Route path="/privacy-policy" element={<PrivacyPolicy />} />
            <Route path="/terms-of-service" element={<TermsOfService/>} />
-           <Route path="/community" element={<CommunityPage />} />
-           <Route path="/community/moderation" element={<CommunityModerationPage />} />
-           {/* Same page, same layout — the slug only changes the middle
-               column, so the sidebar never unmounts. */}
-           <Route path="/community/search" element={<CommunityPage />} />
-           {/* Spaces are found through search; the bare path goes there. */}
-           <Route path="/community/spaces" element={<Navigate to="/community/search?tab=spaces" replace />} />
-           <Route path="/community/spaces/:slug" element={<CommunityPage />} />
-           {/* A single post, so a notification has somewhere to land and a
-               post can be shared. Same shell — only the middle column changes. */}
-           <Route path="/community/posts/:postId" element={<CommunityPage />} />
-           {/* A tide on its own — where a card, a notification or a calendar
-               file lands. Its own page rather than the community shell: it is
-               shared outside the community too. */}
-           {/* The listing lives in the community shell; a single tide has its
-               own page, because it is shared outside the community too. */}
-           <Route path="/community/tides" element={<CommunityPage />} />
-           <Route path="/community/tides/:tideId" element={<TidePage />} />
+           {/* The community, as a place of its own: its own bar and nav, no
+               main-site header, and opened in its own tab from the main nav
+               (COMMUNITY_TAB). A layout route, so moving between a space, a
+               post and the marketplace swaps only the middle. */}
+           <Route element={<CommunityShell />}>
+             <Route path="/community" element={<CommunityPage />} />
+             <Route path="/community/moderation" element={<CommunityModerationPage />} />
+             {/* Same page — the path only changes the middle column. */}
+             <Route path="/community/search" element={<CommunityPage />} />
+             {/* Spaces are found through search; the bare path goes there. */}
+             <Route path="/community/spaces" element={<Navigate to="/community/search?tab=spaces" replace />} />
+             <Route path="/community/spaces/:slug" element={<CommunityPage />} />
+             {/* A single post, so a notification has somewhere to land and a
+                 post can be shared. */}
+             <Route path="/community/posts/:postId" element={<CommunityPage />} />
+             {/* Someone's page in the community: their posts and Follow. Their
+                 career profile stays at /profile/:id, for recruiters. */}
+             <Route path="/community/people/:personId" element={<CommunityPage />} />
+             {/* A company in the community: its posts, tides and Follow. Its
+                 careers page stays at /company-profile/:id. */}
+             <Route path="/community/companies/:companyProfileId" element={<CommunityPage />} />
+             <Route path="/community/tides" element={<CommunityPage />} />
+             {/* A tide on its own — where a card, a notification or a calendar
+                 file lands. */}
+             <Route path="/community/tides/:tideId" element={<TidePage />} />
+             {/* The marketplace is part of the community: professionals, the
+                 services they offer and the projects people post. */}
+             <Route element={<ProviderAreaGate />}>
+               <Route path="/provider" element={<ProviderDashboard />} />
+               <Route path="/provider/preview" element={<ProviderPreview />} />
+             </Route>
+             <Route path="/providers" element={<ProviderDirectory />} />
+             <Route path="/providers/:userId" element={<ProviderPublicProfile />} />
+             <Route path="/services" element={<MarketplaceDirectory kind="service" />} />
+             <Route path="/services/:id" element={<MarketplaceDetail kind="service" />} />
+             <Route path="/projects" element={<MarketplaceDirectory kind="project" />} />
+             <Route path="/projects/:id" element={<MarketplaceDetail kind="project" />} />
+             <Route path="/marketplace/manage" element={<MarketplaceManage />} />
+             <Route path="/marketplace/inbox" element={<MarketplaceInbox />} />
+           </Route>
            <Route path="/companies" element={<Companies/>} />
             <Route path="/company" element={<CompanyProfile/>} />
             <Route path="/company-profile" element={<CompanyProfile/>} />
@@ -239,18 +262,6 @@ const App = () => (
             <Route path="/unsubscribe" element={<Unsubscribe />} />
             <Route path = "/onboarding" element={<Onboarding/>} />
             <Route path = "/profile/:id" element={<PublicProfile/>} />
-            <Route element={<ProviderAreaGate />}>
-              <Route path="/provider" element={<ProviderDashboard />} />
-              <Route path="/provider/preview" element={<ProviderPreview />} />
-            </Route>
-            <Route path="/providers" element={<ProviderDirectory />} />
-            <Route path="/providers/:userId" element={<ProviderPublicProfile />} />
-            <Route path="/services" element={<MarketplaceDirectory kind="service" />} />
-            <Route path="/services/:id" element={<MarketplaceDetail kind="service" />} />
-            <Route path="/projects" element={<MarketplaceDirectory kind="project" />} />
-            <Route path="/projects/:id" element={<MarketplaceDetail kind="project" />} />
-            <Route path="/marketplace/manage" element={<MarketplaceManage />} />
-            <Route path="/marketplace/inbox" element={<MarketplaceInbox />} />
             <Route path="/ai-screen/:id" element={<AiScreen/>} />
             {/* Accessible to any authenticated participant (both roles); access enforced by the API */}
             <Route path="/interview/:id/room" element={<InterviewRoom />} />

@@ -148,6 +148,12 @@ export interface FullJob {
   applicationMethod: string;
   applicationUrl: string | null;
   applicationEmail: string | null;
+  /** Open now (true), or for future openings (false). Null: not stated. */
+  existingVacancy?: boolean | null;
+  /** The posting says AI is used to screen, assess or select applicants. */
+  usesAi?: boolean;
+  /** Coral's AI has screened this job's applicants, so `usesAi` can't be cleared. */
+  aiScreened?: boolean;
 }
 
 /**
@@ -184,6 +190,9 @@ export interface PatchJobPayload {
   applicationMethod?: string;
   applicationUrl?: string;
   applicationEmail?: string;
+  /** Null clears it back to "not stated". */
+  existingVacancy?: boolean | null;
+  usesAi?: boolean;
   status?: BackendJobStatus;
 }
 

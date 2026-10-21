@@ -38,6 +38,8 @@ import {
 import { ProfileAvatar, ProfileBanner } from '@/components/jobSeeker/ProfileVisuals';
 import { ProfileViewersDialog } from '@/components/jobSeeker/ProfileViewersDialog';
 import { exportResumePdf, hasResumeContent } from '@/lib/resumePdf';
+import { CityAutocomplete } from '@/components/location/CityAutocomplete';
+import { placeLine } from '@/lib/location/places';
 
 const ProfileHero = () => {
   const [isVideoOpen, setIsVideoOpen] = useState(false);
@@ -727,11 +729,16 @@ const ProfileHero = () => {
               <Label htmlFor="edit-location" className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 block">
                 Location
               </Label>
-              <Input
+              <CityAutocomplete
                 id="edit-location"
+                variant="field"
                 value={editLocation}
-                onChange={(e) => setEditLocation(e.target.value)}
-                placeholder="e.g. Lagos, Nigeria"
+                onChange={setEditLocation}
+                // Written as "City, Province, Country" so it splits into the right columns.
+                onSelect={(city) => setEditLocation(placeLine(city))}
+                // The saved line ends with the country, whose cities come first.
+                near={profile.location.split(",").pop()?.trim() || undefined}
+                placeholder="Start typing your city"
               />
             </div>
 

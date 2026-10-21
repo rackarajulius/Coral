@@ -74,9 +74,16 @@ export class CreatePostDto {
   @Type(() => PollDto)
   poll?: PollDto;
 
-  /** Which space the post belongs to. Required for new posts. */
+  /**
+   * The space the post is for, when it is for one.
+   *
+   * Optional, the way LinkedIn's audience is: without a space a post is for
+   * everyone — Home, the author's followers, their profile or the company's
+   * page. With one, the author becomes a member of it on posting.
+   */
+  @IsOptional()
   @IsUUID()
-  spaceId!: string;
+  spaceId?: string;
 
   /**
    * Post for the company rather than for yourself.

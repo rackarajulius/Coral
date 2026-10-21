@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
+import { postingStatements } from '../jobs/posting-statements';
 
 /** Aggregators reject enormous feeds; this is the usual ceiling per pull. */
 const MAX_FEED_ITEMS = 5000;
@@ -17,11 +18,23 @@ interface FeedJob {
   salaryMax: number | null;
   salaryCurrency: string;
   salaryPeriod: string | null;
+  existingVacancy: boolean | null;
+  usesAi: boolean;
   publishedAt: Date | null;
   createdAt: Date;
   applicationDeadline: Date | null;
   companyName: string | null;
   postedBy: { employerProfile: { companyName: string | null; companyWebsite: string | null } | null } | null;
+}
+
+/**
+ * The description as it goes out, with the posting's own statements after it
+ * (an existing vacancy or not; AI screening). A copy of a posting on another
+ * site is still the posting, and Ontario requires them in the posting.
+ */
+function describe(job: FeedJob): string {
+  const statements = postingStatements(job);
+  return statements.length ? `${job.description}\n\n${statements.join('\n')}` : job.description;
 }
 
 /**
@@ -68,6 +81,8 @@ export class JobFeedService {
         salaryMax: true,
         salaryCurrency: true,
         salaryPeriod: true,
+        existingVacancy: true,
+        usesAi: true,
         publishedAt: true,
         createdAt: true,
         applicationDeadline: true,
@@ -106,7 +121,7 @@ export class JobFeedService {
           // field, so it goes in `city` and the rest is left out rather than
           // guessed at. A wrong country is worse than an absent one.
           `    <city>${cdata(job.location ?? '')}</city>`,
-          `    <description>${cdata(job.description)}</description>`,
+          `    <description>${cdata(describe(job))}</description>`,
           `    <jobtype>${cdata(job.employmentType)}</jobtype>`,
           job.category ? `    <category>${cdata(job.category)}</category>` : '',
           job.isRemote ? '    <remotetype>Fully remote</remotetype>' : '',
@@ -170,7 +185,7 @@ export class JobFeedService {
         id: true, title: true, description: true, location: true, isRemote: true,
         employmentType: true, category: true, salaryMin: true, salaryMax: true,
         salaryCurrency: true, salaryPeriod: true, publishedAt: true, createdAt: true,
-        applicationDeadline: true, companyName: true,
+        applicationDeadline: true, companyName: true, existingVacancy: true, usesAi: true,
         postedBy: {
           select: { employerProfile: { select: { companyName: true, companyWebsite: true } } },
         },
@@ -184,7 +199,7 @@ export class JobFeedService {
       '@context': 'https://schema.org/',
       '@type': 'JobPosting',
       title: job.title,
-      description: job.description,
+      description: describe(job),
       datePosted: (job.publishedAt ?? job.createdAt).toISOString(),
       employmentType: job.employmentType.toUpperCase().replace(/[\s-]+/g, '_'),
       hiringOrganization: {

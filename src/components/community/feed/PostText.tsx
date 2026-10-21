@@ -14,7 +14,7 @@ export function PostText({
   onHashtag?: (tag: string) => void;
 }) {
   return (
-    <p className="whitespace-pre-wrap text-sm leading-relaxed">
+    <p className="whitespace-pre-wrap [overflow-wrap:anywhere] text-sm leading-relaxed">
       {tokenise(text).map((token, i) =>
         token.kind === "link" ? (
           <a

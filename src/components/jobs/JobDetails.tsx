@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, RefObject } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { MapPin, Building2 } from "lucide-react";
+import { MapPin, Building2, Bot, CircleCheck, Clock } from "lucide-react";
 import { Job } from "@/data/jobs";
 import JobFitPanel from "@/components/jobs/JobFitPanel";
 import AboutCompanySection from "@/components/jobs/AboutCompanySection";
@@ -15,6 +15,39 @@ import { shareJob } from "@/lib/jobs/shareJob";
 import { useSavedJob } from "@/hooks/useSavedJob";
 import { resolveJobIcon } from "@/lib/utils";
 import SlidingApplyBar from "./SlidingApplyBar";
+
+/**
+ * What the posting states about itself: whether the role is open now, and
+ * whether AI helps decide who goes forward. Before the description, so someone
+ * knows a role is a future opening before spending time on it. Nothing shows
+ * when the employer stated neither.
+ */
+function PostingStatements({ job }: { job: Job }) {
+  const vacancyStated = job.existingVacancy === true || job.existingVacancy === false;
+  if (!vacancyStated && !job.usesAi) return null;
+  return (
+    <section aria-label="About this posting" className="space-y-2 rounded-xl border border-border/60 bg-muted/30 p-4 text-sm">
+      {job.existingVacancy === true && (
+        <p className="flex items-start gap-2 text-foreground">
+          <CircleCheck className="h-4 w-4 mt-0.5 shrink-0 text-primary" aria-hidden="true" />
+          This role is open now.
+        </p>
+      )}
+      {job.existingVacancy === false && (
+        <p className="flex items-start gap-2 text-foreground">
+          <Clock className="h-4 w-4 mt-0.5 shrink-0 text-amber-600 dark:text-amber-500" aria-hidden="true" />
+          This posting gathers candidates for future openings. There isn't an opening right now.
+        </p>
+      )}
+      {job.usesAi && (
+        <p className="flex items-start gap-2 text-foreground">
+          <Bot className="h-4 w-4 mt-0.5 shrink-0 text-primary" aria-hidden="true" />
+          AI is used to screen, assess or select applicants for this role.
+        </p>
+      )}
+    </section>
+  );
+}
 
 interface JobDetailsProps {
   job: Job;
@@ -134,6 +167,8 @@ const JobDetails = ({ job, isMobile = false, scrollContainerRef }: JobDetailsPro
       <JobFitPanel jobId={job.id} />
 
       <AboutCompanySection job={job} />
+
+      <PostingStatements job={job} />
 
       <section>
         <h2 className="font-display text-lg font-semibold text-foreground mb-3">

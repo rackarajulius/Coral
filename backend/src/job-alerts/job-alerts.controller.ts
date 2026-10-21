@@ -36,6 +36,12 @@ export class JobAlertsController {
     };
   }
 
+  /** Jobs from across the web that the person's alerts found lately. */
+  @Get('web-matches')
+  listWebMatches(@CurrentUser() user: User) {
+    return this.jobAlertsService.listWebMatches(user.id);
+  }
+
   @Post()
   createAlert(@CurrentUser() user: User, @Body() dto: CreateJobAlertDto) {
     return this.jobAlertsService.createAlert(user.id, dto);

@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
-import Header from "@/components/Header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -49,8 +48,7 @@ export default function ModerationPage() {
 
   return (
     <>
-      <Header />
-      <main className="pt-16">
+      <main>
         <div className="mx-auto w-full max-w-3xl px-4 py-6 sm:px-6">
           <header className="mb-5">
             <h1 className="flex items-center gap-2 font-display text-2xl font-semibold tracking-tight">

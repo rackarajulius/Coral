@@ -23,6 +23,8 @@ import SkillsSection from "@/components/employer-dashboard/job-edit/SkillsSectio
 import SalarySection from "@/components/employer-dashboard/job-edit/SalarySection";
 import BenefitsSection from "@/components/employer-dashboard/job-edit/BenefitsSection";
 import ApplicationSettingsSection from "@/components/employer-dashboard/job-edit/ApplicationSettings";
+import PostingStatementsSection from "@/components/employer-dashboard/job-edit/PostingStatementsSection";
+import { vacancyForJob } from "@/lib/jobs/postingStatements";
 import LivePreview from "@/components/employer-dashboard/job-edit/LivePreview";
 import { EmployerCompany, getMyCompany } from "@/lib/api/employerCompany";
 import { toRemoteFlags } from "@/lib/jobs/workArrangement";
@@ -44,7 +46,7 @@ const stepFields: Record<number, Path<EditJobForm>[]> = {
   2: ["skills"],
   3: ["salaryMin", "salaryMax", "currency", "payType"],
   4: ["benefits"],
-  5: ["applicationDeadline", "applicationMethod", "applicationUrl", "applicationEmail", "status"],
+  5: ["applicationDeadline", "applicationMethod", "applicationUrl", "applicationEmail", "status", "existingVacancy", "usesAi"],
 };
 
 const emptyDefaults: EditJobForm = {
@@ -66,6 +68,8 @@ const emptyDefaults: EditJobForm = {
   applicationUrl: "",
   applicationEmail: "",
   status: "draft",
+  existingVacancy: "",
+  usesAi: false,
 };
 
 // ─── Route-state pre-fill helpers ────────────────────────────────────────────
@@ -308,6 +312,9 @@ const PostJob = () => {
       applicationUrl: data.applicationMethod === 'external' ? data.applicationUrl || undefined : undefined,
       applicationEmail: data.applicationMethod === 'email' ? data.applicationEmail || undefined : undefined,
       status: data.status === 'open' ? 'active' : data.status,
+      // What the posting states. Left out when the vacancy wasn't answered.
+      ...(data.existingVacancy ? { existingVacancy: vacancyForJob(data.existingVacancy) } : {}),
+      usesAi: data.usesAi,
     };
 
     const res = await fetch(`${API_BASE_URL}/jobs`, {
@@ -379,6 +386,7 @@ const PostJob = () => {
               form={form}
               watchedApplicationMethod={watchedValues.applicationMethod}
             />
+            <PostingStatementsSection form={form} />
           </div>
         );
       default:

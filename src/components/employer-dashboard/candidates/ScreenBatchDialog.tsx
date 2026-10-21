@@ -132,6 +132,11 @@ export function ScreenBatchDialog({ open, onOpenChange, candidates, onSent }: Pr
             onClick: () => navigate(`/employers/jobs/${jobId}/screening`),
           },
         });
+        if (result.postingNowSaysAi) {
+          toast("The posting now says AI helps screen applicants", {
+            description: "Candidates see it on the job, and it stays on for this job.",
+          });
+        }
       }
       onSent?.();
       onOpenChange(false);
@@ -305,6 +310,15 @@ export function ScreenBatchDialog({ open, onOpenChange, candidates, onSent }: Pr
                     </div>
                   </RadioGroup>
                 </div>
+              )}
+
+              {questions.length > 0 && mode !== "video" && (
+                // Said before sending: the AI scores these answers, so the
+                // posting has to say AI helps screen (Ontario requires it).
+                <p className="text-xs text-muted-foreground">
+                  The AI scores these answers, so sending adds "AI is used to screen, assess or select
+                  applicants" to the posting, if it doesn't say so already. It stays on for this job.
+                </p>
               )}
 
               {error && <p className="text-sm text-destructive">{error}</p>}

@@ -4,6 +4,7 @@ import { CronExpression } from '@nestjs/schedule';
 import { createHash } from 'node:crypto';
 import { ExclusiveCron } from '../common/scheduling/exclusive-cron';
 import { PrismaService } from '../prisma/prisma.service';
+import { WRITE_TRANSACTION } from '../common/database-transaction';
 import { MarketplaceService } from './marketplace.service';
 import { ListingKind } from './marketplace-policy';
 
@@ -96,7 +97,7 @@ export class MarketplaceActivityService {
             link: `/marketplace/inbox?request=${row.requestId}` } });
           await tx.marketplaceDelivery.update({ where: { id: row.id }, data: { status: 'delivered', deliveredAt: new Date(), attempts: { increment: 1 }, lastError: null } });
           return 'delivered';
-        });
+        }, WRITE_TRANSACTION);
         if (outcome === 'delivered') delivered++;
         if (outcome === 'cancelled') cancelled++;
       } catch {
@@ -148,7 +149,7 @@ export class MarketplaceActivityService {
       if (!report) throw new NotFoundException('Report not available');
       await tx.marketplaceRequestReport.updateMany({ where: { id, status: 'open' }, data: { status: 'reviewed', reviewedAt: new Date(), reviewedById: userId } });
       return { reviewed: true };
-    });
+    }, WRITE_TRANSACTION);
   }
 
   private async currentCompanySeat(tx: Prisma.TransactionClient, userId: string, companyId: string | null) {

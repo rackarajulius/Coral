@@ -9,6 +9,7 @@ import {
   Loader2,
   MessageCircle,
   Sparkles,
+  UserPlus,
 } from "lucide-react";
 import Header from "@/components/Header";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,7 @@ const TYPE_META: Record<string, { icon: React.ElementType; tint: string; label: 
   outreach: { icon: MessageCircle, tint: "bg-blue-500/10 text-blue-600 dark:text-blue-400", label: "Outreach" },
   job_alert: { icon: BellRing, tint: "bg-amber-500/10 text-amber-600 dark:text-amber-400", label: "Job alert" },
   job_recommendation: { icon: Sparkles, tint: "bg-coral/10 text-coral", label: "Picked for you" },
+  follow: { icon: UserPlus, tint: "bg-coral/10 text-coral", label: "New follower" },
 };
 const FALLBACK = { icon: Bell, tint: "bg-muted text-muted-foreground", label: "Update" };
 

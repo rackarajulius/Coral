@@ -415,6 +415,8 @@ export interface JobAlert {
   salary: string;
   frequency: AlertFrequency;
   active: boolean;
+  /** When the web was last searched for this alert (ISO). */
+  webCheckedAt?: string;
   // Not backed by the server yet (no per-alert matching endpoint / channel store).
   newMatches?: number;
   channels?: AlertChannels;

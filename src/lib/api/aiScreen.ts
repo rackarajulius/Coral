@@ -167,6 +167,8 @@ export interface BatchInviteResult {
   questionCount: number;
   /** Screens still allowed for this job before the cap. */
   remaining: number;
+  /** This round made the posting say AI is used to screen applicants. */
+  postingNowSaysAi?: boolean;
 }
 
 const jobBase = (jobId: string) =>

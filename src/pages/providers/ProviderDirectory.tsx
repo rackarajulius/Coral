@@ -2,7 +2,6 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Globe, Loader2, MapPin, Search } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
-import Header from "@/components/Header";
 import { ProfileAvatar } from "@/components/jobSeeker/ProfileVisuals";
 import { providerAvailabilityLabel } from "@/components/providers/ProviderProfileContent";
 import { Badge } from "@/components/ui/badge";
@@ -51,8 +50,7 @@ export default function ProviderDirectory() {
 
   return (
     <>
-      <Header />
-      <main className="mx-auto w-full max-w-6xl px-4 pb-16 pt-24 sm:px-6">
+      <main className="mx-auto w-full max-w-6xl px-4 pb-16 pt-6 sm:px-6">
         <div className="mb-7 flex flex-wrap items-start justify-between gap-4">
           <div><p className="mb-2 text-xs font-semibold uppercase tracking-wider text-coral">The Coral community</p><h1 className="text-3xl font-semibold tracking-tight">Find professionals</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">Explore the skills, work and availability professionals choose to share. Our first pilot focuses on design, marketing and software in Canada.</p></div>
           <div className="flex flex-wrap gap-2"><Button asChild variant="outline"><Link to="/services">Find services</Link></Button><Button asChild variant="outline"><Link to="/provider">Offer services<ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" /></Link></Button></div>

@@ -4,8 +4,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ReportStatus, SpaceMemberRole, UserRole } from '@prisma/client';
+import { Prisma, ReportStatus, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { WRITE_TRANSACTION } from '../common/database-transaction';
 import { User } from '../common/types/user.types';
 import { CommunityMediaService } from './media.service';
 
@@ -79,20 +80,22 @@ export class ModerationService {
 
   /** Open reports, oldest first — the longest-waiting concern is the most urgent. */
   async listReports(user: User, status: ReportStatus = ReportStatus.OPEN) {
-    await this.assertModerator(user);
-    const reports = await this.prisma.postReport.findMany({
-      where: { status },
-      orderBy: { createdAt: 'asc' },
-      take: 200,
-      include: {
-        post: {
-          select: { id: true, content: true, removedAt: true, authorId: true },
+    const reports = await this.prisma.$transaction(async tx => {
+      const scope = await this.moderationScope(tx, user.id);
+      return tx.postReport.findMany({
+        where: { status, ...(scope ? { OR: [{ post: scope }, { comment: { post: scope } }] } : {}) },
+        orderBy: { createdAt: 'asc' },
+        take: 200,
+        include: {
+          post: {
+            select: { id: true, content: true, removedAt: true, authorId: true },
+          },
+          comment: {
+            select: { id: true, content: true, removedAt: true, authorId: true, postId: true },
+          },
         },
-        comment: {
-          select: { id: true, content: true, removedAt: true, authorId: true, postId: true },
-        },
-      },
-    });
+      });
+    }, WRITE_TRANSACTION);
 
     return reports.map((r) => ({
       id: r.id,
@@ -117,20 +120,15 @@ export class ModerationService {
   /* -------------------------------- decisions ------------------------------- */
 
   async removePost(user: User, postId: string, reason: string) {
-    await this.assertModerator(user);
-    const post = await this.prisma.post.findUnique({
-      where: { id: postId },
-      select: { id: true, mediaUrls: true },
-    });
-    if (!post) throw new NotFoundException('Post not found');
-
-    await this.prisma.$transaction([
-      this.prisma.post.update({
+    if (!reason.trim()) throw new BadRequestException('A removal reason is required.');
+    const post = await this.prisma.$transaction(async tx => {
+      const target = await this.authorizedPost(tx, user.id, postId);
+      await tx.post.update({
         where: { id: postId },
         data: { removedAt: new Date(), removedById: user.id, removalReason: reason.trim() },
-      }),
+      });
       // Every open report about it is answered by this one decision.
-      this.prisma.postReport.updateMany({
+      await tx.postReport.updateMany({
         where: { postId, status: ReportStatus.OPEN },
         data: {
           status: ReportStatus.ACTIONED,
@@ -138,8 +136,9 @@ export class ModerationService {
           reviewedAt: new Date(),
           resolution: reason.trim(),
         },
-      }),
-    ]);
+      });
+      return target;
+    }, WRITE_TRANSACTION);
 
     /**
      * The text is kept and the pictures are not.
@@ -161,61 +160,77 @@ export class ModerationService {
    * words that were written instead of a row of broken frames.
    */
   async restorePost(user: User, postId: string) {
-    await this.assertModerator(user);
-    await this.prisma.post.update({
-      where: { id: postId },
-      data: { removedAt: null, removedById: null, removalReason: null, mediaUrls: [] },
-    });
+    await this.prisma.$transaction(async tx => {
+      await this.authorizedPost(tx, user.id, postId);
+      await tx.post.update({
+        where: { id: postId },
+        data: { removedAt: null, removedById: null, removalReason: null, mediaUrls: [] },
+      });
+    }, WRITE_TRANSACTION);
     return { id: postId, removed: false };
   }
 
   async removeComment(user: User, commentId: string) {
-    await this.assertModerator(user);
-    await this.prisma.$transaction([
-      this.prisma.postComment.update({
+    await this.prisma.$transaction(async tx => {
+      const comment = await tx.postComment.findUnique({ where: { id: commentId }, select: { postId: true } });
+      if (!comment) throw new NotFoundException('Comment not found');
+      await this.authorizedPost(tx, user.id, comment.postId);
+      await tx.postComment.update({
         where: { id: commentId },
         data: { removedAt: new Date(), removedById: user.id },
-      }),
-      this.prisma.postReport.updateMany({
+      });
+      await tx.postReport.updateMany({
         where: { commentId, status: ReportStatus.OPEN },
         data: { status: ReportStatus.ACTIONED, reviewedById: user.id, reviewedAt: new Date() },
-      }),
-    ]);
+      });
+    }, WRITE_TRANSACTION);
     return { id: commentId, removed: true };
   }
 
   /** Nothing wrong here. Recorded rather than silently closed. */
   async dismissReport(user: User, reportId: string, resolution?: string) {
-    await this.assertModerator(user);
-    await this.prisma.postReport.update({
-      where: { id: reportId },
-      data: {
-        status: ReportStatus.DISMISSED,
-        reviewedById: user.id,
-        reviewedAt: new Date(),
-        resolution: resolution?.trim() || null,
-      },
-    });
+    await this.prisma.$transaction(async tx => {
+      const report = await tx.postReport.findUnique({ where: { id: reportId },
+        select: { postId: true, comment: { select: { postId: true } } } });
+      const postId = report?.postId ?? report?.comment?.postId;
+      if (!postId) throw new NotFoundException('Report not found');
+      await this.authorizedPost(tx, user.id, postId);
+      await tx.postReport.update({
+        where: { id: reportId },
+        data: {
+          status: ReportStatus.DISMISSED,
+          reviewedById: user.id,
+          reviewedAt: new Date(),
+          resolution: resolution?.trim() || null,
+        },
+      });
+    }, WRITE_TRANSACTION);
     return { id: reportId, status: ReportStatus.DISMISSED };
   }
 
   /* --------------------------------- helpers -------------------------------- */
 
-  /**
-   * Platform admins, or anyone moderating a space.
-   *
-   * Space-scoped moderators are checked by role rather than by which space the
-   * item is in: at this size there is one queue, and narrowing it per space
-   * would leave reports on space-less posts unreachable by anyone.
-   */
-  private async assertModerator(user: User): Promise<void> {
-    if (user.role === UserRole.ADMIN) return;
-    const moderating = await this.prisma.spaceMember.findFirst({
-      where: { userId: user.id, role: SpaceMemberRole.MODERATOR },
-      select: { id: true },
-    });
-    if (!moderating) {
-      throw new ForbiddenException('Only moderators can do that.');
-    }
+  /** Current database authority, held until the read/decision commits. */
+  private async moderationScope(tx: Prisma.TransactionClient, userId: string): Promise<Prisma.PostWhereInput | null> {
+    await tx.$queryRaw(Prisma.sql`SELECT id FROM users WHERE id = ${userId} FOR SHARE`);
+    const actor = await tx.user.findUnique({ where: { id: userId }, select: { role: true, status: true } });
+    if (!actor || actor.status !== 'ACTIVE') throw new ForbiddenException('An active moderator account is required.');
+    if (actor.role === UserRole.ADMIN) return null;
+    const spaces = await tx.$queryRaw<Array<{ space_id: string }>>(Prisma.sql`
+      SELECT sm.space_id FROM space_members sm JOIN spaces s ON s.id = sm.space_id
+      WHERE sm.user_id = ${userId} AND sm.role = 'MODERATOR' AND s.archived_at IS NULL
+      ORDER BY sm.space_id FOR SHARE OF sm, s`);
+    if (!spaces.length) throw new ForbiddenException('Only moderators can do that.');
+    return { spaceId: { in: spaces.map(space => space.space_id) } };
+  }
+
+  private async authorizedPost(tx: Prisma.TransactionClient, userId: string, postId: string) {
+    // Match comment/post mutation ordering and prevent moving a post between
+    // Spaces after authorization but before the moderation decision commits.
+    await tx.$queryRaw(Prisma.sql`SELECT id FROM posts WHERE id = ${postId} FOR UPDATE`);
+    const scope = await this.moderationScope(tx, userId);
+    const post = await tx.post.findFirst({ where: { id: postId, ...(scope ?? {}) }, select: { id: true, mediaUrls: true } });
+    if (!post) throw new NotFoundException('Post not found');
+    return post;
   }
 }

@@ -307,6 +307,16 @@ export class AiScreenService {
         )
       : [];
 
+    // From the first scored screen on, AI assesses this job's applicants, so
+    // the posting says so (Ontario requires the statement in the posting).
+    // Video answers aren't scored — the employer watches them — so a video
+    // round changes nothing. Done before anyone is told about the screen, and
+    // reported back so the employer sees the posting changed.
+    const postingNowSaysAi = created.length > 0 && mode !== 'video' && !job.usesAi;
+    if (postingNowSaysAi) {
+      await this.prisma.job.update({ where: { id: job.id }, data: { usesAi: true } });
+    }
+
     if (created.length > 0) {
       const company = await this.employerCompany(actor.id);
       const kind = { text: 'AI', video: 'video', live: 'AI interview' }[mode] ?? 'AI';
@@ -336,6 +346,7 @@ export class AiScreenService {
       skipped,
       questionCount: questions.length,
       remaining: Math.max(0, SCREEN_PER_JOB_MAX - sentSoFar - created.length),
+      postingNowSaysAi,
     };
   }
 
@@ -1027,7 +1038,7 @@ export class AiScreenService {
       where: { id: jobId },
       select: {
         id: true, title: true, description: true, requirements: true, skills: true,
-        experienceLevel: true, postedById: true,
+        experienceLevel: true, postedById: true, usesAi: true,
         screeningQuestions: true, screeningGeneratedAt: true, screeningLanguage: true,
       },
     });

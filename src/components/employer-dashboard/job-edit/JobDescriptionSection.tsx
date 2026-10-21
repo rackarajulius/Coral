@@ -1,4 +1,5 @@
-import { FileText, Loader2, Sparkles, Wand2 } from "lucide-react";
+import { AlertTriangle, FileText, Loader2, Sparkles, Wand2 } from "lucide-react";
+import { asksForCanadianExperience } from "@/lib/jobs/postingStatements";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -86,6 +87,17 @@ const JobDescriptionSection = ({ form, aiLoading, onGenerate, onImprove }: JobDe
                 {(field.value || "").length} characters
               </span>
             </div>
+            {asksForCanadianExperience(field.value || "") && (
+              // Advice, not a block: Coral can't tell whether the rule covers
+              // this employer, but asking for it shuts out skilled newcomers anywhere.
+              <p role="status" className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-500">
+                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden="true" />
+                <span>
+                  This asks for Canadian experience. Ontario postings can't (since January 2026), and it turns away
+                  qualified newcomers anywhere. Consider asking for the skills instead.
+                </span>
+              </p>
+            )}
           </FormItem>
         )}
       />

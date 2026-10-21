@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { OutreachResponse } from '@prisma/client';
 import { CompanyContextService } from '../company/company-context.service';
+import { roleHasCapability } from '../company/capabilities';
 import { PrismaService } from '../prisma/prisma.service';
 import { AiService, OutreachDraft } from '../services/ai/ai.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -233,6 +234,12 @@ export class OutreachService {
       if (count === 0) continue; // cancelled, or claimed, since it was read
 
       try {
+        // Scheduling grants no lasting permission. Recheck the sender after
+        // claiming the row, including old queued messages and restart retries.
+        if (!await this.scheduledSenderAllowed(row.employerId)) {
+          await this.prisma.outreachMessage.update({ where: { id: row.id }, data: { status: 'cancelled' } });
+          continue;
+        }
         const candidate = await this.loadCandidate(row.candidateId);
         if (!candidate) {
           await this.prisma.outreachMessage.update({ where: { id: row.id }, data: { status: 'cancelled' } });
@@ -253,6 +260,17 @@ export class OutreachService {
         this.logger.error(`Scheduled outreach ${row.id} failed: ${err instanceof Error ? err.message : err}`);
       }
     }
+  }
+
+  private async scheduledSenderAllowed(userId: string): Promise<boolean> {
+    const sender = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true, status: true } });
+    if (!sender || sender.status !== 'ACTIVE') return false;
+    if (sender.role === 'ADMIN') return true;
+    if (sender.role !== 'EMPLOYER') return false;
+    const seat = await this.companyContext.membershipFor(userId);
+    if (seat && (seat.status !== 'ACTIVE' || !roleHasCapability(seat.role, 'messaging:write'))) return false;
+    const profile = await this.prisma.employerProfile.findUnique({ where: { userId }, select: { verificationStatus: true } });
+    return !!profile && ['domain_verified', 'verified'].includes(profile.verificationStatus);
   }
 
   /** Stops a scheduled message before it goes out. Anyone in the company may. */

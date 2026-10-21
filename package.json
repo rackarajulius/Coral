@@ -18,7 +18,8 @@
     "staging:web": "node scripts/staging/run.mjs web",
     "staging:db-status": "node scripts/staging/run.mjs db-status",
     "staging:migrate": "node scripts/staging/run.mjs migrate",
-    "staging:secure-db": "node scripts/staging/secure-database.mjs"
+    "staging:secure-db": "node scripts/staging/secure-database.mjs",
+    "staging:verify-marketplace": "node scripts/staging/verify-marketplace.mjs"
   },
   "dependencies": {
     "@dnd-kit/sortable": "^10.0.0",

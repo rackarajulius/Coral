@@ -156,6 +156,16 @@ export class CreateJobDto {
   @MaxLength(50)
   salaryPeriod?: string;
 
+  /** Open now (true), or gathering candidates for future openings (false). Null: not stated. */
+  @IsOptional()
+  @IsBoolean()
+  existingVacancy?: boolean | null;
+
+  /** The posting says AI is used to screen, assess or select applicants. */
+  @IsOptional()
+  @IsBoolean()
+  usesAi?: boolean;
+
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(50)
@@ -280,6 +290,16 @@ export class UpdateJobDto {
   @IsString()
   @MaxLength(50)
   salaryPeriod?: string;
+
+  /** Open now (true), or gathering candidates for future openings (false). Null: not stated. */
+  @IsOptional()
+  @IsBoolean()
+  existingVacancy?: boolean | null;
+
+  /** The posting says AI is used to screen, assess or select applicants. */
+  @IsOptional()
+  @IsBoolean()
+  usesAi?: boolean;
 
   @IsOptional()
   @IsArray()

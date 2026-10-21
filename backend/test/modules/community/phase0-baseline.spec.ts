@@ -83,7 +83,7 @@ describe('Phase 0 community baseline: company voice and author authority', () =>
       postBookmark: { findMany: jest.fn().mockResolvedValue([]) },
       companyMember: { findMany: jest.fn().mockResolvedValue([{ companyId: 'company-a' }]) },
     };
-    const spaces = { assertPostable: jest.fn().mockResolvedValue(undefined) };
+    const spaces = { assertPostable: jest.fn().mockResolvedValue(undefined), joinOnPost: jest.fn().mockResolvedValue(undefined) };
     const context = { forUser: jest.fn().mockResolvedValue(null) };
     const service = new PostsService(
       collaborator(prisma), collaborator(spaces), collaborator({ resolve: jest.fn().mockResolvedValue(new Map()) }),
@@ -299,12 +299,15 @@ describe('Phase 0 Tides baseline: RSVP capacity and lifecycle', () => {
   });
 });
 
-describe('Phase 0 moderation baseline: existing global moderator model', () => {
+describe('Community moderation: current scoped authority', () => {
   function moderationHarness() {
     const prisma = {
-      spaceMember: { findFirst: jest.fn().mockResolvedValue(null) },
-      postReport: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
+      user: { findUnique: jest.fn().mockResolvedValue({ role: UserRole.JOB_SEEKER, status: 'ACTIVE' }) },
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      $transaction: jest.fn(),
+      postReport: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn(), findUnique: jest.fn().mockResolvedValue({ postId: 'post-a' }) },
     };
+    prisma.$transaction.mockImplementation((work) => work(prisma));
     const service = new ModerationService(collaborator(prisma), collaborator({}));
     return { service, prisma };
   }
@@ -319,23 +322,23 @@ describe('Phase 0 moderation baseline: existing global moderator model', () => {
 
   it('allows platform administrators to access the queue', async () => {
     const { service, prisma } = moderationHarness();
+    prisma.user.findUnique.mockResolvedValue({ role: UserRole.ADMIN, status: 'ACTIVE' });
     await expect(service.listReports(member('admin', UserRole.ADMIN))).resolves.toEqual([]);
-    expect(prisma.spaceMember.findFirst).not.toHaveBeenCalled();
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
   });
 
-  // Characterization of an existing gap, not approval of cross-Space authority.
-  // TODO (scoped moderation gate): change this expectation with the product rule
-  // when scoped moderation lands. This is not a desired permission promise.
-  it('currently lets a moderator of one Space read the global reports queue', async () => {
+  it('limits both post and comment reports to currently moderated Spaces', async () => {
     const { service, prisma } = moderationHarness();
-    prisma.spaceMember.findFirst.mockResolvedValue({ id: 'membership-in-space-a' });
-    prisma.postReport.findMany.mockResolvedValue([{
-      id: 'report-on-space-b', reason: 'spam', detail: null, createdAt: NOW,
-      status: ReportStatus.OPEN,
-      post: { id: 'post-in-space-b', content: 'Reported text', removedAt: null }, comment: null,
-    }]);
-    const reports = await service.listReports(member('space-a-moderator'));
-    expect(reports[0].target?.id).toBe('post-in-space-b');
-    expect(prisma.postReport.findMany.mock.calls[0][0].where).toEqual({ status: ReportStatus.OPEN });
+    prisma.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([{ space_id: 'space-a' }]);
+    await service.listReports(member('space-a-moderator'));
+    expect(prisma.postReport.findMany.mock.calls[0][0].where).toEqual({ status: ReportStatus.OPEN,
+      OR: [{ post: { spaceId: { in: ['space-a'] } } }, { comment: { post: { spaceId: { in: ['space-a'] } } } }],
+    });
+  });
+
+  it('does not trust a stale administrator role on the supplied user', async () => {
+    const { service, prisma } = moderationHarness();
+    await expect(service.listReports(member('demoted', UserRole.ADMIN))).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.postReport.findMany).not.toHaveBeenCalled();
   });
 });

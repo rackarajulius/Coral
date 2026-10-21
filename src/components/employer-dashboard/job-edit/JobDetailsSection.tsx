@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { MapPin, BriefcaseBusiness, Upload, X, ImageIcon } from "lucide-react";
+import { BriefcaseBusiness, Upload, X, ImageIcon } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/form";
 import { EditJobFormReturn } from "@/data/employer/Jobs/types";
 import { WORK_ARRANGEMENTS } from "@/lib/jobs/workArrangement";
+import { CityAutocomplete } from "@/components/location/CityAutocomplete";
 
 const DEPARTMENTS = [
   "Engineering", "Product", "Design", "Marketing", "Sales",
@@ -111,10 +112,19 @@ const JobDetailsSection = ({ form, logoUrl, onLogoChange }: JobDetailsSectionPro
               <FormItem>
                 <FormLabel>Location</FormLabel>
                 <FormControl>
-                  <div className="relative">
-                    <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input className="pl-9 bg-card" placeholder="San Francisco, CA" {...field} />
-                  </div>
+                  {/* FormControl hands the id, error state and ref through to the text box. */}
+                  <CityAutocomplete
+                    variant="field"
+                    inputClassName="bg-card"
+                    placeholder="City, or “Remote”"
+                    name={field.name}
+                    ref={field.ref}
+                    value={field.value ?? ""}
+                    onChange={field.onChange}
+                    onBlur={field.onBlur}
+                    // "Toronto, ON" / "Kampala, Uganda": how the job reads on its card.
+                    onSelect={(city) => field.onChange(city.label)}
+                  />
                 </FormControl>
                 <FormMessage />
               </FormItem>

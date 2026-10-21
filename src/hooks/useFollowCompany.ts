@@ -42,6 +42,9 @@ export function useFollowCompany({ companyId, initialFollowerCount = 0 }: UseFol
     },
     onSuccess: (result) => {
       queryClient.setQueryData(key, result);
+      // A followed company's posts belong in the community's Following feed,
+      // which is cached for minutes.
+      void queryClient.invalidateQueries({ queryKey: ["community-posts", "feed", "following"] });
     },
   });
 

@@ -3,6 +3,7 @@ import {
   CanActivate,
   ExecutionContext,
   UnauthorizedException,
+  ServiceUnavailableException,
   Logger,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -111,7 +112,7 @@ export class JwtAuthGuard implements CanActivate {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this.logger.error(`Authentication failed: ${errorMessage}`);
-      if (error instanceof UnauthorizedException) {
+      if (error instanceof UnauthorizedException || error instanceof ServiceUnavailableException) {
         throw error;
       }
       throw new UnauthorizedException('Authentication failed');

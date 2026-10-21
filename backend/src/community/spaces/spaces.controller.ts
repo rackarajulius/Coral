@@ -10,6 +10,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { User } from '../../common/types/user.types';
 import { SPACE_SCOPES, SpaceScope, SpacesService } from './spaces.service';
+import { SpaceSuggestionsService } from './space-suggestions.service';
 
 /**
  * Spaces are public to read and require sign-in to join.
@@ -66,16 +67,39 @@ export class ListSpacesQueryDto {
   limit?: number;
 }
 
+export class SuggestionsQueryDto {
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(20)
+  limit?: number;
+}
+
 @Controller('community/spaces')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class SpacesController {
-  constructor(private readonly spaces: SpacesService) {}
+  constructor(
+    private readonly spaces: SpacesService,
+    private readonly suggestions: SpaceSuggestionsService,
+  ) {}
 
   @Public()
   @Get()
   async list(@Query() query: ListSpacesQueryDto, @CurrentUser() user?: User) {
     const { data, meta } = await this.spaces.list(user?.id, query);
     return { success: true, data, meta };
+  }
+
+  /**
+   * Spaces for this person, each with the reason it is suggested.
+   *
+   * Signed in only: it is built from what you have done, and signed out there
+   * is nothing to build it from — the popular list already covers that case.
+   * Declared before `:slug`, which would otherwise take "suggestions" as one.
+   */
+  @Get('suggestions')
+  async suggest(@CurrentUser() user: User, @Query() query: SuggestionsQueryDto) {
+    return { success: true, data: await this.suggestions.suggest(user.id, query.limit ?? 10) };
   }
 
   @Public()
@@ -108,5 +132,16 @@ export class SpacesController {
   @Delete(':id/join')
   async leave(@CurrentUser() user: User, @Param('id', ParseUUIDPipe) id: string) {
     return { success: true, data: await this.spaces.leave(user, id) };
+  }
+
+  /** "Not interested" on a suggestion. */
+  @Post(':id/dismiss')
+  async dismiss(@CurrentUser() user: User, @Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, data: await this.suggestions.dismiss(user.id, id) };
+  }
+
+  @Delete(':id/dismiss')
+  async undismiss(@CurrentUser() user: User, @Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, data: await this.suggestions.undismiss(user.id, id) };
   }
 }

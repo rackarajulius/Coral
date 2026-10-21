@@ -9,11 +9,24 @@ export function isPremiumUser(user?: User | null): boolean {
 }
 
 /**
- * Premium gating is opt-in — off until billing is live. Flip on by setting
- * PREMIUM_ENFORCEMENT=true. While off, premium features are open to everyone.
+ * Premium gating is opt-in — off until billing is live.
+ *
+ * `PREMIUM_ENFORCEMENT=true` gates every Premium feature at once. A list of
+ * features gates just those, so they can go live one at a time:
+ * `PREMIUM_ENFORCEMENT=matcher.web` makes web job matching Premium while
+ * cover letters, tailoring, research and the coach stay open. Unset, all of
+ * it is open to everyone.
+ *
+ * Without a `feature`, this asks whether everything is gated.
  */
-export function isPremiumEnforced(config: ConfigService): boolean {
-  return config.get<string>('PREMIUM_ENFORCEMENT') === 'true';
+export function isPremiumEnforced(config: ConfigService, feature?: string): boolean {
+  const value = (config.get<string>('PREMIUM_ENFORCEMENT') ?? '').trim().toLowerCase();
+  if (value === 'true') return true;
+  if (!feature || !value) return false;
+  return value
+    .split(',')
+    .map((f) => f.trim())
+    .includes(feature.toLowerCase());
 }
 
 /**

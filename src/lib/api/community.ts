@@ -96,6 +96,26 @@ export const joinSpace = (id: string) =>
 export const leaveSpace = (id: string) =>
   req<unknown>(`/spaces/${id}/join`, { method: "DELETE" });
 
+/**
+ * Why a space is suggested, in words. `activity` is something you did there,
+ * `peers` is people you share a space with, `profile` is your skills, role or
+ * industry, and `popular` is the fill when nothing else applies.
+ */
+export interface SpaceSuggestion extends Space {
+  reason: { kind: "activity" | "peers" | "profile" | "popular"; text: string };
+}
+
+/** Signed in only — built from what you have done. */
+export const getSpaceSuggestions = (limit = 10) =>
+  req<{ data: SpaceSuggestion[] }>(`/spaces/suggestions?limit=${limit}`).then((r) => r.data);
+
+/** "Not interested": the space is not suggested to you again. */
+export const dismissSpaceSuggestion = (id: string) =>
+  req<unknown>(`/spaces/${id}/dismiss`, { method: "POST" });
+
+export const undoDismissSpaceSuggestion = (id: string) =>
+  req<unknown>(`/spaces/${id}/dismiss`, { method: "DELETE" });
+
 export type PostType =
   | "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT" | "JOB" | "CAROUSEL" | "POLL";
 
@@ -250,22 +270,41 @@ export function authorName(author: PostAuthor): string {
 
 /* ---------------------------------- posts --------------------------------- */
 
-export type FeedFilter = "saved" | "liked" | "mine" | "my-spaces";
+export type FeedFilter = "saved" | "liked" | "mine" | "my-spaces" | "following";
+
+/**
+ * What posts are for, grouped the way the community's nav is: talk, work
+ * being shown, and things on offer. Every post belongs to exactly one.
+ */
+export type FeedSection = "discussion" | "showcase" | "opportunity";
 
 export const listPosts = (
   params: {
     page?: number;
+    limit?: number;
     hashtag?: string;
     query?: string;
     spaceId?: string;
+    /** One person's posts, as themselves (not what they posted for a company). */
+    authorId?: string;
+    /** What a company published in its own name. The Company row's id, not the page's. */
+    companyId?: string;
     /** A named slice: saved, liked, mine, or my-spaces. */
     filter?: FeedFilter;
+    section?: FeedSection;
+    /** "top" is most liked, then most commented, across all time. */
+    sort?: "new" | "top";
   } = {},
 ) => {
   const search = new URLSearchParams();
   if (params.page) search.set("page", String(params.page));
+  if (params.limit) search.set("limit", String(params.limit));
   if (params.spaceId) search.set("spaceId", params.spaceId);
+  if (params.authorId) search.set("authorId", params.authorId);
+  if (params.companyId) search.set("companyId", params.companyId);
   if (params.filter) search.set("filter", params.filter);
+  if (params.section) search.set("section", params.section);
+  if (params.sort) search.set("sort", params.sort);
   if (params.hashtag) search.set("hashtag", params.hashtag);
   if (params.query) search.set("query", params.query);
   const qs = search.toString();
@@ -310,7 +349,8 @@ export const resharePost = (id: string, content?: string) =>
 export const createPost = (input: {
   purpose?: PostPurpose;
   reference?: AnnouncementReference;
-  spaceId: string;
+  /** Absent means everyone: Home, your followers, your profile or the company's page. */
+  spaceId?: string;
   content: string;
   postType?: PostType;
   mediaUrls?: string[];
@@ -344,6 +384,55 @@ export const getAnnouncementOptions = (asCompany = false, expectedSupabaseId?: s
     `/posts/announcement-options?company=${asCompany ? "true" : "false"}${companyId ? `&companyId=${encodeURIComponent(companyId)}` : ""}`,
     { signal }, expectedSupabaseId,
   ).then((r) => r.data);
+
+/* --------------------------------- people --------------------------------- */
+
+/**
+ * The top of someone's community page. Only what their posts already show —
+ * name, photo, the line under the byline — plus the counts. `identity.profileUrl`
+ * is their career profile, present only when that is public.
+ */
+export interface CommunityPerson {
+  id: string;
+  displayName: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  avatarUrl: string | null;
+  role: string;
+  identity: AuthorIdentity;
+  followerCount: number;
+  isFollowing: boolean;
+  followingCount: number;
+  postCount: number;
+}
+
+/** 404 ("Person not found") for anyone who has not posted or replied. */
+export const getCommunityPerson = (id: string) =>
+  req<{ data: CommunityPerson }>(`/people/${id}`).then((r) => r.data);
+
+/** Where a person's community page is: posts, followers, Follow. */
+export const personPath = (id: string) => `/community/people/${id}`;
+
+/**
+ * Where a company's community page is: its posts and tides, and Follow. Keyed
+ * by its page (EmployerProfile) id, the same id `/company-profile/:id` uses.
+ */
+export const companyPath = (profileId: string) => `/community/companies/${profileId}`;
+
+export interface PersonFollowStatus {
+  isFollowing: boolean;
+  followerCount: number;
+}
+
+/** A person's follower count, and whether you follow them when signed in. */
+export const getPersonFollow = (personId: string) =>
+  req<{ data: PersonFollowStatus }>(`/people/${personId}/follow`).then((r) => r.data);
+
+/** Follow or unfollow a person. Returns the new status. */
+export const setPersonFollow = (personId: string, follow: boolean) =>
+  req<{ data: PersonFollowStatus }>(`/people/${personId}/follow`, {
+    method: follow ? "POST" : "DELETE",
+  }).then((r) => r.data);
 
 /* ---------------------------------- polls --------------------------------- */
 
@@ -453,8 +542,8 @@ export function isVideoUrl(url: string): boolean {
 
 export type CommentSort = "newest" | "oldest" | "replies";
 
-export const listComments = (postId: string, sort: CommentSort = "newest") =>
-  req<Paged<CommunityComment>>(`/posts/${postId}/comments?sort=${sort}`);
+export const listComments = (postId: string, sort: CommentSort = "newest", page = 1) =>
+  req<Paged<CommunityComment>>(`/posts/${postId}/comments?sort=${sort}&page=${page}`);
 
 export const addComment = (postId: string, content: string, parentId?: string) =>
   req<{ data: CommunityComment }>(`/posts/${postId}/comments`, {
@@ -515,6 +604,14 @@ export const dismissReport = (reportId: string, resolution?: string) =>
   });
 
 /* --------------------------------- helpers -------------------------------- */
+
+/** "Ada Lovelace" → "AL". Shared by every avatar fallback in the community. */
+export function initials(name: string): string {
+  return name.split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase() ?? "").join("");
+}
+
+/** The address a post can be shared by. */
+export const postUrl = (id: string) => `${window.location.origin}/community/posts/${id}`;
 
 export function timeAgo(iso: string): string {
   const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);

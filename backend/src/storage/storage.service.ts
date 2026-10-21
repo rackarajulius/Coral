@@ -229,6 +229,15 @@ export class StorageService implements OnModuleInit {
   }
 
   /**
+   * Where a public file is or would be served, without checking it exists.
+   * Null when storage is not configured.
+   */
+  publicUrlFor(path: string, bucket: string = COMPANY_BUCKET): string | null {
+    if (!this.client) return null;
+    return this.client.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+  }
+
+  /**
    * Files directly under a prefix. Folders come back as entries with no id,
    * so callers that want files must filter them out.
    *

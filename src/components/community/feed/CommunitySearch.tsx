@@ -3,7 +3,7 @@ import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-qu
 import { Link, useSearchParams } from "react-router-dom";
 import { AlertTriangle, Hash, Loader2, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+import { PostListSkeleton, SpaceRowsSkeleton } from "./skeletons";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { listPosts, listSpaces, type Space } from "@/lib/api/community";
@@ -155,7 +155,7 @@ function Suggestions() {
 
   return (
     <SpaceCard title={user ? "Suggested spaces" : "Spaces"}>
-      {suggestions.isLoading && <RowSkeletons />}
+      {suggestions.isLoading && <SpaceRowsSkeleton />}
 
       {suggestions.isError && <ErrorLine message={(suggestions.error as Error).message} />}
 
@@ -198,7 +198,7 @@ function SpaceResults({ q }: { q: string }) {
     <SpaceCard
       title={results.isSuccess ? `${total.toLocaleString()} ${total === 1 ? "space" : "spaces"}` : "Spaces"}
     >
-      {results.isLoading && <RowSkeletons />}
+      {results.isLoading && <SpaceRowsSkeleton />}
       {results.isError && <ErrorLine message={(results.error as Error).message} />}
 
       {results.isSuccess && spaces.length === 0 && (
@@ -278,11 +278,7 @@ function PostResults({ q, onSeeSpaces }: { q: string; onSeeSpaces: () => void })
         </p>
       )}
 
-      {posts.isLoading && (
-        <div className="space-y-4">
-          {[0, 1].map((i) => <Skeleton key={i} className="h-40 rounded-2xl" />)}
-        </div>
-      )}
+      {posts.isLoading && <PostListSkeleton count={2} label="Searching posts" />}
 
       {posts.isError && (
         <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 p-5">
@@ -300,7 +296,7 @@ function PostResults({ q, onSeeSpaces }: { q: string; onSeeSpaces: () => void })
         </div>
       )}
 
-      <div className="space-y-4">
+      <div className="space-y-2">
         {posts.data?.data.map((post) => <FeedPost key={post.id} post={post} />)}
       </div>
 
@@ -466,22 +462,6 @@ function MoreButton({ loading, onClick }: { loading: boolean; onClick: () => voi
       {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
       Show more
     </button>
-  );
-}
-
-function RowSkeletons() {
-  return (
-    <div className="space-y-4 px-5 py-4">
-      {[0, 1, 2].map((i) => (
-        <div key={i} className="flex gap-3">
-          <Skeleton className="h-10 w-10 rounded-xl" />
-          <div className="flex-1 space-y-2">
-            <Skeleton className="h-4 w-1/3" />
-            <Skeleton className="h-3 w-2/3" />
-          </div>
-        </div>
-      ))}
-    </div>
   );
 }
 

@@ -44,7 +44,15 @@ export function ReportDialog({
     queryFn: getReportReasons,
     enabled: open,
     staleTime: Infinity,
+    retry: 1,
   });
+
+  // Closing starts the next report fresh rather than half-filled.
+  const close = () => {
+    setReason(null);
+    setDetail("");
+    onClose();
+  };
 
   const send = useMutation({
     mutationFn: () =>
@@ -55,15 +63,13 @@ export function ReportDialog({
       // No claim about what happens next: a report is a message to a person,
       // and promising an outcome we do not control would be the wrong promise.
       toast.success("Reported", { description: "A moderator will look at this." });
-      setReason(null);
-      setDetail("");
-      onClose();
+      close();
     },
     onError: (e) => toast.error((e as Error).message),
   });
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={(o) => !o && !send.isPending && close()}>
       <DialogContent className="max-w-md rounded-2xl">
         <DialogHeader>
           <DialogTitle>Report this {target.kind}</DialogTitle>
@@ -73,11 +79,27 @@ export function ReportDialog({
         </DialogHeader>
 
         <div className="space-y-3 py-1">
-          <div className="space-y-1.5">
+          <div className="space-y-1.5" role="radiogroup" aria-label="Reason">
+            {reasons.isLoading && (
+              <p className="flex items-center gap-2 py-2 text-sm text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                Loading reasons
+              </p>
+            )}
+            {reasons.isError && (
+              <p className="py-2 text-sm text-destructive">
+                Couldn't load the list of reasons.{" "}
+                <button type="button" onClick={() => void reasons.refetch()} className="underline">
+                  Try again
+                </button>
+              </p>
+            )}
             {reasons.data?.map((key) => (
               <button
                 key={key}
                 type="button"
+                role="radio"
+                aria-checked={reason === key}
                 onClick={() => setReason(key)}
                 className={cn(
                   "w-full rounded-xl border px-3 py-2 text-left text-sm transition-colors",
@@ -102,7 +124,7 @@ export function ReportDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={send.isPending}>Cancel</Button>
+          <Button variant="outline" onClick={close} disabled={send.isPending}>Cancel</Button>
           <Button onClick={() => send.mutate()} disabled={!reason || send.isPending}>
             {send.isPending && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
             Report

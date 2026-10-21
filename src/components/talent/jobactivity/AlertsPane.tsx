@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   type AlertEmploymentType,
@@ -8,12 +9,16 @@ import {
 } from '@/data/jobactivity/job-activity-mock';
 import {
   getMyAlerts,
+  getAlertWebMatches,
   createAlert,
   updateAlert,
   deleteAlert,
   type AlertInput,
+  type AlertWebMatch,
 } from '@/lib/api/jobAlerts';
-import { Bell, MapPin, Pencil, Plus, Trash2, Wallet } from 'lucide-react';
+import { postedAgo } from '@/lib/resumeMatcher/matchFilters';
+import { getMyEntitlements, limitApplied, metricOf } from '@/lib/api/entitlements';
+import { Bell, ExternalLink, Globe, MapPin, Pencil, Plus, Trash2, Wallet } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -38,6 +43,7 @@ import {
 import EmptyIllustration from './EmptyIllustration';
 import ErrorState from './ErrorState';
 import SkeletonPane from './SkeletonPane';
+import { CityAutocomplete } from '@/components/location/CityAutocomplete';
 
 const QUERY_KEY = ['my-alerts'] as const;
 
@@ -45,21 +51,123 @@ const FREQUENCIES: AlertFrequency[] = ['Instant', 'Daily', 'Weekly'];
 const TYPES: AlertEmploymentType[] = ['Full-time', 'Part-time', 'Contract', 'Internship'];
 const EXPERIENCE: AlertExperience[] = ['Entry', 'Mid', 'Senior', 'Lead'];
 
+/* ---------------------------- Web matches -------------------------------- */
+
+const WEB_SHOWN_AT_FIRST = 3;
+
+/**
+ * Jobs from across the web this alert found, newest first. They open on the
+ * site that lists them; the alert's notification links here, so opening it
+ * costs no new search.
+ */
+function WebMatches({
+  matches,
+  checkedAt,
+  premiumOnly,
+}: {
+  matches: AlertWebMatch[];
+  checkedAt?: string;
+  /** Web matches are Premium and this account is on the free plan. */
+  premiumOnly: boolean;
+}) {
+  const [all, setAll] = useState(false);
+
+  if (premiumOnly && matches.length === 0) {
+    return (
+      <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Globe className="h-3.5 w-3.5 shrink-0" />
+        <span>
+          Jobs from across the web are part of Premium.{' '}
+          <Link to="/premium" className="font-medium text-coral hover:underline">
+            See Premium
+          </Link>
+        </span>
+      </p>
+    );
+  }
+
+  if (matches.length === 0) {
+    return (
+      <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Globe className="h-3.5 w-3.5 shrink-0" />
+        {checkedAt
+          ? 'Nothing new from across the web yet. We look once a day.'
+          : 'Jobs from across the web will show here. We look once a day.'}
+      </p>
+    );
+  }
+
+  const shown = all ? matches : matches.slice(0, WEB_SHOWN_AT_FIRST);
+  return (
+    <div className="mt-4">
+      <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+        <Globe className="h-3.5 w-3.5" /> Found across the web
+      </p>
+      <ul className="mt-2 space-y-2">
+        {shown.map((m) => {
+          const meta = [m.company, m.location, postedAgo(m.postedAt ?? undefined), m.publisher && `via ${m.publisher}`]
+            .filter(Boolean)
+            .join(' · ');
+          return (
+            <li key={m.id} className="min-w-0">
+              {m.url ? (
+                <a
+                  href={m.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-sm font-medium text-foreground hover:underline"
+                >
+                  {m.title}
+                  <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
+                  <span className="sr-only">(opens in a new tab)</span>
+                </a>
+              ) : (
+                <span className="text-sm font-medium text-foreground">{m.title}</span>
+              )}
+              <p className="truncate text-xs text-muted-foreground">{meta}</p>
+            </li>
+          );
+        })}
+      </ul>
+      {matches.length > WEB_SHOWN_AT_FIRST && (
+        <Button variant="link" size="sm" className="mt-1 h-auto px-0 text-xs" onClick={() => setAll((v) => !v)}>
+          {all ? 'Show fewer' : `Show all ${matches.length}`}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 /* ------------------------------- Alert card ------------------------------ */
 
 function AlertCard({
   alert,
+  webMatches,
+  webPremiumOnly,
+  highlighted,
   onToggle,
   onEdit,
   onDelete,
 }: {
   alert: JobAlert;
+  webMatches: AlertWebMatch[];
+  webPremiumOnly: boolean;
+  /** The alert a notification opened: scrolled to and marked. */
+  highlighted: boolean;
   onToggle: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (highlighted) ref.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [highlighted]);
+
   return (
-    <Card className="rounded-[20px] border border-gray-300 p-5 md:p-6 transition-all duration-300">
+    <Card
+      ref={ref}
+      className={`rounded-[20px] border border-gray-300 p-5 md:p-6 transition-all duration-300 ${highlighted ? 'ring-2 ring-coral' : ''}`}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
           <div className="w-10 h-10 rounded-lg bg-orange-50 text-foreground flex items-center justify-center shrink-0">
@@ -107,6 +215,8 @@ function AlertCard({
         <span className="flex items-center gap-1.5"><Bell className="w-3.5 h-3.5" /> {alert.frequency} alerts</span>
         <span>{alert.active ? 'Active' : 'Paused'}</span>
       </div>
+
+      <WebMatches matches={webMatches} checkedAt={alert.webCheckedAt} premiumOnly={webPremiumOnly} />
 
       {/* Footer */}
       <div className="mt-4 flex items-center gap-1 pt-3 border-t border-gray-200">
@@ -217,7 +327,14 @@ function AlertFormDialog({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="al-location">Location</Label>
-              <Input id="al-location" value={draft.location} onChange={(e) => set('location', e.target.value)} placeholder="e.g. Remote" />
+              <CityAutocomplete
+                id="al-location"
+                variant="field"
+                value={draft.location}
+                onChange={(text) => set('location', text)}
+                onSelect={(city) => set('location', city.label)}
+                placeholder="A city, or “Remote”"
+              />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="al-type">Employment type</Label>
@@ -288,6 +405,25 @@ const AlertsPane = () => {
     queryFn: getMyAlerts,
     staleTime: 60_000,
   });
+  // Without these the alerts still show; each just has no web jobs listed.
+  const { data: webMatches } = useQuery({
+    queryKey: ['alert-web-matches'],
+    queryFn: getAlertWebMatches,
+    staleTime: 60_000,
+  });
+  const webByAlert = useMemo(() => {
+    const byAlert = new Map<string, AlertWebMatch[]>();
+    for (const m of webMatches ?? []) byAlert.set(m.alertId, [...(byAlert.get(m.alertId) ?? []), m]);
+    return byAlert;
+  }, [webMatches]);
+  const [searchParams] = useSearchParams();
+  const focusedAlert = searchParams.get('alert');
+  // Alerts search the web for Premium members only, once that is switched on.
+  const { data: entitlements } = useQuery({ queryKey: ['entitlements'], queryFn: getMyEntitlements, retry: false });
+  const webPremiumOnly =
+    !!entitlements &&
+    entitlements.tier !== 'premium' &&
+    limitApplied(entitlements, metricOf(entitlements, 'matcher.web'));
 
   const saveMut = useMutation({
     mutationFn: (vars: { id: string | null; input: AlertInput }) =>
@@ -383,6 +519,9 @@ const AlertsPane = () => {
             <AlertCard
               key={a.id}
               alert={a}
+              webMatches={webByAlert.get(a.id) ?? []}
+              webPremiumOnly={webPremiumOnly}
+              highlighted={a.id === focusedAlert}
               onToggle={() => toggleMut.mutate({ id: a.id, active: !a.active })}
               onEdit={() => openEdit(a)}
               onDelete={() => deleteMut.mutate(a.id)}

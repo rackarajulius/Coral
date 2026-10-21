@@ -118,7 +118,10 @@ function isStoredUrl(url?: string): url is string {
 export function brandToCompanyPayload(brand: EmployerBrand): UpdateEmployerCompanyPayload {
   const foundedYear = parseInt(brand.foundedYear, 10);
   return {
-    companyName: brand.displayName,
+    // Omitted when blank, like every other field here. A company still called
+    // "New Company" hydrates to an empty display name on purpose (see
+    // hydrateEmployerBrand), and sending that through would clear the name.
+    companyName: brand.displayName.trim() || undefined,
     tagline: brand.tagline || undefined,
     companyLogo: brand.logo || undefined,
     companyBanner: brand.banner || undefined,

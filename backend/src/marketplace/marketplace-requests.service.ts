@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, HttpExcepti
 import { Prisma } from '@prisma/client';
 import { createHash } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { WRITE_TRANSACTION } from '../common/database-transaction';
 import { MarketplaceService } from './marketplace.service';
 import { MarketplaceActivityService } from './marketplace-activity.service';
 import { ListingKind, safeWorkUrl } from './marketplace-policy';
@@ -13,7 +14,6 @@ const COMPANY = { id: true, name: true } satisfies Prisma.CompanySelect;
 const REQUEST_INCLUDE = { requester: { select: PERSON }, recipient: { select: PERSON }, requesterCompany: { select: COMPANY }, recipientCompany: { select: COMPANY } } satisfies Prisma.MarketplaceRequestInclude;
 type RequestRecord = Prisma.MarketplaceRequestGetPayload<{ include: typeof REQUEST_INCLUDE }>;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const WRITE_TRANSACTION = { maxWait: 10000, timeout: 30000 };
 
 @Injectable()
 export class MarketplaceRequestsService {

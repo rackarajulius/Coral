@@ -25,6 +25,9 @@ import { SupabaseService } from '../supabase/supabase.service';
 type ProviderPage<T> = { data: T[]; has_more?: boolean };
 type Subscription = { id: string; status: string };
 type CheckoutSession = { id: string; status: string; metadata?: { kind?: string; userId?: string } };
+type MeetingRef = {
+  employerId: string; calendarEventId: string | null; calendarProvider: string | null; zoomMeetingId: string | null;
+};
 
 /** Permanent self-service closure. IDs always come from the authenticated user. */
 @Injectable()
@@ -69,21 +72,6 @@ export class AccountClosureService {
         select: { employerId: true, calendarEventId: true, calendarProvider: true, zoomMeetingId: true },
       }),
     ]);
-    try {
-      await this.storage.deleteFilesUnder(`resumes/${user.id}`, RESUME_BUCKET);
-      await this.storage.deleteFilesUnder(user.id, VERIFICATION_BUCKET);
-      await this.storage.deleteFilesUnder(`posts/${user.id}`, COMMUNITY_BUCKET);
-      for (const folder of ['avatars', 'banners', 'intro-videos', 'portfolio']) {
-        await this.storage.deleteFilesUnder(folder, PROFILE_BUCKET, `${user.id}-`);
-      }
-      for (const screen of screens) await this.storage.deleteFilesUnder(`screens/${screen.id}`, SCREEN_VIDEO_BUCKET);
-      for (const conversation of conversations) {
-        await this.storage.deleteFilesUnder(`messages/${conversation.id}`, MESSAGE_ATTACHMENT_BUCKET);
-      }
-    } catch {
-      throw new BadGatewayException('Your uploaded files could not be removed. Please try closing your account again.');
-    }
-
     let identityDeleted = false;
     try {
       await this.prisma.$transaction(async (tx) => {
@@ -99,25 +87,74 @@ export class AccountClosureService {
       // provider succeeded but the DB commit failed, finish the idempotent DB
       // cleanup immediately, rather than leaving an account nobody can enter.
       for (let attempt = 0; attempt < 3; attempt++) {
+        let repaired = false;
         try {
           await this.prisma.$transaction((tx) => this.deleteDatabaseRecords(tx, user.id, user.supabaseId, true), { timeout: 30_000 });
-          await this.cancelMeetings(meetings);
-          return;
+          repaired = true;
         } catch { /* retry only the local cleanup; never resurrect the identity */ }
+        if (repaired) return this.finishClosure(user.id, screens, conversations, meetings);
       }
       this.logger.error(`Account closure database cleanup requires retry for user ${user.id}`);
-      throw new BadGatewayException({
-        code: 'ACCOUNT_CLOSED_CLEANUP_PENDING',
-        accountClosed: true,
-        message: 'Your sign-in account is closed, but data cleanup could not finish. Please contact support.',
-      });
+      throw this.cleanupPending();
     }
-    await this.cancelMeetings(meetings);
+    await this.finishClosure(user.id, screens, conversations, meetings);
   }
 
-  private async cancelMeetings(meetings: Array<{
-    employerId: string; calendarEventId: string | null; calendarProvider: string | null; zoomMeetingId: string | null;
-  }>): Promise<void> {
+  /**
+   * Everything that cannot be undone, run only once the closure is committed.
+   * Until the commit the account is still the user's, so a failed commit has to
+   * leave it whole: a deleted storage object cannot be restored, and the user
+   * would be left signed in with their resume and identity documents gone.
+   */
+  private async finishClosure(
+    userId: string,
+    screens: Array<{ id: string }>,
+    conversations: Array<{ id: string }>,
+    meetings: MeetingRef[],
+  ): Promise<void> {
+    const filesRemoved = await this.deleteStoredFiles(userId, screens, conversations);
+    await this.cancelMeetings(meetings);
+    if (filesRemoved) return;
+    // The account is gone either way. Say cleanup is unfinished rather than
+    // report a deletion that left identity documents in a bucket.
+    this.logger.error(`Account closure could not remove uploaded files for user ${userId}`);
+    throw this.cleanupPending();
+  }
+
+  private cleanupPending(): BadGatewayException {
+    return new BadGatewayException({
+      code: 'ACCOUNT_CLOSED_CLEANUP_PENDING',
+      accountClosed: true,
+      message: 'Your sign-in account is closed, but data cleanup could not finish. Please contact support.',
+    });
+  }
+
+  private async deleteStoredFiles(
+    userId: string,
+    screens: Array<{ id: string }>,
+    conversations: Array<{ id: string }>,
+  ): Promise<boolean> {
+    // Retried, because the records naming these paths are already deleted:
+    // after this there is nothing left to say which files belonged to whom.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await this.storage.deleteFilesUnder(`resumes/${userId}`, RESUME_BUCKET);
+        await this.storage.deleteFilesUnder(userId, VERIFICATION_BUCKET);
+        await this.storage.deleteFilesUnder(`posts/${userId}`, COMMUNITY_BUCKET);
+        for (const folder of ['avatars', 'banners', 'intro-videos', 'portfolio']) {
+          await this.storage.deleteFilesUnder(folder, PROFILE_BUCKET, `${userId}-`);
+        }
+        for (const screen of screens) await this.storage.deleteFilesUnder(`screens/${screen.id}`, SCREEN_VIDEO_BUCKET);
+        for (const conversation of conversations) {
+          await this.storage.deleteFilesUnder(`messages/${conversation.id}`, MESSAGE_ATTACHMENT_BUCKET);
+        }
+        return true;
+      } catch { /* each delete is idempotent, so a partial pass can be repeated */ }
+    }
+    return false;
+  }
+
+  private async cancelMeetings(meetings: MeetingRef[]): Promise<void> {
     // Employer-owned events are changed only after closure is committed.
     // Existing integrations make cancellation best effort if disconnected.
     for (const meeting of meetings) {

@@ -22,6 +22,19 @@ import { UpdatePostDto } from './dto/update-post.dto';
 
 type AnnouncementCard = Awaited<ReturnType<MarketplaceService['projectAnnouncementReference']>>;
 
+/**
+ * The community's sections, as post purposes.
+ *
+ * A question is talk, not an opportunity; a service announcement is on offer,
+ * the same as an open project or a live job. Every purpose belongs to exactly
+ * one section, so the three together are the whole feed.
+ */
+const SECTION_PURPOSES: Record<NonNullable<ListPostsQueryDto['section']>, PostPurpose[]> = {
+  discussion: [PostPurpose.GENERAL, PostPurpose.QUESTION],
+  showcase: [PostPurpose.SHOWCASE],
+  opportunity: [PostPurpose.OPPORTUNITY, PostPurpose.SERVICE_ANNOUNCEMENT],
+};
+
 @Injectable()
 export class PostsService {
   constructor(
@@ -62,12 +75,15 @@ export class PostsService {
       removedAt: null,
       ...personal,
       ...(query.spaceId ? { spaceId: query.spaceId } : {}),
-      ...(query.authorId ? { authorId: query.authorId } : {}),
+      // A person's posts are what they said as themselves: what they published
+      // in a company's name is the company's, and lives on its page.
+      ...(query.authorId ? { authorId: query.authorId, companyId: null } : {}),
       ...(query.companyId ? { companyId: query.companyId } : {}),
       ...(query.query
         ? { content: { contains: query.query, mode: 'insensitive' as const } }
         : {}),
       ...(query.hashtag ? { hashtags: { has: query.hashtag.toLowerCase() } } : {}),
+      ...(query.section ? { purpose: { in: SECTION_PURPOSES[query.section] } } : {}),
     };
 
     const [posts, total] = await Promise.all([
@@ -198,8 +214,9 @@ export class PostsService {
   async create(userId: string, dto: CreatePostDto) {
     if (dto.companyId !== undefined && dto.asCompany !== true) throw new BadRequestException('A company choice requires company publishing.');
     this.assertPostContent(dto.content, dto.mediaUrls);
-    // Refused at the door rather than producing a post attached to nothing.
-    await this.spaces.assertPostable(dto.spaceId);
+    // A space is optional; one that is named must exist and be open, refused
+    // at the door rather than producing a post in a room that is gone.
+    if (dto.spaceId) await this.spaces.assertPostable(dto.spaceId);
     // Refuses remote images: see CommunityMediaService for why an arbitrary
     // URL in a post is a tracking pixel with extra steps.
     this.media.assertOwnMedia(dto.mediaUrls ?? []);
@@ -225,7 +242,9 @@ export class PostsService {
     const postData = {
       authorId: userId,
       companyId,
-      spaceId: dto.spaceId,
+      // None means everyone: Home, the author's followers, their profile or
+      // the company's page.
+      spaceId: dto.spaceId ?? null,
       content: dto.content?.trim() || '',
       postType: dto.poll ? 'POLL' as const : dto.postType || 'TEXT' as const,
       purpose: purpose.toUpperCase() as PostPurpose,
@@ -261,6 +280,11 @@ export class PostsService {
         throw err;
       }
     }
+
+    // Posting in a space is taking part in it, so the author joins — after the
+    // post is safely written, so a refused post never leaves a membership
+    // behind.
+    if (dto.spaceId) await this.spaces.joinOnPost(userId, dto.spaceId);
 
     /**
       * Unfurled after the post exists, and never allowed to fail it.
@@ -703,6 +727,34 @@ export class PostsService {
         // would make the tab meaningless the moment someone leaves a space.
         if (memberships.length === 0) return 'none';
         return { spaceId: { in: memberships.map((m) => m.spaceId) } };
+      }
+      case 'following': {
+        /**
+         * What the people and companies you follow have posted.
+         *
+         * A person is followed for what they say as themselves, so their
+         * posts in a company's name are left to the company; a company is
+         * followed through its page, so its posts arrive whoever wrote them.
+         * The same two Follow buttons the post card shows.
+         */
+        const [people, companies] = await Promise.all([
+          this.prisma.userFollow.findMany({ where: { followerId: userId }, select: { followingId: true } }),
+          this.prisma.companyFollow.findMany({
+            where: { userId },
+            select: { company: { select: { companyId: true } } },
+          }),
+        ]);
+        const peopleIds = people.map((f) => f.followingId);
+        const companyIds = [...new Set(companies.flatMap((f) => (f.company.companyId ? [f.company.companyId] : [])))];
+        // Following nobody is a real state; the whole feed in its place would
+        // make the tab look like it did something.
+        if (peopleIds.length === 0 && companyIds.length === 0) return 'none';
+        return {
+          OR: [
+            ...(peopleIds.length ? [{ authorId: { in: peopleIds }, companyId: null }] : []),
+            ...(companyIds.length ? [{ companyId: { in: companyIds } }] : []),
+          ],
+        };
       }
       default:
         return {};

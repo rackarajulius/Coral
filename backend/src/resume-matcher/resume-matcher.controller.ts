@@ -1,4 +1,6 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
+import type { Request } from 'express';
+import { countryFromRequest } from '../analytics/geo';
 import { UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -10,6 +12,7 @@ import { SeekerEntitlementsService } from '../seeker-entitlements/seeker-entitle
 import { CompanyResearchService } from './company-research/company-research.service';
 import { RunMatchDto } from './dto/run-match.dto';
 import { AssistDto } from './dto/assist.dto';
+import { DismissMatchDto } from './dto/dismiss-match.dto';
 import { CompanyResearchDto } from './dto/company-research.dto';
 
 @Controller('resume-matcher')
@@ -33,8 +36,26 @@ export class ResumeMatcherController {
    * the service decides whether web sources join.
    */
   @Post('run')
-  async run(@CurrentUser() user: User, @Body() dto: RunMatchDto) {
-    return { success: true, data: await this.service.run(user, dto) };
+  async run(@CurrentUser() user: User, @Body() dto: RunMatchDto, @Req() req: Request) {
+    // Where the request came from, per the CDN — used only when neither the
+    // search nor the profile says which country to look in.
+    const visitorCountry = countryFromRequest(req) ?? undefined;
+    return { success: true, data: await this.service.run(user, dto, { visitorCountry }) };
+  }
+
+  /** "Not interested": the matcher leaves this job out from now on. */
+  @Post('dismissed')
+  async dismiss(@CurrentUser() user: User, @Body() dto: DismissMatchDto) {
+    await this.service.dismiss(user, dto);
+    return { success: true };
+  }
+
+  /** Undo for "not interested". The id is a query parameter: match ids contain colons. */
+  @Delete('dismissed')
+  async undismiss(@CurrentUser() user: User, @Query('jobId') jobId?: string) {
+    if (!jobId?.trim()) throw new BadRequestException('jobId is required');
+    await this.service.undismiss(user, jobId.trim());
+    return { success: true };
   }
 
   /**

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { getMyEntitlements, metricOf } from "@/lib/api/entitlements";
+import { getMyEntitlements, limitApplied, metricOf } from "@/lib/api/entitlements";
 
 /**
  * How many coach sessions are left this month.
@@ -33,7 +33,7 @@ export default function AllowanceMeter() {
 
   return (
     <p className="mt-4 text-xs text-ink-dim" aria-live="polite">
-      {data.enforced ? (
+      {limitApplied(data, coach) ? (
         <>
           {left === 0
             ? "You've used this month's free AI interviews"

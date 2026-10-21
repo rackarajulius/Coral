@@ -1,7 +1,8 @@
 import 'reflect-metadata';
 import { randomUUID } from 'node:crypto';
 import { INestApplication } from '@nestjs/common';
-import { PrismaClient, UserRole, UserStatus } from '@prisma/client';
+import { Prisma, PrismaClient, UserRole, UserStatus } from '@prisma/client';
+import { setTimeout as delay } from 'node:timers/promises';
 import { MarketplaceService } from '../src/marketplace/marketplace.service';
 import { createTestDatabase } from './support/database';
 import { createMarketplaceApp } from './support/marketplace-app';
@@ -58,6 +59,34 @@ describe('Phase 2 marketplace API (isolated PostgreSQL)', () => {
     const employer = await user('EMPLOYER'); await request('POST', '/services', employer.id, service(), 403);
     const inactive = await user('JOB_SEEKER', 'INACTIVE', true); await request('POST', '/services', inactive.id, service(), 403);
     await request('POST', '/services', null, service(), 401);
+  });
+  it('publishes after a brief database lock without expiring the permission-checked transaction', async () => {
+    const owner = await user('JOB_SEEKER', 'ACTIVE', true);
+    const helper = app.get(MarketplaceService);
+    const draft = await helper.create('service', owner.id, service());
+    let locked!: () => void;
+    const acquired = new Promise<void>(resolve => { locked = resolve; });
+    const holding = prisma.$transaction(async tx => {
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM service_listings WHERE id = ${draft.id} FOR UPDATE`);
+      locked();
+      await delay(6_000);
+    }, { timeout: 15_000 });
+    // Surface acquisition errors rather than hanging on the readiness promise.
+    await Promise.race([acquired, holding]);
+    const [published] = await Promise.all([helper.transition('service', draft.id, owner.id, 'published'), holding]);
+    expect(published.status).toBe('published');
+    expect((await helper.getPublic('service', draft.id)).id).toBe(draft.id);
+  });
+  it('rechecks the original publisher when a different company administrator publishes', async () => {
+    const owner = await user('EMPLOYER'), administrator = await user('EMPLOYER');
+    const company = await prisma.company.create({ data: { name: 'Publisher authority fixture' } });
+    const seat = await prisma.companyMember.create({ data: { companyId: company.id, userId: owner.id, role: 'OWNER', status: 'ACTIVE' } });
+    await prisma.companyMember.create({ data: { companyId: company.id, userId: administrator.id, role: 'ADMIN', status: 'ACTIVE' } });
+    const helper = app.get(MarketplaceService);
+    const draft = await helper.create('project', owner.id, { ...project(), companyId: company.id });
+    await prisma.companyMember.update({ where: { id: seat.id }, data: { status: 'REMOVED' } });
+    await request('POST', `/gigs/${draft.id}/state`, administrator.id, { status: 'open' }, 403);
+    expect((await prisma.projectBrief.findUniqueOrThrow({ where: { id: draft.id } })).status).toBe('draft');
   });
   it('filters consent, current company seats and inactive owners before pagination and totals', async () => {
     const marker = randomUUID(), visibleOwner = await user('FREELANCER', 'ACTIVE', true), hiddenOwner = await user('JOB_SEEKER', 'ACTIVE', true);

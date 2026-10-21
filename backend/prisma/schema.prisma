@@ -109,6 +109,7 @@ model User {
   postedJobs         Job[]              @relation("PostedJobs")
   applications       Application[]      @relation("UserApplications")
   externalApplications ExternalApplication[]
+  dismissedMatches     DismissedMatch[]
   savedJobs          SavedJob[]         @relation("UserSavedJobs")
   jobAlerts          JobAlert[]         @relation("UserJobAlerts")
   jobRecommendations JobRecommendation[] @relation("UserJobRecommendations")
@@ -125,6 +126,7 @@ model User {
   candidateReactions  CandidateReaction[] @relation("CandidateReactions")
   givenReactions      CandidateReaction[] @relation("CandidateReactionAuthor")
   spaceMemberships    SpaceMember[]   @relation("SpaceMemberships")
+  spaceSuggestionDismissals SpaceSuggestionDismissal[] @relation("SpaceSuggestionDismissals")
   /// How this person appears to someone whose profile they viewed:
   /// 'named' | 'company' | 'private'. Null means the role's default —
   /// employers are attributed to their company, everyone else is private.
@@ -144,6 +146,9 @@ model User {
   auditLogs          AuditLog[]         @relation("AdminAuditLogs")
   notifications      Notification[]     @relation("UserNotifications")
   companyFollows     CompanyFollow[]    @relation("UserCompanyFollows")
+  /// People this user follows, and people who follow this user.
+  following          UserFollow[]       @relation("UserFollowing")
+  followers          UserFollow[]       @relation("UserFollowers")
   companyReviews     CompanyReview[]
   companyMemberships CompanyMember[]    @relation("UserCompanyMemberships")
   companyAuditLogs   CompanyAuditLog[]  @relation("CompanyAuditActor")
@@ -1293,6 +1298,23 @@ model CompanyFollow {
   @@map("company_follows")
 }
 
+/// One person following another, as companies are followed in CompanyFollow.
+/// A user can never follow themselves (enforced by a check constraint in the
+/// migration as well as by the service).
+model UserFollow {
+  id          String   @id @default(uuid())
+  followerId  String   @map("follower_id")
+  followingId String   @map("following_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  follower  User @relation("UserFollowing", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("UserFollowers", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@index([followingId])
+  @@map("user_follows")
+}
+
 // Freelancer Profile (for gig workers)
 model FreelancerProfile {
   id              String    @id @default(uuid())
@@ -1368,6 +1390,15 @@ model Job {
   salaryMax            Int?     @map("salary_max")
   salaryCurrency       String   @default("USD") @map("salary_currency")
   salaryPeriod         String?  @map("salary_period")
+  /// Whether the role is open now (true), or the posting gathers candidates
+  /// for future openings (false). Null: not stated. Ontario has required
+  /// this statement in public postings since 2026-01-01, and candidates
+  /// everywhere want to know a role is real.
+  existingVacancy      Boolean? @map("existing_vacancy")
+  /// The posting says AI is used to screen, assess or select applicants
+  /// (Ontario, 2026-01-01). Turned on the first time Coral's AI screens this
+  /// job's applicants, and can't be turned off after that.
+  usesAi               Boolean  @default(false) @map("uses_ai")
   responsibilities     String[] @default([])
   requirements         String[] @default([])
   benefits             String[] @default([])
@@ -1470,6 +1501,41 @@ model Application {
 
 /// A seeker's private record of an application handled outside Coral.
 /// Opening a link only saves the opportunity; the seeker confirms submission.
+/// A job match the seeker said they are not interested in. The matcher leaves
+/// it out of later results: by its id, and by title and company, because the
+/// same job arrives from more than one source under different ids.
+model DismissedMatch {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  jobId     String   @map("job_id")
+  title     String
+  company   String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, jobId])
+  @@index([userId, createdAt])
+  @@map("dismissed_matches")
+}
+
+/// A job title as job ads in another language write it ("nurse" → German
+/// "Pflegefachkraft"), so the matcher also finds ads in the local language.
+/// Asked of the AI once per title and language, and kept.
+model RoleTranslation {
+  id        String   @id @default(uuid())
+  /// The title as searched, lower case with single spaces.
+  role      String
+  /// ISO 639-1: "de".
+  language  String
+  /// The local title. The same as `role` when ads there use it unchanged.
+  title     String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([role, language])
+  @@map("role_translations")
+}
+
 model ExternalApplication {
   id         String    @id @default(uuid())
   userId     String    @map("user_id")
@@ -1523,15 +1589,50 @@ model JobAlert {
   frequency       String   @default("daily")
   isActive        Boolean  @default(true) @map("is_active")
   lastSentAt      DateTime? @map("last_sent_at")
+  /// When the web was last searched for this alert. Daily at most (weekly
+  /// for weekly alerts), whatever the frequency: web searches are metered.
+  webCheckedAt    DateTime? @map("web_checked_at")
+  /// Whether that search used JSearch, which has a daily allowance for alerts.
+  webUsedJSearch  Boolean  @default(false) @map("web_used_jsearch")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
   user            User     @relation("UserJobAlerts", fields: [userId], references: [id], onDelete: Cascade)
+  webMatches      JobAlertWebMatch[]
 
   @@index([userId, createdAt])
   @@index([userId, isActive])
   @@index([isActive, frequency, lastSentAt])
   @@map("job_alerts")
+}
+
+/// A job from the web that a saved alert found. Kept so the alert can show
+/// it (the notification opens these, not a new search), and so the same job
+/// is never announced twice.
+model JobAlertWebMatch {
+  id        String    @id @default(uuid())
+  alertId   String    @map("alert_id")
+  userId    String    @map("user_id")
+  /// Title and employer, normalised: one posting from two sources, or relisted under a new id, is one job.
+  jobKey    String    @map("job_key")
+  /// The matcher's id for it ("jsearch:…"), as "not interested" records it.
+  jobId     String    @map("job_id")
+  source    String
+  title     String
+  company   String
+  location  String
+  url       String?
+  publisher String?
+  logoUrl   String?   @map("logo_url")
+  salary    String?
+  postedAt  DateTime? @map("posted_at")
+  foundAt   DateTime  @default(now()) @map("found_at")
+
+  alert JobAlert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+
+  @@unique([alertId, jobKey])
+  @@index([userId, foundAt])
+  @@map("job_alert_web_matches")
 }
 
 /// One job put in front of one job seeker by Coral's matching.
@@ -1606,8 +1707,10 @@ model JobBoost {
 model Post {
   id             String     @id @default(uuid())
   authorId       String     @map("author_id")
-  /// Nullable only for posts written before spaces existed. Every new post is
-  /// given one by the service.
+  /// The space a post is for, when it is for one. Null means everyone: Home,
+  /// the author's followers, their profile or the company's page (and also
+  /// the posts written before spaces existed). Posting in a space joins the
+  /// author to it.
   spaceId        String?    @map("space_id")
   /// Set when the post speaks for a company rather than for its author.
   ///
@@ -2811,6 +2914,7 @@ model Space {
   company Company?      @relation(fields: [companyId], references: [id], onDelete: SetNull)
   members SpaceMember[]
   posts   Post[]
+  suggestionDismissals SpaceSuggestionDismissal[]
 
   @@index([kind, archivedAt])
   @@map("spaces")
@@ -2829,6 +2933,24 @@ model SpaceMember {
   @@unique([spaceId, userId])
   @@index([userId])
   @@map("space_members")
+}
+
+/// A space someone closed in "Suggested spaces", so it is not offered again.
+///
+/// Kept rather than remembered in the browser: a suggestion you dismissed on
+/// your laptop coming back on your phone reads as not having been listened to.
+model SpaceSuggestionDismissal {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  spaceId   String   @map("space_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user  User  @relation("SpaceSuggestionDismissals", fields: [userId], references: [id], onDelete: Cascade)
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, spaceId])
+  @@index([spaceId])
+  @@map("space_suggestion_dismissals")
 }
 
 enum ReportStatus {

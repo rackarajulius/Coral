@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { WRITE_TRANSACTION } from '../common/database-transaction';
 import { isPublicProviderReady } from '../freelancers/provider-profile-policy';
 import { LIVE_JOB_STATUSES } from '../jobs/job-lifecycle.service';
 import { CATEGORIES, CURRENCIES, ListingReportDto, MarketplaceQueryDto } from './dto/marketplace.dto';
@@ -123,7 +124,7 @@ export class MarketplaceService {
         ? await tx.serviceListing.create({ data: { ...candidate, ownerUserId: userId, companyId } as Prisma.ServiceListingUncheckedCreateInput, select: SERVICE_SELECT })
         : await tx.projectBrief.create({ data: { ...candidate, ownerUserId: userId, companyId } as Prisma.ProjectBriefUncheckedCreateInput, select: PROJECT_SELECT });
       return this.serialize(kind, record, true);
-    });
+    }, WRITE_TRANSACTION);
   }
   async update(kind: ListingKind, id: string, userId: string, dto: Record<string, any>) {
     this.assertListingWritesEnabled(); const data = this.writable(kind, dto);
@@ -137,7 +138,7 @@ export class MarketplaceService {
       if (data.status !== 'paused' && existing.status === 'published') await this.assertProviderPublic(tx, existing.ownerUserId);
       const record = kind === 'service' ? await tx.serviceListing.update({ where: { id }, data, select: SERVICE_SELECT }) : await tx.projectBrief.update({ where: { id }, data, select: PROJECT_SELECT });
       return this.serialize(kind, record, true);
-    });
+    }, WRITE_TRANSACTION);
   }
   async transition(kind: ListingKind, id: string, userId: string, next: string) {
     const publishing = next === (kind === 'service' ? 'published' : 'open'); if (publishing) this.assertListingWritesEnabled();
@@ -146,13 +147,14 @@ export class MarketplaceService {
       validateTransition(kind, existing.status, next);
       if (existing.removedAt && next !== 'archived') throw new BadRequestException('Removed records cannot be republished');
       if (publishing) {
-        await this.assertCreator(tx, kind, userId, existing.companyId); await this.assertCreator(tx, kind, existing.ownerUserId, existing.companyId);
+        await this.assertCreator(tx, kind, userId, existing.companyId);
+        if (existing.ownerUserId !== userId) await this.assertCreator(tx, kind, existing.ownerUserId, existing.companyId);
         validateFields(kind, existing, true); if (kind === 'service') await this.assertProviderPublic(tx, existing.ownerUserId);
       }
       const data = { status: next, ...(publishing ? { publishedAt: new Date() } : {}) };
       const record = kind === 'service' ? await tx.serviceListing.update({ where: { id }, data, select: SERVICE_SELECT }) : await tx.projectBrief.update({ where: { id }, data, select: PROJECT_SELECT });
       return this.serialize(kind, record, true);
-    });
+    }, WRITE_TRANSACTION);
   }
   async report(kind: ListingKind, id: string, userId: string, dto: ListingReportDto) {
     if (Object.keys(dto).some(k => !['reason', 'details'].includes(k)) || !['spam', 'fraud', 'harassment', 'inappropriate', 'other'].includes(dto.reason)
@@ -167,7 +169,7 @@ export class MarketplaceService {
       await tx.marketplaceReport.upsert({ where: unique, create: { reporterId: userId, ...target, reason: dto.reason, details },
         update: { reason: dto.reason, details, ...(changed ? { status: 'open', reviewedAt: null, reviewedById: null } : {}) } });
       return { reported: true };
-    });
+    }, WRITE_TRANSACTION);
   }
   async validateAnnouncementReference(userId: string, reference: ListingReference, companyId?: string | null, database: Database = this.prisma) {
     this.assertListingWritesEnabled();

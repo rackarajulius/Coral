@@ -13,11 +13,21 @@ export class ListPostsQueryDto {
 
   /**
    * Which slice of the feed. Absent means everything.
-   * 'my-spaces' needs the spaces you joined; the rest need your id.
+   * 'my-spaces' needs the spaces you joined, 'following' the people and
+   * companies you follow; the rest need your id.
    */
   @IsOptional()
-  @IsIn(['saved', 'liked', 'mine', 'my-spaces'])
-  filter?: 'saved' | 'liked' | 'mine' | 'my-spaces';
+  @IsIn(['saved', 'liked', 'mine', 'my-spaces', 'following'])
+  filter?: 'saved' | 'liked' | 'mine' | 'my-spaces' | 'following';
+
+  /**
+   * What the posts are for, as the community's sections group them: talk
+   * (general posts and questions), work people are showing, or things on
+   * offer (open projects, live jobs, services). Absent means all of them.
+   */
+  @IsOptional()
+  @IsIn(['discussion', 'showcase', 'opportunity'])
+  section?: 'discussion' | 'showcase' | 'opportunity';
 
   /** 'new' (default) or 'top'. */
   @IsOptional()

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getMyEntitlements, refusalFor, type SeekerMetric } from "@/lib/api/entitlements";
 import { isEntitlementError } from "@/lib/api/entitlementError";
@@ -19,6 +19,10 @@ import {
   MapPin,
   Wallet,
   UserPlus,
+  Bookmark,
+  BookmarkCheck,
+  EyeOff,
+  Clock,
 } from "lucide-react";
 import Header from "@/components/Header";
 import { useAuth } from "@/contexts/AuthContext";
@@ -37,15 +41,52 @@ import {
   generateCoverLetter,
   tailorResume,
   researchCompany,
+  dismissMatch,
+  undismissMatch,
+  type MatchSearch,
   type MatchedJob,
 } from "@/lib/api/resumeMatcher";
+import { MatchFilterBar } from "@/components/resumeMatcher/MatchFilterBar";
+import {
+  DEFAULT_FILTERS,
+  EMPLOYMENT_LABELS,
+  WORKPLACE_LABELS,
+  applyMatchFilters,
+  postedAgo,
+  type MatchFilters,
+} from "@/lib/resumeMatcher/matchFilters";
+import { useMatchSave } from "@/hooks/useMatchSave";
+import { CityAutocomplete } from "@/components/location/CityAutocomplete";
+import { countryNameOf } from "@/lib/location/places";
+
+/**
+ * "Anywhere in Uganda, or type a city". Searches cover one country at a
+ * time, so an empty box means anywhere in the person's country, not the world.
+ */
+function anywherePlaceholder(countryCode: string | undefined): string {
+  const country = countryCode ? countryNameOf(countryCode) : undefined;
+  return country ? `Anywhere in ${country}, or type a city` : "City, or leave blank for anywhere";
+}
+
+/** A search as part of a cache key: "anywhere" and "the profile's city" stay distinct. */
+function searchKey(search: MatchSearch | undefined): string[] {
+  return search ? [search.query ?? "", search.location ?? "", search.countryCode ?? ""] : ["profile"];
+}
 
 const ResumeMatcher = () => {
   const { user, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const { openAuth } = useAuthModal();
   const queryClient = useQueryClient();
   const [searchInput, setSearchInput] = useState("");
-  const [activeQuery, setActiveQuery] = useState<string | undefined>(undefined);
+  /** The location box, and the country of the city picked in it (none when typed freely). */
+  const [locationInput, setLocationInput] = useState("");
+  const [locationCountry, setLocationCountry] = useState<string | undefined>(undefined);
+  const [locationTouched, setLocationTouched] = useState(false);
+  /** The search that was run. Undefined for the first one, which matches the profile as it stands. */
+  const [active, setActive] = useState<MatchSearch | undefined>(undefined);
+  const [filters, setFilters] = useState<MatchFilters>(DEFAULT_FILTERS);
+  /** Matches dismissed on this page; the server leaves them out of later searches. */
+  const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set());
 
   /**
    * Runs for everyone. This page used to be a wall for anyone without
@@ -53,9 +94,9 @@ const ResumeMatcher = () => {
    * tier includes. The server decides which sources to search and says so.
    */
   const { data: result, isFetching, isError, error, refetch } = useQuery({
-    queryKey: ["resume-matcher", "run", user?.id ?? "", activeQuery ?? ""],
+    queryKey: ["resume-matcher", "run", user?.id ?? "", ...searchKey(active)],
     queryFn: async ({ signal }) => {
-      const data = await runResumeMatch(activeQuery, signal);
+      const data = await runResumeMatch(active, signal);
       void queryClient.invalidateQueries({ queryKey: ["entitlements"] });
       return data;
     },
@@ -67,7 +108,57 @@ const ResumeMatcher = () => {
     retry: false,
     refetchOnReconnect: false,
   });
-  const hasHeuristicScores = result?.matches.some((match) => match.scoringMode === "heuristic");
+  // AI scoring failed for the search, not just for one job it missed: one
+  // keyword-scored card used to turn the whole page into "Keyword matcher".
+  const hasHeuristicScores =
+    !!result?.matches.length && result.matches.every((match) => match.scoringMode === "heuristic");
+
+  // The location box shows where the search looked — the profile's city at
+  // first — until the person changes it themselves.
+  useEffect(() => {
+    if (locationTouched || result?.location === undefined) return;
+    setLocationInput(result.location);
+    setLocationCountry(result.countryCode);
+  }, [result?.location, result?.countryCode, locationTouched]);
+
+  const visible = useMemo(() => (result?.matches ?? []).filter((m) => !hiddenIds.has(m.id)), [result, hiddenIds]);
+  const filtered = useMemo(() => applyMatchFilters(visible, filters), [visible, filters]);
+
+  const setHidden = (id: string, hidden: boolean) =>
+    setHiddenIds((prev) => {
+      const next = new Set(prev);
+      if (hidden) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+
+  /**
+   * Hides the match at once, with an undo. If the server can't record it, the
+   * match comes back, since it would otherwise reappear on the next search.
+   */
+  const notInterested = (m: MatchedJob) => {
+    setHidden(m.id, true);
+    dismissMatch({ jobId: m.id, title: m.title, company: m.company }).then(
+      () =>
+        toast(`Hidden: ${m.title}`, {
+          description: "You won't be shown this job again.",
+          action: {
+            label: "Undo",
+            onClick: () => {
+              setHidden(m.id, false);
+              undismissMatch(m.id).catch((e: Error) => {
+                setHidden(m.id, true);
+                toast.error(e.message);
+              });
+            },
+          },
+        }),
+      (e: Error) => {
+        setHidden(m.id, false);
+        toast.error(e.message);
+      },
+    );
+  };
 
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -76,18 +167,23 @@ const ResumeMatcher = () => {
       openAuth({ redirectTo: "/resume-matcher" });
       return;
     }
-    const nextQuery = searchInput.trim() || undefined;
-    if (nextQuery === activeQuery) {
+    const next: MatchSearch = {
+      query: searchInput.trim() || undefined,
+      // Always sent, so an emptied box means anywhere rather than the profile's city.
+      location: locationInput.trim(),
+      countryCode: locationCountry,
+    };
+    if (active && searchKey(next).join("|") === searchKey(active).join("|")) {
       void refetch({ cancelRefetch: false });
       return;
     }
     // An explicit search refreshes even a recently visited query.
     void queryClient.invalidateQueries({
-      queryKey: ["resume-matcher", "run", user?.id ?? "", nextQuery ?? ""],
+      queryKey: ["resume-matcher", "run", user?.id ?? "", ...searchKey(next)],
       exact: true,
       refetchType: "none",
     });
-    setActiveQuery(nextQuery);
+    setActive(next);
   };
 
   return (
@@ -108,16 +204,35 @@ const ResumeMatcher = () => {
 
           <>
             {/* Search bar */}
-            <form onSubmit={submitSearch} className="flex items-center gap-2 mb-6">
-              <div className="flex flex-1 items-center h-11 rounded-full bg-card border border-border px-4 gap-2">
+            <form onSubmit={submitSearch} className="flex flex-col sm:flex-row sm:items-center gap-2 mb-6">
+              <div className="flex sm:flex-[3] min-w-0 items-center h-11 rounded-full bg-card border border-border px-4 gap-2">
                 <Search className="h-4 w-4 text-muted-foreground shrink-0" />
                 <Input
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
+                  aria-label="Role"
                   placeholder="Search a role, e.g. “Product Designer” — or leave blank to match your resume"
                   className="border-0 bg-transparent px-0 h-auto shadow-none focus-visible:ring-0"
                 />
               </div>
+              <CityAutocomplete
+                className="sm:flex-[2] min-w-0"
+                value={locationInput}
+                near={locationCountry ?? result?.countryCode}
+                // An empty box searches the country sent with it, or else the
+                // person's own, so it names which.
+                placeholder={anywherePlaceholder(locationCountry ?? result?.homeCountryCode)}
+                onChange={(text) => {
+                  setLocationInput(text);
+                  setLocationCountry(undefined);
+                  setLocationTouched(true);
+                }}
+                onSelect={(city) => {
+                  setLocationInput(city.label);
+                  setLocationCountry(city.countryCode);
+                  setLocationTouched(true);
+                }}
+              />
               <Button type="submit" variant="coral" className="rounded-full px-6" disabled={isFetching || isAuthLoading}>
                 {isFetching ? <Loader2 className="h-4 w-4 animate-spin" /> : "Search"}
               </Button>
@@ -153,7 +268,43 @@ const ResumeMatcher = () => {
                     AI scoring is temporarily unavailable. Results labeled “Keyword match” use overlap with your saved skills.
                   </p>
                 )}
-                <MatchList matches={result.matches} loading={isFetching} />
+                {visible.length === 0 ? (
+                  <NoMatches
+                    query={result.query}
+                    fromProfile={!active?.query}
+                    searched={result.searchedSources ?? []}
+                    unavailable={result.unavailableSources ?? []}
+                  />
+                ) : (
+                  <>
+                    {(result.unavailableSources?.length ?? 0) > 0 && (
+                      <p role="status" className="mb-5 text-sm text-muted-foreground">
+                        Some job sources didn't respond, so these results may be incomplete.
+                      </p>
+                    )}
+                    {result.localQuery && result.localLanguage && (
+                      // Otherwise "Pflegefachkraft" cards for a "nurse" search look like a mistake.
+                      <p className="mb-3 text-sm text-muted-foreground">
+                        Also searched ads in {result.localLanguage}: “{result.localQuery}”
+                      </p>
+                    )}
+                    <MatchFilterBar filters={filters} onChange={setFilters} shown={filtered.length} total={visible.length} />
+                    {filtered.length === 0 ? (
+                      <div role="status" className="py-12 text-center text-sm text-muted-foreground max-w-md mx-auto">
+                        <p className="font-medium text-foreground">No matches fit these filters.</p>
+                        <p className="mt-1">
+                          A filter only keeps jobs that say what it asks about, and many listings don't state pay or
+                          whether they're remote.
+                        </p>
+                        <Button variant="outline" size="sm" className="mt-4" onClick={() => setFilters({ ...DEFAULT_FILTERS, sort: filters.sort })}>
+                          Clear filters
+                        </Button>
+                      </div>
+                    ) : (
+                      <MatchList matches={filtered} loading={isFetching} onNotInterested={notInterested} />
+                    )}
+                  </>
+                )}
               </>
             ) : (
               <Centered>Search again to refresh your matches.</Centered>
@@ -187,12 +338,18 @@ function WebScopeNotice({ reason }: { reason: "PREMIUM_REQUIRED" | "ALLOWANCE_EX
       <div className="min-w-0">
         <p className="text-sm font-medium text-foreground">Showing jobs posted on this platform</p>
         <p className="mt-0.5 text-sm text-muted-foreground">
-          {reason === "ALLOWANCE_EXHAUSTED"
-            ? "You've used today's web searches. Jobs from across the web come back tomorrow."
-            : "Matches from across the web — plus cover letters and resume tailoring — are part of Premium."}{" "}
-          <Link to="/premium" className="font-medium text-coral hover:underline">
-            See Premium
-          </Link>
+          {/* Only a Premium member reaches the daily cap (free has no web
+              searches), so that case is told when they're back, never sold Premium. */}
+          {reason === "ALLOWANCE_EXHAUSTED" ? (
+            "You've used today's web searches. Jobs from across the web come back tomorrow."
+          ) : (
+            <>
+              Matches from across the web are part of Premium.{" "}
+              <Link to="/premium" className="font-medium text-coral hover:underline">
+                See Premium
+              </Link>
+            </>
+          )}
         </p>
       </div>
     </div>
@@ -216,9 +373,57 @@ function NoProfile() {
   );
 }
 
+/**
+ * Says why there is nothing to show.
+ *
+ * This used to tell everyone to add more detail to their profile, including
+ * when no source had been reached and when none had anything for the role.
+ * A profile too thin to match on gets its own screen (NoProfile), so here the
+ * honest answers are "we couldn't look" or "nothing open fits this search".
+ */
+function NoMatches({
+  query,
+  fromProfile,
+  searched,
+  unavailable,
+}: {
+  query: string;
+  fromProfile: boolean;
+  searched: string[];
+  unavailable: string[];
+}) {
+  const couldNotLook = searched.length > 0 && unavailable.length === searched.length;
+  return (
+    <div role="status" className="py-16 text-center text-sm text-muted-foreground max-w-md mx-auto">
+      {couldNotLook ? (
+        <p>We couldn't reach our job sources just now. Try again in a few minutes.</p>
+      ) : (
+        <>
+          <p className="font-medium text-foreground">
+            No open roles match {fromProfile ? "your title, " : ""}“{query}” right now.
+          </p>
+          <p className="mt-1">
+            {unavailable.length > 0
+              ? "Some job sources didn't respond, so searching again later may find more."
+              : `Try a broader role${fromProfile ? " in the search above" : ""}, like “Engineer” or “Designer”.`}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ------------------------------- Matches ------------------------------- */
 
-function MatchList({ matches, loading }: { matches: MatchedJob[]; loading: boolean }) {
+function MatchList({
+  matches,
+  loading,
+  onNotInterested,
+}: {
+  matches: MatchedJob[];
+  loading: boolean;
+  onNotInterested: (m: MatchedJob) => void;
+}) {
   const [assist, setAssist] = useState<{ job: MatchedJob; mode: "cover" | "tailor" } | null>(null);
   const [research, setResearch] = useState<MatchedJob | null>(null);
   const showUpgrade = useUpgradePrompt((s) => s.show);
@@ -241,14 +446,6 @@ function MatchList({ matches, loading }: { matches: MatchedJob[]; loading: boole
   };
   const locked = (metric: SeekerMetric) => refusalFor(entitlements, metric) !== null;
 
-  if (matches.length === 0) {
-    return (
-      <Centered>
-        No matches yet. Try a different role, or add more detail to your profile.
-      </Centered>
-    );
-  }
-
   return (
     <>
       <div className={`grid grid-cols-1 lg:grid-cols-2 gap-4 ${loading ? "opacity-60 pointer-events-none" : ""}`}>
@@ -259,6 +456,7 @@ function MatchList({ matches, loading }: { matches: MatchedJob[]; loading: boole
             onCover={gated("assist.cover_letter", () => setAssist({ job: m, mode: "cover" }))}
             onTailor={gated("assist.tailor", () => setAssist({ job: m, mode: "tailor" }))}
             onResearch={gated("research.company", () => setResearch(m))}
+            onNotInterested={() => onNotInterested(m)}
             locked={{
               cover: locked("assist.cover_letter"),
               tailor: locked("assist.tailor"),
@@ -279,16 +477,24 @@ function MatchCard({
   onCover,
   onTailor,
   onResearch,
+  onNotInterested,
   locked,
 }: {
   m: MatchedJob;
   onCover: () => void;
   onTailor: () => void;
   onResearch: () => void;
+  onNotInterested: () => void;
   /** Which tools the plan doesn't cover right now; shown with a lock. */
   locked?: { cover: boolean; tailor: boolean; research: boolean };
 }) {
   const queryClient = useQueryClient();
+  const save = useMatchSave(m);
+  const posted = postedAgo(m.postedAt);
+  const details = [
+    m.employmentType && EMPLOYMENT_LABELS[m.employmentType],
+    m.workplace && WORKPLACE_LABELS[m.workplace],
+  ].filter(Boolean);
   const trackExternal = () => {
     if (m.source === "platform" || !m.url) return;
     void createExternalApplication({
@@ -304,9 +510,7 @@ function MatchCard({
   return (
     <div className="rounded-2xl border border-border bg-card p-5 transition-all duration-200 hover:shadow-md">
       <div className="flex items-start gap-3">
-        <div className="w-12 h-12 rounded-lg bg-muted flex items-center justify-center text-lg font-semibold text-muted-foreground shrink-0">
-          {m.company.charAt(0).toUpperCase()}
-        </div>
+        <CompanyMark company={m.company} logoUrl={m.logoUrl} />
         <div className="flex-1 min-w-0">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
@@ -318,7 +522,7 @@ function MatchCard({
                 {m.matchScore}%
               </span>
               {m.scoringMode === "heuristic" && <span className="text-[10px] text-muted-foreground">Keyword match</span>}
-              <SourceBadge source={m.source} />
+              <SourceBadge source={m.source} publishedOn={m.publishedOn} />
             </div>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -330,6 +534,12 @@ function MatchCard({
             {m.salary && (
               <span className="flex items-center gap-1">
                 <Wallet className="h-3 w-3" /> {m.salary}
+              </span>
+            )}
+            {details.length > 0 && <span>{details.join(" · ")}</span>}
+            {posted && (
+              <span className="flex items-center gap-1">
+                <Clock className="h-3 w-3" /> {posted}
               </span>
             )}
           </div>
@@ -347,18 +557,69 @@ function MatchCard({
         <Button size="sm" variant="outline" className="h-8" onClick={onResearch}>
           {locked?.research ? <Lock className="h-3.5 w-3.5" /> : <Building2 className="h-3.5 w-3.5" />} Research
         </Button>
-        {m.url && (
-          <a
-            href={m.url}
-            onClick={trackExternal}
-            target={m.url.startsWith("http") ? "_blank" : undefined}
-            rel="noopener noreferrer"
-            className="ml-auto text-sm font-medium text-foreground hover:text-coral transition-colors"
+        <div className="ml-auto flex items-center gap-1">
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-8 w-8"
+            onClick={save.toggle}
+            disabled={save.isPending}
+            aria-pressed={save.isSaved}
+            aria-label={save.isSaved ? `Saved: ${m.title}` : `Save ${m.title}`}
+            title={save.isSaved ? "Saved" : "Save for later"}
           >
-            {m.source === "platform" ? "View job →" : "Open & track →"}
-          </a>
-        )}
+            {save.isSaved ? <BookmarkCheck className="h-4 w-4 text-coral" /> : <Bookmark className="h-4 w-4" />}
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-8 w-8"
+            onClick={onNotInterested}
+            aria-label={`Not interested in ${m.title}`}
+            title="Not interested"
+          >
+            <EyeOff className="h-4 w-4" />
+          </Button>
+          {m.url && (
+            <a
+              href={m.url}
+              onClick={trackExternal}
+              target={m.url.startsWith("http") ? "_blank" : undefined}
+              rel="noopener noreferrer"
+              className="ml-1 text-sm font-medium text-foreground hover:text-coral transition-colors"
+            >
+              {m.source === "platform" ? "View job →" : "Open & track →"}
+            </a>
+          )}
+        </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The employer's logo, or its first letter when there is none.
+ *
+ * Styled like the job board's logo tile. A logo that fails to load falls
+ * back to the letter rather than leaving a broken-image icon.
+ */
+function CompanyMark({ company, logoUrl }: { company: string; logoUrl?: string }) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const showLogo = !!logoUrl && failedUrl !== logoUrl;
+  return (
+    <div className="w-12 h-12 rounded-lg bg-muted shadow-inner flex items-center justify-center overflow-hidden shrink-0 p-1.5 text-lg font-semibold text-muted-foreground">
+      {showLogo ? (
+        <img
+          src={logoUrl}
+          alt={`${company} logo`}
+          referrerPolicy="no-referrer"
+          loading="lazy"
+          onError={() => setFailedUrl(logoUrl)}
+          className="h-full w-full rounded-sm object-contain"
+        />
+      ) : (
+        <span aria-hidden="true">{company.charAt(0).toUpperCase()}</span>
+      )}
     </div>
   );
 }
@@ -372,14 +633,31 @@ const SOURCE_LABELS: Record<string, string> = {
   talent: "Talent.com",
   greenhouse: "Employer",
   lever: "Employer",
+  ashby: "Employer",
 };
 
-function SourceBadge({ source }: { source: string }) {
-  const label = SOURCE_LABELS[source] ?? "Web";
+/**
+ * Where the job is listed. Web results say which site they came from — "via
+ * LinkedIn", "via Job Bank" — or "Employer" for the company's own careers
+ * site, rather than a generic "Web".
+ */
+function SourceBadge({
+  source,
+  publishedOn,
+}: {
+  source: string;
+  publishedOn?: { name: string; isEmployer: boolean };
+}) {
+  const label = publishedOn
+    ? publishedOn.isEmployer
+      ? "Employer"
+      : `via ${publishedOn.name}`
+    : SOURCE_LABELS[source] ?? "Web";
   const isPlatform = source === "platform";
   return (
     <span
-      className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-medium ${
+      title={publishedOn && !publishedOn.isEmployer ? `Listed on ${publishedOn.name}` : undefined}
+      className={`shrink-0 max-w-[9rem] truncate px-2 py-0.5 rounded-full text-[10px] font-medium ${
         isPlatform ? "bg-coral/10 text-coral" : "bg-muted text-muted-foreground"
       }`}
     >

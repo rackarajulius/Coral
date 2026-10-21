@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TideCard } from "@/components/community/tides/TideCard";
 import { listTides } from "@/lib/api/tides";
+import { COMMUNITY_TAB } from "@/lib/communityTab";
 import type { EmployerCompany } from "@/lib/api/employerCompany";
 
 /** How many to show before handing over to the full list. */
@@ -57,6 +58,8 @@ export function CompanyTides({ company }: { company?: EmployerCompany }) {
         {more > 0 && (
           <Link
             to="/community/tides"
+            // The community has its own tab; the careers page stays where it was.
+            target={COMMUNITY_TAB}
             className="inline-block text-sm font-medium text-blue-600 hover:underline dark:text-blue-400"
           >
             {more} more {more === 1 ? "tide" : "tides"}

@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { AlertTriangle, ArrowLeft } from "lucide-react";
-import Header from "@/components/Header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TideCard } from "@/components/community/tides/TideCard";
 import { getTide } from "@/lib/api/tides";
@@ -18,8 +17,7 @@ export default function TidePage() {
 
   return (
     <>
-      <Header />
-      <main className="mx-auto w-full max-w-2xl px-4 pb-16 pt-24 sm:px-6">
+      <main className="mx-auto w-full max-w-2xl px-4 pb-16 pt-6 sm:px-6">
         <Link
           to="/community"
           className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"

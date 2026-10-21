@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getMySubscription, openBillingPortal, premiumSummary } from "@/lib/api/premium";
-import { getMyEntitlements, type MetricStatus } from "@/lib/api/entitlements";
+import { getMyEntitlements, limitApplied, type MetricStatus } from "@/lib/api/entitlements";
 
 /**
  * The account's plan, in Settings.
@@ -85,18 +85,30 @@ export function SubscriptionCard() {
             {usage.data.metrics.map((m) => (
               <li key={m.metric} className="flex items-center justify-between gap-4 text-sm">
                 <span className="text-gray-600 dark:text-gray-300">{m.label}</span>
-                <span className="text-right text-gray-500">{usageText(m, usage.data.enforced)}</span>
+                <span className="text-right text-gray-500">{usageText(m, limitApplied(usage.data, m))}</span>
               </li>
             ))}
           </ul>
-          {!usage.data.enforced && (
-            <p className="mt-3 text-xs text-gray-500">
-              Limits aren't applied yet — usage is counted so you can see it, but nothing is blocked.
-            </p>
-          )}
+          <LimitsNote metrics={usage.data.metrics.map((m) => ({ label: m.label, applied: limitApplied(usage.data, m) }))} />
         </CardContent>
       )}
     </Card>
+  );
+}
+
+/**
+ * What is actually limited. Features go live one at a time, so "limits
+ * aren't applied yet" stopped being true for all of them at once.
+ */
+function LimitsNote({ metrics }: { metrics: { label: string; applied: boolean }[] }) {
+  const applied = metrics.filter((m) => m.applied);
+  if (applied.length === metrics.length) return null;
+  return (
+    <p className="mt-3 text-xs text-gray-500">
+      {applied.length === 0
+        ? "Limits aren't applied yet — usage is counted so you can see it, but nothing is blocked."
+        : `Only ${applied.map((m) => m.label.toLowerCase()).join(", ")} ${applied.length === 1 ? "is" : "are"} limited so far — the rest is counted, but not blocked.`}
+    </p>
   );
 }
 

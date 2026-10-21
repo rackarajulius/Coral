@@ -5,12 +5,16 @@ import BrandInput from './BrandInput';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import type { FormData } from '../../data/onboarding/types';
 import { WORK_ELIGIBILITY_OPTIONS, getWorkEligibilityOption } from '@/lib/workEligibility';
+import { CityAutocomplete } from '@/components/location/CityAutocomplete';
+import { countryNameOf, placeParts } from '@/lib/location/places';
+import { BRAND_LOCATION_INPUT_CLASSES } from './brandStyles';
 
 const StepOne = ({ data, set }: { data: FormData; set: (d: Partial<FormData>) => void }) => {
   const eligibility = getWorkEligibilityOption(data.workEligibility);
+  const hintName = data.countryHint ? countryNameOf(data.countryHint) : undefined;
 
   /**
-   * Prefills the country, and only the country.
+   * Notes the country, and only the country.
    *
    * This used to call ipapi.co from the browser and drop "City, Region,
    * Country" into the field. Three problems: it handed every visitor's IP to a
@@ -21,20 +25,20 @@ const StepOne = ({ data, set }: { data: FormData; set: (d: Partial<FormData>) =>
    * Our own endpoint reports what the CDN already resolved, stores nothing,
    * and returns null when there is no edge in front (local development). A
    * country is a fact we actually have; the city is left for the person who
-   * knows it.
+   * knows it. It is kept as a hint — its cities are suggested first, and it
+   * is saved as the country if no city is given — rather than typed into the
+   * box: "Uganda" alone in the box was saved as the city.
    */
   const detectedRef = useRef(false);
   useEffect(() => {
-    if (detectedRef.current || data.location.trim()) return;
+    if (detectedRef.current || data.countryHint || data.location.trim()) return;
     detectedRef.current = true;
 
     let cancelled = false;
     getCountryHint()
       .then((code) => {
         if (cancelled || !code) return;
-        // Intl turns "UG" into "Uganda" — no country table to ship or maintain.
-        const name = new Intl.DisplayNames(['en'], { type: 'region' }).of(code);
-        if (name) set({ location: name });
+        set({ countryHint: code });
       })
       .catch(() => {
         /* No hint is a fine outcome: the field stays empty. */
@@ -83,11 +87,15 @@ const StepOne = ({ data, set }: { data: FormData; set: (d: Partial<FormData>) =>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
         <div className="space-y-2">
           <FieldLabel htmlFor="location">Current Location</FieldLabel>
-          <BrandInput
+          <CityAutocomplete
             id="location"
-            placeholder="Enter your location"
+            variant="field"
+            inputClassName={BRAND_LOCATION_INPUT_CLASSES}
+            near={data.countryHint || undefined}
+            placeholder={hintName ? `Your city in ${hintName}` : 'Start typing your city'}
             value={data.location}
-            onChange={(e) => set({ location: e.target.value })}
+            onChange={(text) => set({ location: text, locationParts: null })}
+            onSelect={(city) => set({ location: city.label, locationParts: placeParts(city) })}
           />
         </div>
         <div className="space-y-2">

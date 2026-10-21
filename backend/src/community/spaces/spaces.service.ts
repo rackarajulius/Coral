@@ -32,6 +32,9 @@ const ABANDONED_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
 const RESERVED_SLUGS = [
   'moderation', 'new', 'all', 'me', 'admin', 'search', 'settings',
   'about', 'help', 'spaces', 'saved', 'liked',
+  // `GET /community/spaces/suggestions` is declared before `:slug`, so a
+  // space with this slug could never be opened.
+  'suggestions',
 ];
 
 /**
@@ -374,6 +377,22 @@ export class SpacesService {
     await this.requireLiveSpace(spaceId);
   }
 
+  /**
+   * Makes someone who just posted in a space a member of it.
+   *
+   * LinkedIn refuses to let a non-member post in a group at all; joining on
+   * the way in reaches the same place with one step fewer, and means the post
+   * and its replies show up in their "My spaces" from then on. An existing
+   * member, moderators included, is left exactly as they were.
+   */
+  async joinOnPost(userId: string, spaceId: string): Promise<void> {
+    await this.prisma.spaceMember.upsert({
+      where: { spaceId_userId: { spaceId, userId } },
+      create: { spaceId, userId },
+      update: {},
+    });
+  }
+
   /* --------------------------------- helpers -------------------------------- */
 
   private async requireLiveSpace(spaceId: string) {
@@ -388,7 +407,8 @@ export class SpacesService {
     return space;
   }
 
-  private shape(
+  /** The one shape a space is listed in, wherever it is listed. */
+  shape(
     space: {
       id: string;
       slug: string;

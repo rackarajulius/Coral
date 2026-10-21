@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BarChart3, Building2, CalendarPlus, ChevronRight, ImagePlus, Loader2, Search, Video, X,
+  BarChart3, Building2, CalendarPlus, ChevronRight, Globe, ImagePlus, Loader2, Search, Video, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
@@ -20,6 +20,7 @@ import {
   type TideDraft,
 } from "@/components/community/tides/TideFields";
 import { useAuth } from "@/contexts/AuthContext";
+import { useAuthModal } from "@/contexts/AuthModalContext";
 import {
   createPost, getAnnouncementOptions, getCompanyVoice, getGifStatus, listSpaces, uploadPostMedia,
   type MediaKind, type PostPurpose, type Space,
@@ -42,6 +43,41 @@ const MAX_VIDEO_SECONDS = 60;
 interface PickedSpace {
   id: string;
   name: string;
+  /** Known when picked from the list; false means posting will join it. */
+  joined?: boolean;
+}
+
+/**
+ * Who a post is for, as the composer last had it, per person.
+ *
+ * Null is "Anyone": no space, so the post goes to Home, your followers and
+ * your profile or the company's page. Remembered the way LinkedIn keeps your
+ * last audience as the next default — a convenience, so a lost value just
+ * means starting on Anyone.
+ */
+const AUDIENCE_KEY = (userId: string) => `coral.community.audience.${userId}`;
+
+function readLastAudience(userId: string | undefined): PickedSpace | null {
+  if (!userId) return null;
+  try {
+    const raw = localStorage.getItem(AUDIENCE_KEY(userId));
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed.id === "string" && typeof parsed.name === "string"
+      ? { id: parsed.id, name: parsed.name }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberAudience(userId: string | undefined, target: PickedSpace | null) {
+  if (!userId) return;
+  try {
+    if (target) localStorage.setItem(AUDIENCE_KEY(userId), JSON.stringify({ id: target.id, name: target.name }));
+    else localStorage.removeItem(AUDIENCE_KEY(userId));
+  } catch {
+    // Storage refused; the next post just starts on Anyone.
+  }
 }
 
 interface Attachment {
@@ -88,6 +124,7 @@ export function PostComposer({
   spaceName,
   open: controlledOpen,
   onOpenChange,
+  showPrompt = true,
 }: {
   spaceId: string | null;
   /** Shown in the picker straight away, before any list has loaded. */
@@ -95,8 +132,11 @@ export function PostComposer({
   /** Lets the sidebar open the composer as well as the prompt bar. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** False drops the prompt bar; the dialog then opens only through `open`. */
+  showPrompt?: boolean;
 }) {
   const { user } = useAuth();
+  const { openAuth } = useAuthModal();
   const [uncontrolled, setUncontrolled] = useState(false);
   const open = controlledOpen ?? uncontrolled;
   const setOpen = (next: boolean) => {
@@ -105,9 +145,15 @@ export function PostComposer({
   };
 
   if (!user) {
+    if (!showPrompt) return null;
     return (
       <div className="rounded-2xl border border-dashed border-border bg-card p-5 text-center">
-        <p className="text-sm text-muted-foreground">Sign in to post.</p>
+        <p className="text-sm text-muted-foreground">
+          <button type="button" onClick={() => openAuth()} className="text-link hover:underline">
+            Sign in
+          </button>{" "}
+          to start a discussion.
+        </p>
       </div>
     );
   }
@@ -116,19 +162,21 @@ export function PostComposer({
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="flex w-full items-center gap-3 rounded-2xl border border-border bg-card p-4 text-left transition-colors hover:border-primary/40"
-      >
-        <Avatar className="h-9 w-9">
-          <AvatarImage src={user.avatarUrl ?? ""} alt="" />
-          <AvatarFallback className="bg-primary/10 text-xs text-primary">
-            {initials(name)}
-          </AvatarFallback>
-        </Avatar>
-        <span className="text-sm text-muted-foreground">What have you been working on?</span>
-      </button>
+      {showPrompt && (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="flex w-full items-center gap-3 rounded-2xl border border-border bg-card p-4 text-left transition-colors hover:border-primary/40"
+        >
+          <Avatar className="h-9 w-9">
+            <AvatarImage src={user.avatarUrl ?? ""} alt="" />
+            <AvatarFallback className="bg-primary/10 text-xs text-primary">
+              {initials(name)}
+            </AvatarFallback>
+          </Avatar>
+          <span className="text-sm text-muted-foreground">What have you been working on?</span>
+        </button>
+      )}
 
       {open && (
         <ComposerDialog key={user.id} spaceId={spaceId} spaceName={spaceName} onClose={() => setOpen(false)} />
@@ -151,8 +199,10 @@ function ComposerDialog({
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [content, setContent] = useState("");
-  const [target, setTarget] = useState<PickedSpace | null>(
-    spaceId ? { id: spaceId, name: spaceName ?? "" } : null,
+  // Null is Anyone. Opened from a space, it is that space; otherwise
+  // whatever this person posted to last time.
+  const [target, setTarget] = useState<PickedSpace | null>(() =>
+    spaceId ? { id: spaceId, name: spaceName ?? "" } : readLastAudience(user?.id),
   );
   const [media, setMedia] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -242,14 +292,14 @@ function ComposerDialog({
       if (tide) {
         await createTide({
           ...tidePayload(tide),
-          spaceId: target!.id,
+          spaceId: target?.id,
           announcement: content.trim() || undefined,
           ...(asCompany ? { asCompany: true } : {}),
         });
         return;
       }
       await createPost({
-        spaceId: target!.id,
+        spaceId: target?.id,
         content: content.trim(),
         mediaUrls: media.map((m) => m.url),
         postType: "TEXT",
@@ -260,8 +310,14 @@ function ComposerDialog({
       }, user?.supabaseId);
     },
     onSuccess: () => {
+      rememberAudience(user?.id, target);
       void queryClient.invalidateQueries({ queryKey: ["community-posts"] });
       void queryClient.invalidateQueries({ queryKey: ["tides"] });
+      // Posting in a space joins it, so the lists of your spaces have moved.
+      if (target) {
+        void queryClient.invalidateQueries({ queryKey: ["community-spaces"] });
+        void queryClient.invalidateQueries({ queryKey: ["space"] });
+      }
       onClose();
     },
     onError: (e) => toast.error((e as Error).message),
@@ -307,7 +363,7 @@ function ComposerDialog({
   // A poll needs two real choices, so the button waits for them rather than
   // letting the server refuse a post someone thought they had finished.
   const pollReady = !poll || poll.filter((o) => o.trim()).length >= 2;
-  const canPost = !!content.trim() && !!target && pollReady && referenceReady && !uploading && !post.isPending;
+  const canPost = !!content.trim() && pollReady && referenceReady && !uploading && !post.isPending;
   const dirty = !!content.trim() || media.length > 0 || !!poll;
 
   return (
@@ -621,23 +677,24 @@ function ComposerDialog({
 
         <footer className="flex items-center justify-between gap-3 border-t border-border px-4 py-3">
           <span className="text-xs text-muted-foreground">
-            {tide
-              ? !target
-                ? "Choose a space"
-                : !tideReady(tide)
-                  ? "A tide needs a name and a start"
-                  : `Announcing in ${target.name}`
-              : content.length > MAX_LENGTH - 500
+            {tide && !tideReady(tide)
+              ? "A tide needs a name and a start"
+              : !tide && content.length > MAX_LENGTH - 500
                 ? `${MAX_LENGTH - content.length} left`
-                : target?.name
-                  ? `Posting to ${target.name}`
-                  : "Choose a space"}
+                : target?.joined === false
+                  ? // Said before the click, so joining is never a surprise.
+                    `Posting here adds you to ${target.name}`
+                  : target
+                    ? `${tide ? "Announcing in" : "Posting to"} ${target.name || "this space"}`
+                    : tide
+                      ? "Announcing to anyone — Home and your followers"
+                      : "Posting to anyone — Home and your followers"}
           </span>
           <Button
             size="sm"
             className="rounded-full px-5"
             onClick={() => post.mutate()}
-            disabled={tide ? !target || !tideReady(tide) || post.isPending : !canPost}
+            disabled={tide ? !tideReady(tide) || post.isPending : !canPost}
           >
             {post.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
             {tide ? "Hold it" : "Post"}
@@ -662,10 +719,12 @@ function GifIcon({ className }: { className?: string }) {
 }
 
 /**
- * The space this post lands in.
+ * Who this post is for: anyone, or one space.
  *
  * Sits inline after the name, the way the reference puts the audience next to
  * the author — it reads as part of the sentence rather than as a form field.
+ * Anyone is first and needs no space, the way LinkedIn's "Anyone" does; a
+ * space is for when a post belongs to a particular room.
  *
  * Searches the server rather than listing everything: with a few hundred
  * spaces a dropdown of all of them is a scroll nobody finishes. Untouched, it
@@ -677,7 +736,8 @@ function SpacePicker({
   onChoose,
 }: {
   chosen: PickedSpace | null;
-  onChoose: (space: PickedSpace) => void;
+  /** Null is Anyone. */
+  onChoose: (space: PickedSpace | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
@@ -734,8 +794,8 @@ function SpacePicker({
   const flat = sections.flatMap((s) => s.spaces);
   const loading = q ? results.isLoading : mine.isLoading || popular.isLoading;
 
-  const pick = (space: Space) => {
-    onChoose({ id: space.id, name: space.name });
+  const pick = (space: Space | null) => {
+    onChoose(space ? { id: space.id, name: space.name, joined: space.joined } : null);
     setOpen(false);
     setInput("");
   };
@@ -752,11 +812,17 @@ function SpacePicker({
         <button
           type="button"
           className={cn(
-            "max-w-[14rem] truncate rounded px-0.5 text-sm transition-colors hover:underline",
-            chosen ? "text-primary" : "text-muted-foreground",
+            "inline-flex max-w-[14rem] items-center gap-1 rounded px-0.5 text-sm text-primary transition-colors hover:underline",
           )}
         >
-          {chosen ? chosen.name || "Selected space" : "Choose a space"}
+          {chosen ? (
+            <span className="truncate">{chosen.name || "Selected space"}</span>
+          ) : (
+            <>
+              <Globe className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              Anyone
+            </>
+          )}
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-72 p-0">
@@ -789,6 +855,26 @@ function SpacePicker({
             </p>
           )}
 
+          {/* Not while searching: someone typing is looking for a room. */}
+          {!q && (
+            <button
+              type="button"
+              onClick={() => pick(null)}
+              className={cn(
+                "flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-muted",
+                !chosen && "bg-muted",
+              )}
+            >
+              <Globe className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">Anyone</span>
+                <span className="block text-xs text-muted-foreground">
+                  Home, your followers, and your profile or company page
+                </span>
+              </span>
+            </button>
+          )}
+
           {!loading && flat.length === 0 && (
             <p className="px-3 py-3 text-xs text-muted-foreground">
               {q ? "No space matches that." : "No spaces yet."}
@@ -816,6 +902,10 @@ function SpacePicker({
                         <span className="truncate">{s.name}</span>
                         {q && s.joined && (
                           <span className="shrink-0 text-[10px] text-muted-foreground">Joined</span>
+                        )}
+                        {/* Posting there joins it; said in the list, not only after. */}
+                        {!s.joined && (
+                          <span className="shrink-0 text-[10px] text-muted-foreground">Joins on posting</span>
                         )}
                       </span>
                       {s.description && (

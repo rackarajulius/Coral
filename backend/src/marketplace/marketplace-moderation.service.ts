@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { WRITE_TRANSACTION } from '../common/database-transaction';
 import { ListingKind } from './marketplace-policy';
 
 /** Marketplace reports are a platform queue. Space moderation grants no access. */
@@ -35,7 +36,7 @@ export class MarketplaceModerationService {
       await tx.marketplaceReport.updateMany({ where: { id: reportId, status: 'open' },
         data: { status: 'reviewed', reviewedAt: new Date(), reviewedById: userId } });
       return { reviewed: true };
-    });
+    }, WRITE_TRANSACTION);
   }
 
   async setRemoval(userId: string, kind: ListingKind, id: string, removed: boolean, reason?: string) {
@@ -60,7 +61,7 @@ export class MarketplaceModerationService {
         changeSummary: removed ? reason!.trim() : 'Restored marketplace visibility subject to current publication and consent rules',
         after: { removed } } });
       return { removed };
-    });
+    }, WRITE_TRANSACTION);
   }
 
   private async assertAdmin(db: Prisma.TransactionClient | PrismaService, userId: string) {

@@ -1,14 +1,10 @@
-
 import { CommunityFeed } from '@/components/community/feed';
-import Header from '@/components/Header';
 
+/** Rendered inside the community shell, which brings the bar and the nav. */
 export default function CommunityPage() {
   return (
-    <>
-      <Header />
-      <main className="pt-16">
-        <CommunityFeed />
-      </main>
-    </>
+    <main>
+      <CommunityFeed />
+    </main>
   );
 }

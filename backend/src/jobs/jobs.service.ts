@@ -276,7 +276,8 @@ export class JobsService {
     const stageCounts = stagesFromStatuses(applicationStatusBreakdown);
 
     return {
-      job,
+      // `aiScreened`: the edit form keeps the AI statement locked on.
+      job: { ...job, aiScreened: await this.aiHasScreened(jobId) },
       counters: {
         viewsCount: job.viewsCount,
         applicationsCount: job.applicationsCount,
@@ -373,6 +374,8 @@ export class JobsService {
         salaryMax: dto.salaryMax,
         salaryCurrency,
         salaryPeriod: this.normalizeOptionalText(dto.salaryPeriod),
+        existingVacancy: dto.existingVacancy ?? null,
+        usesAi: dto.usesAi ?? false,
         responsibilities: this.normalizeTextArray(dto.responsibilities),
         requirements: this.normalizeTextArray(dto.requirements),
         benefits: this.normalizeTextArray(dto.benefits),
@@ -429,6 +432,16 @@ export class JobsService {
     }
     const movedToActive = nextStatus === 'active' && existing.status !== 'active';
 
+    // Once Coral's AI has screened this job's applicants, the posting has to
+    // keep saying AI is used: removing it would make the posting untrue for
+    // everyone already screened. Refused, not quietly kept, so the employer
+    // knows why the box won't clear.
+    if (dto.usesAi === false && existing.usesAi && (await this.aiHasScreened(jobId))) {
+      throw new BadRequestException(
+        "AI has already screened applicants for this job, so its posting has to keep saying AI is used.",
+      );
+    }
+
     const nextTitle = dto.title?.trim();
     const shouldRegenerateSlug = Boolean(nextTitle && nextTitle !== existing.title);
 
@@ -454,6 +467,9 @@ export class JobsService {
         ...(dto.salaryPeriod !== undefined
           ? { salaryPeriod: this.normalizeOptionalText(dto.salaryPeriod) }
           : {}),
+        // Null clears it back to "not stated".
+        ...(dto.existingVacancy !== undefined ? { existingVacancy: dto.existingVacancy } : {}),
+        ...(dto.usesAi !== undefined ? { usesAi: dto.usesAi } : {}),
         ...(dto.responsibilities !== undefined
           ? { responsibilities: this.normalizeTextArray(dto.responsibilities) }
           : {}),
@@ -600,6 +616,9 @@ export class JobsService {
         salaryMax: existing.salaryMax,
         salaryCurrency: existing.salaryCurrency,
         salaryPeriod: existing.salaryPeriod,
+        // A copy is usually the same role hired the same way.
+        existingVacancy: existing.existingVacancy,
+        usesAi: existing.usesAi,
         responsibilities: existing.responsibilities,
         requirements: existing.requirements,
         benefits: existing.benefits,
@@ -1076,6 +1095,14 @@ export class JobsService {
       .slice(0, 10);
 
     return this.normalizeTextArray(tokens);
+  }
+
+  /**
+   * Whether Coral's AI has screened any of this job's applicants: written or
+   * live rounds, which the AI scores. Video answers are judged by the employer.
+   */
+  private async aiHasScreened(jobId: string): Promise<boolean> {
+    return (await this.prisma.aiScreen.count({ where: { jobId, mode: { in: ['text', 'live'] } } })) > 0;
   }
 
   private assertSalaryRange(minSalary?: number, maxSalary?: number) {
