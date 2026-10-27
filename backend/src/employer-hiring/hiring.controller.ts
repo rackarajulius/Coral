@@ -76,6 +76,18 @@ export class HiringController {
     return { success: true, data };
   }
 
+  /**
+   * A search for people like this one. Returns the query, not results: the
+   * workspace runs it like any other, so it can be read, edited and saved.
+   */
+  @Get('candidates/:candidateId/similar')
+  async similarCandidates(
+    @CurrentUser() user: User,
+    @Param('candidateId', ParseUUIDPipe) candidateId: string,
+  ) {
+    return { success: true, data: await this.sourcing.similarTo(user.id, candidateId) };
+  }
+
   /** Copilot: turns a NL chat message into a grounded reply + next action. */
   @Post('copilot')
   async copilotRespond(@CurrentUser() user: User, @Body() dto: CopilotDto) {

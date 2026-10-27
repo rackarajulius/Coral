@@ -140,6 +140,20 @@ export interface ParsedIntent {
   keywords: string[];
   remote: boolean;
   location: string | null;
+  /**
+   * Set when the search was built from a person ("find similar"). They are
+   * left out of the results, and the workspace says whose search it is.
+   */
+  similarTo?: {
+    id: string;
+    name: string;
+    /**
+     * Their role, which stands in for the role title. The query itself is a
+     * list of OR-ed terms, and a project titled with that would also be the
+     * "job title" in outreach to everyone found by it.
+     */
+    role: string | null;
+  };
 }
 
 /** Shape of a generated or template job description. */

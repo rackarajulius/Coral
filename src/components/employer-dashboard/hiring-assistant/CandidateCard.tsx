@@ -1,4 +1,4 @@
-import { Sparkles, Bookmark, BookmarkCheck, Plus, Mail, GraduationCap, Clock, Check, CheckCircle2 } from "lucide-react";
+import { Sparkles, Bookmark, BookmarkCheck, Plus, Mail, GraduationCap, Clock, Check, CheckCircle2, UsersRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -18,6 +18,8 @@ interface CandidateCardProps extends Candidate {
   onAddToPipeline?: () => void;
   onGenerateOutreach?: () => void;
   onViewProfile?: () => void;
+  /** Starts a new search for people like this one. */
+  onFindSimilar?: () => void;
 }
 
 const CONNECTION_STYLE: Record<string, string> = {
@@ -48,6 +50,7 @@ export function CandidateCard({
   onAddToPipeline,
   onGenerateOutreach,
   onViewProfile,
+  onFindSimilar,
 }: CandidateCardProps) {
   const inPipeline = Boolean(pipelineStageId);
 
@@ -215,6 +218,16 @@ export function CandidateCard({
             >
               View Profile
             </Button>
+            {onFindSimilar && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 rounded-lg gap-1 text-xs text-muted-foreground hover:text-foreground"
+                onClick={onFindSimilar}
+              >
+                <UsersRound className="h-3 w-3" />Find similar
+              </Button>
+            )}
           </div>
         </div>
       </div>

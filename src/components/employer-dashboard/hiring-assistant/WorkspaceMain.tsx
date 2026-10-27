@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { Users, GitBranch, FileText, Download, Search, X, RotateCcw, Loader2 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Users, GitBranch, FileText, Download, Search, X, RotateCcw, Loader2, UsersRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Section } from "@/components/employer-dashboard/hiring-assistant/Section";
@@ -287,7 +288,15 @@ export function WorkspaceMain({
   parsedIntent,
   onNewSearch,
 }: WorkspaceMainProps) {
-  const roleTitle = promptToRoleTitle(dockedPrompt);
+  const similarTo = parsedIntent?.similarTo;
+  const roleTitle = similarTo?.role || promptToRoleTitle(dockedPrompt);
+  const navigate = useNavigate();
+
+  /** One way in, whichever page it starts from: the page reads `?similar=`. */
+  const findSimilar = (candidate: Candidate) => {
+    if (!candidate.id) return toast.error("This candidate can't be used as a starting point yet.");
+    navigate(`/employers/hiring?similar=${candidate.id}`);
+  };
 
   // ── Persistent shortlist (server-side; survives a refresh) ────────────────
   /**
@@ -344,7 +353,7 @@ export function WorkspaceMain({
     isLoading: sourcing,
     isError: sourcingFailed,
     refetch: retrySourcing,
-  } = useSourcedCandidates(parsedIntent?.raw);
+  } = useSourcedCandidates(parsedIntent);
   const allCandidates = useMemo(() => sourced?.candidates ?? [], [sourced]);
   /**
    * Everyone the search matches, which is not the list: the list is the top
@@ -550,6 +559,19 @@ export function WorkspaceMain({
           </div>
         )}
 
+        {/* Says whose search this is and what it was built from, so the OR-ed
+            terms above read as a starting point rather than as a brief. */}
+        {similarTo && revealStep >= REVEAL.ROLE_SUMMARY && (
+          <div className="flex items-start gap-2.5 rounded-xl border border-border bg-muted/30 px-3.5 py-2.5 text-xs text-muted-foreground animate-fade-in">
+            <UsersRound className="mt-0.5 h-3.5 w-3.5 shrink-0 text-foreground/70" aria-hidden="true" />
+            <p>
+              <span className="font-medium text-foreground">People like {similarTo.name}</span>
+              {" — "}anyone sharing their role or one of their main skills, closest first.{" "}
+              {similarTo.name} is left out. Use Refine to narrow it, or ask the copilot.
+            </p>
+          </div>
+        )}
+
         {/* ── 5.4 Generating phase: step list ── */}
         {revealStep === 0 && <GeneratingIndicator sourcing={sourcing} failed={sourcingFailed} />}
 
@@ -698,6 +720,7 @@ export function WorkspaceMain({
                     onAddToPipeline={() => addToPipeline(c)}
                     onGenerateOutreach={() => setOutreachTarget(c)}
                     onViewProfile={() => setViewingCandidate(c)}
+                    onFindSimilar={() => findSimilar(c)}
                   />
                 ))}
 

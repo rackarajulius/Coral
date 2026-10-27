@@ -47,6 +47,8 @@ export interface SourceCriteria {
   maxYears?: number;
   remoteOnly?: boolean;
   openToWorkOnly?: boolean;
+  /** Left out of the results: the person a "find similar" search started from. */
+  excludeIds?: string[];
 }
 
 /** Drops the empty ones, so a blank field never reaches the server as a filter. */
@@ -89,6 +91,26 @@ export async function sourceCandidates(criteria: SourceCriteria = {}): Promise<S
     candidates: (json.data?.candidates ?? []) as HiringCandidate[],
     pool: (json.data?.pool ?? null) as TalentPool | null,
   };
+}
+
+/** A search for people like one candidate, and what it was built from. */
+export interface SimilarQuery {
+  query: string;
+  title: string | null;
+  skills: string[];
+  candidateId: string;
+  name: string;
+}
+
+export async function getSimilarQuery(candidateId: string): Promise<SimilarQuery> {
+  const res = await fetch(`${API_BASE_URL}/employers/hiring/candidates/${candidateId}/similar`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.message || "Couldn't build a search from that profile");
+  }
+  return (await res.json()).data as SimilarQuery;
 }
 
 /** "348", or "5,000+" when the count is a floor. */

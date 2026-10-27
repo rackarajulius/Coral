@@ -64,6 +64,15 @@ export const TASK_DEFINITIONS: TaskDefinition[] = [
     allowMultiple: true,
     requiresTarget: 'shortlist',
   },
+  {
+    type: ScheduledTaskType.SAVED_NOT_CONTACTED,
+    label: 'Saved but never contacted',
+    description:
+      'Tells you about people your team saved or sourced more than three days ago and never wrote to. Someone worth saving is worth a message, or worth letting go.',
+    icon: 'MailQuestion',
+    defaults: { cadence: TaskCadence.WEEKLY, hourLocal: 9, weekday: 1 },
+    link: '/employers/hiring',
+  },
 ];
 
 export function definitionFor(type: ScheduledTaskType): TaskDefinition {

@@ -1,6 +1,8 @@
 // HiringAssistant.tsx — thin orchestrator; state in useHiringAssistant.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { toast } from "sonner";
 import { PanelLeftDashed } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
@@ -8,6 +10,7 @@ import { CenteredPrompt } from "@/components/employer-dashboard/hiring-assistant
 import { WorkspaceLayout } from "@/components/employer-dashboard/hiring-assistant/WorkspaceLayout";
 import { HiringHistoryRail } from "@/components/employer-dashboard/hiring-assistant/HiringHistoryRail";
 import { useHiringAssistant } from "@/data/employer/HiringAssistant/useHiringAssistant";
+import { getSimilarQuery } from "@/lib/api/hiring";
 
 export default function HiringAssistant() {
   const {
@@ -28,6 +31,36 @@ export default function HiringAssistant() {
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [railOpen, setRailOpen] = useState(false);
+
+  /**
+   * "Find similar" arrives as `?similar=<candidate id>` from wherever it was
+   * clicked — a Talent Scout card or the candidates board — so there is one
+   * way in.
+   *
+   * The parameter is dropped once read. Left in the address bar, a refresh
+   * would throw away whatever search the recruiter had moved on to.
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const similarId = searchParams.get("similar");
+  useEffect(() => {
+    if (!similarId) return;
+    setSearchParams(
+      (params) => {
+        params.delete("similar");
+        return params;
+      },
+      { replace: true },
+    );
+    getSimilarQuery(similarId)
+      .then((similar) => {
+        setActiveId(null);
+        handleSubmit(similar.query, {
+          similarTo: { id: similar.candidateId, name: similar.name, role: similar.title },
+        });
+      })
+      .catch((e: Error) => toast.error(e.message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [similarId]);
 
   /**
    * Reopens a stored session.

@@ -27,7 +27,7 @@ export function useHiringAssistant() {
   const isCopilotTyping = isInitialTyping || isFollowUpTyping;
 
   // Real candidates sourced + AI-ranked from the opt-in talent pool.
-  const { data: sourced } = useSourcedCandidates(parsedIntent?.raw);
+  const { data: sourced } = useSourcedCandidates(parsedIntent);
   const matchedCandidates = sourced?.candidates ?? [];
 
   /**
@@ -38,17 +38,21 @@ export function useHiringAssistant() {
    * stages already exist, so the animation would be 3.5s spent watching a
    * progress bar for work that finished days ago.
    */
-  const handleSubmit = (value?: string, opts?: { instant?: boolean }) => {
+  const handleSubmit = (
+    value?: string,
+    opts?: { instant?: boolean; similarTo?: ParsedIntent["similarTo"] },
+  ) => {
     const text =
       value?.trim() ||
       prompt.trim() ||
       "Senior frontend engineer with React, startup experience, and strong system design skills.";
 
-    const intent = parsePrompt(text);
+    // Any other search drops the person a "find similar" one started from.
+    const intent = { ...parsePrompt(text), similarTo: opts?.similarTo };
     setParsedIntent(intent);
     setDockedPrompt(text);
     setMessages([
-      createMessage("user", text),
+      createMessage("user", opts?.similarTo ? `Find people like ${opts.similarTo.name}` : text),
       createMessage("ai", "Analyzing your hiring intent and building your workspace."),
     ]);
     setPrompt("");

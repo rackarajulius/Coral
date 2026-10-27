@@ -5,6 +5,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -75,4 +76,14 @@ export class SourceCandidatesDto {
   @Type(() => Boolean)
   @IsBoolean()
   openToWorkOnly?: boolean;
+
+  /**
+   * People to leave out — the person a "find similar" search started from,
+   * who would otherwise top their own results.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsUUID('all', { each: true })
+  excludeIds?: string[];
 }

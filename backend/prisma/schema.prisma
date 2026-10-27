@@ -1138,6 +1138,8 @@ enum ScheduledTaskType {
   /// Watches one saved search; configKey holds the shortlist id, so several
   /// may run at once while the unique index still forbids duplicates.
   SAVED_SEARCH_MATCHES
+  /// People the team saved or sourced and never wrote to.
+  SAVED_NOT_CONTACTED
 }
 
 /// Deliberately not cron syntax. These three cover every task on offer, each
