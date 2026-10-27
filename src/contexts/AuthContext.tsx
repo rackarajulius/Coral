@@ -85,6 +85,14 @@ export interface User {
    * "PENDING_ONBOARDING" is what sent finished users back to onboarding.
    */
   provisional?: boolean;
+  /**
+   * The company this person acts for, through an active seat on its team.
+   *
+   * One account does everything, as on LinkedIn: the account type no longer
+   * says whether someone may open the company dashboard — a seat does. Absent
+   * on a provisional user, and null when they hold no active seat.
+   */
+  company?: { id: string; name: string; role: string } | null;
   provider: string | null;
   createdAt: string;
   updatedAt: string;

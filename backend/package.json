@@ -30,6 +30,7 @@
     "verify:outreach-templates": "ts-node --transpile-only scripts/verify-outreach-templates.ts",
     "verify:outreach-timing": "ts-node --transpile-only scripts/verify-outreach-timing.ts",
     "verify:offer-signals": "ts-node --transpile-only scripts/verify-offer-signals.ts",
+    "verify:one-account-backfill": "ts-node --transpile-only scripts/verify-one-account-backfill.ts",
     "types:generate": "ts-node scripts/generate-types.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",

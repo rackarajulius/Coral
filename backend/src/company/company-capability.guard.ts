@@ -8,6 +8,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { CompanyMemberStatus, UserRole } from '@prisma/client';
 import { User } from '../common/types/user.types';
+import { ROLES_KEY } from '../common/decorators/roles.decorator';
 import { CompanyContextService } from './company-context.service';
 import { Capability, ROLE_LABELS, roleHasCapability } from './capabilities';
 
@@ -16,8 +17,9 @@ export const CAPABILITY_KEY = 'company_capability';
 /**
  * Restricts a route to seats holding every listed capability.
  *
- * Apply only to employer-facing routes. A route shared with job seekers must
- * not carry this — they hold no company seat and would be refused.
+ * Enforced on employer-facing routes. On a route shared with job seekers it
+ * records intent only: the guard cannot tell which side the caller is acting
+ * for, so the service must check the seat itself when it is the company side.
  */
 export const RequiresCapability = (...capabilities: Capability[]) =>
   SetMetadata(CAPABILITY_KEY, capabilities);
@@ -27,10 +29,12 @@ export const RequiresCapability = (...capabilities: Capability[]) =>
  *
  * Runs after JwtAuthGuard, which attaches the database user.
  *
- * An employer with no membership is treated as an owner of their own one-person
- * company. That is not a loophole: company scoping resolves their visible
- * records to themselves alone, so full rights over their own data is exactly
- * right, and it keeps accounts created outside onboarding working.
+ * An employer *account* with no membership is treated as an owner of its own
+ * one-person company. That is not a loophole: company scoping resolves their
+ * visible records to themselves alone, so full rights over their own data is
+ * exactly right, and it keeps accounts created before teams existed working.
+ * It is never extended to anyone else — a job seeker acts for a company only
+ * through a seat.
  */
 @Injectable()
 export class CompanyCapabilityGuard implements CanActivate {
@@ -50,14 +54,21 @@ export class CompanyCapabilityGuard implements CanActivate {
     if (!user) throw new ForbiddenException('User not authenticated');
     if (user.role === UserRole.ADMIN) return true;
 
-    // Capabilities describe a company seat, so they only apply to someone
-    // acting as an employer. Some routes are shared — sending a message is the
-    // same endpoint for both sides — and a candidate who also holds a seat
-    // somewhere must not be refused a reply to their own application.
-    if (user.role !== UserRole.EMPLOYER) return true;
+    // Capabilities describe a company seat. On a route both sides use —
+    // sending a message is one endpoint — the same person may be writing as a
+    // candidate (to a company they applied to) or for their own company, and
+    // only the conversation says which. Those routes check in the service.
+    const routeRoles = this.reflector.getAllAndOverride<UserRole[]>(ROLES_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (routeRoles?.includes(UserRole.JOB_SEEKER)) return true;
 
     const row = await this.companyContext.membershipFor(user.id);
-    if (!row) return true; // never joined a company — see the class comment
+    if (!row) {
+      if (user.role === UserRole.EMPLOYER) return true; // see the class comment
+      throw new ForbiddenException('Create a company page or join your company to do this.');
+    }
 
     // Joined once and no longer active. This must be refused rather than
     // falling through to the sole-operator branch, which would let a suspended

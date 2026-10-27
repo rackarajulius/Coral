@@ -3,6 +3,8 @@ import { CompanyMemberStatus, CompanyRole, UserStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { User } from '../common/types/user.types';
 import { roleHasCapability } from '../company/capabilities';
+import { CompanyAuditService } from '../company/company-audit.service';
+import { personName } from '../common/person-name';
 
 /** Free/consumer mail hosts — never treated as a company identity. */
 const FREE_EMAIL_DOMAINS = new Set([
@@ -47,7 +49,10 @@ export interface CompanyMatch {
 
 @Injectable()
 export class OnboardingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: CompanyAuditService,
+  ) {}
 
   /**
    * Where this employer is in setup.
@@ -57,6 +62,10 @@ export class OnboardingService {
    * directly, and then onboarding asks for things they already filled in.
    */
   async state(user: User) {
+    const seated = await this.prisma.companyMember.findFirst({
+      where: { userId: user.id, status: CompanyMemberStatus.ACTIVE },
+      select: { id: true },
+    });
     const profile = await this.prisma.employerProfile.findUnique({
       where: { userId: user.id },
       select: {
@@ -91,6 +100,14 @@ export class OnboardingService {
       next: !companyDone ? 'company' : !publicFaceDone ? 'publicFace' : 'done',
       workDomain: workDomain(user.email),
       profile,
+      /** The creator's name, so the company step can show what it already knows. */
+      person: { firstName: user.firstName ?? null, lastName: user.lastName ?? null },
+      /**
+       * Whether they already act for a company. Without a seat the company
+       * step creates one, which asks for their name and their word that they
+       * may represent it; with one, it edits.
+       */
+      hasCompany: !!seated,
     };
   }
 
@@ -172,10 +189,14 @@ export class OnboardingService {
       isHiringManager?: boolean;
       isAdmin?: boolean;
       joinCompanyId?: string;
+      firstName?: string;
+      lastName?: string;
+      authorizedRepresentative?: boolean;
     },
   ) {
     let companyId: string | null = null;
     let joinPending = false;
+    user = await this.saveName(user, dto);
 
     if (dto.joinCompanyId) {
       const { matches } = await this.matches(user);
@@ -208,7 +229,25 @@ export class OnboardingService {
       // Deliberately not linked to the company yet: the profile stays its own
       // until the membership is approved.
     } else {
+      const creating = !(await this.prisma.companyMember.findFirst({
+        where: { userId: user.id, status: CompanyMemberStatus.ACTIVE },
+        select: { id: true },
+      }));
+      if (creating) this.assertMayCreate(user, dto);
       companyId = await this.createCompanyFor(user, dto);
+      if (creating) {
+        const name = personName(user, 'Someone');
+        await this.audit.record({
+          companyId,
+          actor: { id: user.id, name },
+          category: 'COMPANY',
+          action: 'Created company page',
+          entityType: 'company',
+          entityId: companyId,
+          entityName: dto.companyName.trim(),
+          summary: `${name} created the company page and confirmed they are authorized to represent ${dto.companyName.trim()}.`,
+        });
+      }
     }
 
     const data = {
@@ -233,6 +272,43 @@ export class OnboardingService {
     });
 
     return { ...(await this.state({ ...user, status: user.status } as User)), joinPending };
+  }
+
+  /**
+   * Stores the name the person typed, when they typed one.
+   *
+   * Returns the user as it now stands, so the checks below and the audit line
+   * read the name that was just saved.
+   */
+  private async saveName(user: User, dto: { firstName?: string; lastName?: string }): Promise<User> {
+    const firstName = dto.firstName?.trim();
+    const lastName = dto.lastName?.trim();
+    const data = {
+      ...(firstName && firstName !== user.firstName ? { firstName } : {}),
+      ...(lastName && lastName !== user.lastName ? { lastName } : {}),
+    };
+    if (Object.keys(data).length === 0) return user;
+    await this.prisma.user.update({ where: { id: user.id }, data });
+    return { ...user, ...data };
+  }
+
+  /**
+   * What creating a company page asks of the person, as on LinkedIn: their
+   * name, and their word that they may act for the organization. Neither is
+   * proof — verification is what unlocks reaching candidates — but the team
+   * and Coral can see who created the page and on what basis.
+   */
+  private assertMayCreate(user: User, dto: { authorizedRepresentative?: boolean }): void {
+    if (!user.firstName?.trim() || !user.lastName?.trim()) {
+      throw new BadRequestException(
+        'Add your first and last name. A company page is created by a person, and your team will see who.',
+      );
+    }
+    if (dto.authorizedRepresentative !== true) {
+      throw new BadRequestException(
+        'Confirm that you are authorized to represent this organization before creating its page.',
+      );
+    }
   }
 
   /**

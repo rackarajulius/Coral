@@ -11,7 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
 import { MatchScoreService } from '../applications/match-score.service';
 import { isValidTimezone } from '../employer-hiring/outreach-timing';
-import { Prisma } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
 import pdfParse from 'pdf-parse';
 import * as mammoth from 'mammoth';
 import { AiService, ParsedResume } from '../services/ai/ai.service';
@@ -80,7 +80,9 @@ export class JobSeekersService {
     const hidden = privacy.profileVisible === false;
 
     let appliedToViewerJobs = false;
+    let viewerIsColleague = false;
     if (!isOwner && !isAdmin) {
+      viewerIsColleague = (await this.companyContext.colleagueIds(actor.id)).includes(targetUserId);
       // Consent runs to the company: applying to a job hands contact details to
       // the employer that posted it, and every colleague working that pipeline
       // sees the same application. Keeping this to the actor alone would show a
@@ -119,7 +121,9 @@ export class JobSeekersService {
       headline: profile.headline,
       about: profile.summary,
       location: [profile.city, profile.country].filter(Boolean).join(', '),
-      openToWork: profile.openToWork,
+      // Never to the people they work with: a job search is not their
+      // employer's business.
+      openToWork: profile.openToWork && !viewerIsColleague,
       avatarUrl: profile.avatarUrl || profile.user.avatarUrl,
       bannerUrl: profile.bannerUrl,
       introVideoUrl: profile.introVideoUrl,
@@ -1240,12 +1244,25 @@ export class JobSeekersService {
           jobTypes: [],
           skills: [],
           languages: [],
+          discoverable: await this.discoverableByDefault(userId),
         },
         include,
       });
     }
 
     return profile;
+  }
+
+  /**
+   * Whether a new personal profile starts findable in candidate search.
+   *
+   * A job seeker opts out; anyone else opts in. Since one account can now act
+   * for a company, a recruiter who opens their own profile must not appear in
+   * every other company's search the moment they add a headline.
+   */
+  private async discoverableByDefault(userId: string): Promise<boolean> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+    return user?.role === UserRole.JOB_SEEKER;
   }
 
   private parseDate(dateString: string, fieldName: string): Date {

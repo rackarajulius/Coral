@@ -16,7 +16,10 @@ import Footer from '@/components/Footer';
 import { useAuth } from '@/contexts/AuthContext';
 import { AccountCheckPending } from '@/components/auth/AccountCheckPending';
 import { RedirectWithNotice } from '@/components/auth/RedirectWithNotice';
-import { EMPLOYER_ON_SEEKER_SIDE, accountSide } from '@/lib/accountSide';
+import { accountSide } from '@/lib/accountSide';
+
+const PROFILE_INSTEAD_OF_ONBOARDING =
+  "Your account is already set up. Add to your personal profile whenever you like.";
 
 export default function Onboarding() {
   const { user, isLoading, isAuthenticated } = useAuth();
@@ -27,9 +30,11 @@ export default function Onboarding() {
   // Until the backend answers, "not onboarded" is only a placeholder. Showing
   // the form then would ask finished users to onboard again (and fail).
   if (user?.provisional) return <AccountCheckPending />;
-  // Employers finish setting up on the employer side, not with this form.
+  // This form is a new account's first steps. An employer account already has
+  // its own: its personal profile is filled in from the profile page, at its
+  // own pace, rather than by walking through sign-up again.
   if (accountSide(user) === 'employer') {
-    return <RedirectWithNotice to="/employers/dashboard" message={EMPLOYER_ON_SEEKER_SIDE} />;
+    return <RedirectWithNotice to="/jobseeker/profile" message={PROFILE_INSTEAD_OF_ONBOARDING} />;
   }
   if (accountSide(user) === 'provider') return <Navigate to="/provider" replace />;
   if (!isLoading && user?.status && user.status !== 'PENDING_ONBOARDING') {

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { OutreachResponse } from '@prisma/client';
 import { CompanyContextService } from '../company/company-context.service';
 import { roleHasCapability } from '../company/capabilities';
@@ -58,6 +58,7 @@ export class OutreachService {
 
   /** AI-draft an editable outreach message for a candidate. */
   async draft(user: User, dto: DraftOutreachDto): Promise<OutreachDraft> {
+    await this.assertNotColleague(user, dto.candidateId);
     const candidate = await this.loadCandidate(dto.candidateId);
     if (!candidate) throw new NotFoundException('Candidate not available.');
     const company = await this.employerCompany(user.id);
@@ -84,6 +85,7 @@ export class OutreachService {
     if (!template || template.companyId !== context.companyId) {
       throw new NotFoundException('Template not found');
     }
+    await this.assertNotColleague(user, dto.candidateId);
     const candidate = await this.loadCandidate(dto.candidateId);
     if (!candidate) throw new NotFoundException('Candidate not available.');
 
@@ -111,6 +113,7 @@ export class OutreachService {
       throw new BadRequestException(`Replace ${left.join(', ')} before sending.`);
     }
 
+    await this.assertNotColleague(user, dto.candidateId);
     const candidate = await this.loadCandidate(dto.candidateId);
     if (!candidate) throw new NotFoundException('Candidate not available.');
 
@@ -266,8 +269,10 @@ export class OutreachService {
     const sender = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true, status: true } });
     if (!sender || sender.status !== 'ACTIVE') return false;
     if (sender.role === 'ADMIN') return true;
-    if (sender.role !== 'EMPLOYER') return false;
     const seat = await this.companyContext.membershipFor(userId);
+    // A seat, or an employer account that never joined a company. Anyone else
+    // has no company to send for.
+    if (!seat && sender.role !== 'EMPLOYER') return false;
     if (seat && (seat.status !== 'ACTIVE' || !roleHasCapability(seat.role, 'messaging:write'))) return false;
     const profile = await this.prisma.employerProfile.findUnique({ where: { userId }, select: { verificationStatus: true } });
     return !!profile && ['domain_verified', 'verified'].includes(profile.verificationStatus);
@@ -614,6 +619,20 @@ export class OutreachService {
       [u?.firstName, u?.lastName].filter(Boolean).join(' ').trim() ||
       'A candidate'
     );
+  }
+
+  /**
+   * No recruiting approaches to the people the sender works with.
+   *
+   * Search already leaves them out; this covers an id reached any other way.
+   * An approach from your own company is a conversation for a manager, not a
+   * sourcing message, and receiving one would tell the person their job search
+   * had been seen.
+   */
+  private async assertNotColleague(user: User, candidateId: string): Promise<void> {
+    if ((await this.companyContext.colleagueIds(user.id)).includes(candidateId)) {
+      throw new ForbiddenException("That's someone you work with. Coral doesn't send recruiting approaches to your own colleagues.");
+    }
   }
 
   /**

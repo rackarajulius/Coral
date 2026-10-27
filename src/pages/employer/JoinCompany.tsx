@@ -80,10 +80,11 @@ export default function JoinCompany() {
   const signedInAs = user?.email?.trim().toLowerCase() ?? null;
   const wrongAccount =
     !!invitedEmail && !!signedInAs && signedInAs !== invitedEmail.trim().toLowerCase();
-  // Joining makes an employer account. A job seeker account can't (the server
+  // One account does everything, as on LinkedIn: a job seeker joins from the
+  // account they have, and keeps it. Freelancer accounts can't yet (the server
   // refuses), so say so before they press the button, not after.
   const side = accountSide(user);
-  const cantJoin = isAuthenticated && (side === "seeker" || side === "other");
+  const cantJoin = isAuthenticated && (side === "provider" || side === "other");
 
   if (outcome) {
     const queued = outcome.status === "PENDING";
@@ -164,9 +165,9 @@ export default function JoinCompany() {
         <p className="mt-5 flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-400">
           <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           <span>
-            {side === "seeker"
-              ? `You're signed in as ${user?.email}, a job seeker account — it can't join a company. Sign out and sign in with an employer account, or create one with a different email.`
-              : `You're signed in as ${user?.email}, which can't join a company. Sign in with an employer account to join.`}
+            {side === "provider"
+              ? `You're signed in as ${user?.email}, a freelancer account — it can't join a company yet. Sign in with a different account to join.`
+              : `You're signed in as ${user?.email}, which can't join a company. Sign in with a different account to join.`}
           </span>
         </p>
       )}

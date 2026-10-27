@@ -308,7 +308,7 @@ export class AutomationsService {
           };
         }
 
-        const matchIds = await this.sourcing.matchingIds({ query: shortlist.query });
+        const matchIds = await this.sourcing.matchingIds({ query: shortlist.query }, task.createdById);
         const config = (task.config ?? {}) as { seenIds?: string[] };
         const seen = new Set(config.seenIds ?? []);
 

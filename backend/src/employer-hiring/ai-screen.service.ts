@@ -122,7 +122,8 @@ export class AiScreenService {
   async listForJob(actor: User, jobId: string) {
     await this.assertJobOwner(actor, jobId);
     const rows = await this.prisma.aiScreen.findMany({
-      where: { jobId },
+      // Not the caller's own screen, if they applied to their own company.
+      where: { jobId, candidateId: { not: actor.id } },
       orderBy: [{ overallScore: 'desc' }, { createdAt: 'desc' }],
       take: SCREEN_PER_JOB_MAX,
     });
@@ -142,7 +143,8 @@ export class AiScreenService {
 
     const [applications, screens] = await Promise.all([
       this.prisma.application.findMany({
-        where: { jobId },
+        // Not the caller's own application, if they applied to their own company.
+        where: { jobId, applicantId: { not: actor.id } },
         orderBy: { appliedAt: 'desc' },
         take: 500,
         select: {
@@ -409,7 +411,8 @@ export class AiScreenService {
         // same list, not an empty one.
         where: {
           employerId: { in: await this.companyContext.memberUserIds(employer.id) },
-          ...(candidateId ? { candidateId } : {}),
+          // Never the caller's own screen and its evaluation.
+          AND: [{ candidateId: { not: employer.id } }, ...(candidateId ? [{ candidateId }] : [])],
         },
         orderBy: { createdAt: 'desc' },
         take: 100,

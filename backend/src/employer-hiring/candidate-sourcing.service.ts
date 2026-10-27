@@ -135,7 +135,9 @@ export class CandidateSourcingService {
 
   async source(
     dto: SourceCandidatesDto,
+    viewerId?: string,
   ): Promise<{ query: string; candidates: SourcedCandidate[]; pool: TalentPool }> {
+    dto = await this.withoutColleagues(dto, viewerId);
     const query = (dto.query || '').trim();
     const where = this.matchWhere(dto);
 
@@ -318,7 +320,7 @@ export class CandidateSourcingService {
    * Ranking costs an AI call per run per watcher and answers a question nobody
    * has asked yet; it happens when someone opens the workspace and looks.
    */
-  async matchingIds(dto: SourceCandidatesDto): Promise<string[]> {
+  async matchingIds(dto: SourceCandidatesDto, viewerId?: string): Promise<string[]> {
     /**
      * A search that asked for nothing matches nobody, not everybody.
      *
@@ -332,6 +334,7 @@ export class CandidateSourcingService {
      * asking to see who is around, and should get an answer.
      */
     if (this.asksForNothing(dto)) return [];
+    dto = await this.withoutColleagues(dto, viewerId);
 
     const rows = await this.prisma.jobSeekerProfile.findMany({
       where: this.matchWhere(dto),
@@ -345,6 +348,20 @@ export class CandidateSourcingService {
     return rows
       .filter((r) => this.withinYears(dto, this.yearsExp((r as { experiences?: [] }).experiences ?? [])))
       .map((r) => r.userId);
+  }
+
+  /**
+   * Leaves the searching company's own people out of what it finds.
+   *
+   * One account can act for a company and look for work, and a recruiter's
+   * search must not turn up the colleague at the next desk who is quietly
+   * looking. Their pool count leaves them out too, so it describes people the
+   * search could actually show.
+   */
+  private async withoutColleagues(dto: SourceCandidatesDto, viewerId?: string): Promise<SourceCandidatesDto> {
+    if (!viewerId) return dto;
+    const colleagues = await this.companyContext.colleagueIds(viewerId);
+    return { ...dto, excludeIds: [...new Set([...(dto.excludeIds ?? []), ...colleagues])] };
   }
 
   /** True when neither the query nor any filter narrows anything. */

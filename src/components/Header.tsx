@@ -6,7 +6,7 @@ import { Burger, Drawer } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import ProfileMenu from "./ProfileMenu";
 import NotificationBell from "./NotificationBell";
-import { accountSide } from "@/lib/accountSide";
+import { accountSide, actsForCompany } from "@/lib/accountSide";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
 import { BRAND_NAME } from "@/lib/brand";
@@ -15,15 +15,16 @@ import { COMMUNITY_TAB } from "@/lib/communityTab";
 const Header = () => {
     const { isAuthenticated, isLoading, user } = useAuth();
     const { openAuth } = useAuthModal();
-    // The employer link depends on who is looking: nothing for a job seeker
-    // (their account can't use the employer side), the dashboard for an
-    // employer, the employer site for everyone else.
+    // The employer link depends on who is looking: the company dashboard for
+    // someone who acts for a company, the employer site — where anyone can
+    // create a company page — for everyone else. Freelancer accounts keep
+    // their own side for now.
     const side = accountSide(user);
     const employerLink =
-      side === "seeker" || side === "provider"
+      side === "provider"
         ? null
-        : side === "employer"
-          ? { to: "/employers/dashboard", label: "Employer dashboard" }
+        : actsForCompany(user)
+          ? { to: "/employers/dashboard", label: "Company dashboard" }
           : { to: "/employers", label: "For Employers" };
    
   const [opened, { open, close }] = useDisclosure(false);

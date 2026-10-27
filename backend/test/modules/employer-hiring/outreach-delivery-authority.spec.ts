@@ -32,9 +32,16 @@ describe('Scheduled outreach rechecks current authority before delivery', () => 
     const h = harness(); h.company.membershipFor.mockResolvedValue({ status: 'ACTIVE', role });
     await h.service.deliverScheduled(); expect(h.notifications.create).not.toHaveBeenCalled();
   });
-  it.each([{ role: UserRole.EMPLOYER, status: UserStatus.SUSPENDED }, { role: UserRole.JOB_SEEKER, status: UserStatus.ACTIVE }, null])('cancels inactive, missing or ineligible senders', async sender => {
+  it.each([{ role: UserRole.EMPLOYER, status: UserStatus.SUSPENDED }, { role: UserRole.JOB_SEEKER, status: UserStatus.ACTIVE }, null])('cancels inactive, missing or seatless senders', async sender => {
     const h = harness(); h.prisma.user.findUnique.mockResolvedValue(sender);
+    // A job seeker sends for a company only through a seat, and this one has none.
+    h.company.membershipFor.mockResolvedValue(null);
     await h.service.deliverScheduled(); expect(h.notifications.create).not.toHaveBeenCalled(); expect(h.email.sendPlainText).not.toHaveBeenCalled();
+  });
+  it('delivers for a job seeker who holds an active messaging seat', async () => {
+    const h = harness(); h.prisma.user.findUnique.mockResolvedValue({ role: UserRole.JOB_SEEKER, status: UserStatus.ACTIVE });
+    await h.service.deliverScheduled();
+    expect(h.notifications.create).toHaveBeenCalledWith(expect.objectContaining({ userId: 'candidate' }));
   });
   it('delivers for a currently verified active messaging seat', async () => {
     const h = harness(); await h.service.deliverScheduled();

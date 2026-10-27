@@ -41,6 +41,7 @@ import { OffersService } from './offers.service';
 import { OfferSignalsService } from './offer-signals.service';
 import { EmailTemplatesService } from './email-templates.service';
 import { ScorecardsService } from './scorecards.service';
+import { AboutCandidate } from '../company/self-review.guard';
 
 /* ---------------------------------- DTOs ---------------------------------- */
 
@@ -210,6 +211,7 @@ export class AtsController {
   /* --------------------------------- notes -------------------------------- */
 
   @RequiresCapability('candidates:read')
+  @AboutCandidate('candidate', 'params.candidateId')
   @Get('candidates/:candidateId/notes')
   async listNotes(@CurrentUser() user: User, @Param('candidateId', ParseUUIDPipe) id: string) {
     return { success: true, data: await this.notes.list(user, id) };
@@ -220,6 +222,7 @@ export class AtsController {
   // power to advance or reject them. Tags below keep `candidates:write` — the
   // team filters on those, so applying one is a decision, not a remark.
   @RequiresCapability('candidates:comment')
+  @AboutCandidate('candidate', 'params.candidateId')
   @Post('candidates/:candidateId/notes')
   async addNote(
     @CurrentUser() user: User,
@@ -248,6 +251,7 @@ export class AtsController {
   /* -------------------------------- reactions ----------------------------- */
 
   @RequiresCapability('candidates:read')
+  @AboutCandidate('candidate', 'params.candidateId')
   @Get('candidates/:candidateId/reactions')
   async listReactions(@CurrentUser() user: User, @Param('candidateId', ParseUUIDPipe) id: string) {
     return { success: true, data: await this.reactions.forCandidate(user, id) };
@@ -261,6 +265,7 @@ export class AtsController {
    * because there is one per person: reacting again replaces.
    */
   @RequiresCapability('candidates:comment')
+  @AboutCandidate('candidate', 'params.candidateId')
   @Put('candidates/:candidateId/reaction')
   async setReaction(
     @CurrentUser() user: User,
@@ -273,12 +278,14 @@ export class AtsController {
   /* ---------------------------------- tags -------------------------------- */
 
   @RequiresCapability('candidates:read')
+  @AboutCandidate('candidate', 'params.candidateId')
   @Get('candidates/:candidateId/tags')
   async listTags(@CurrentUser() user: User, @Param('candidateId', ParseUUIDPipe) id: string) {
     return { success: true, data: await this.notes.listTags(user, id) };
   }
 
   @RequiresCapability('candidates:write')
+  @AboutCandidate('candidate', 'params.candidateId')
   @Post('candidates/:candidateId/tags')
   async addTag(
     @CurrentUser() user: User,
@@ -314,6 +321,7 @@ export class AtsController {
    * not a score. See ats/offer-signal.rules.ts.
    */
   @RequiresCapability('candidates:read')
+  @AboutCandidate('application', 'params.applicationId')
   @Get('applications/:applicationId/offer-signals')
   async getOfferSignals(
     @CurrentUser() user: User,
@@ -341,6 +349,7 @@ export class AtsController {
   }
 
   @RequiresCapability('candidates:read')
+  @AboutCandidate('application', 'params.applicationId')
   @Get('applications/:applicationId/offer')
   async getOffer(
     @CurrentUser() user: User,
@@ -350,6 +359,7 @@ export class AtsController {
   }
 
   @RequiresCapability('candidates:write')
+  @AboutCandidate('application', 'params.applicationId')
   @Post('applications/:applicationId/offer')
   async saveOffer(
     @CurrentUser() user: User,
@@ -360,12 +370,14 @@ export class AtsController {
   }
 
   @RequiresCapability('candidates:write')
+  @AboutCandidate('offer', 'params.offerId')
   @Post('offers/:offerId/send')
   async sendOffer(@CurrentUser() user: User, @Param('offerId', ParseUUIDPipe) id: string) {
     return { success: true, data: await this.offers.send(user, id) };
   }
 
   @RequiresCapability('candidates:write')
+  @AboutCandidate('offer', 'params.offerId')
   @Post('offers/:offerId/withdraw')
   async withdrawOffer(@CurrentUser() user: User, @Param('offerId', ParseUUIDPipe) id: string) {
     return { success: true, data: await this.offers.withdraw(user, id) };
@@ -394,6 +406,7 @@ export class AtsController {
 
   /** Every reviewer's card for one interview, plus where the panel disagrees. */
   @RequiresCapability('interviews:read')
+  @AboutCandidate('interview', 'params.interviewId')
   @Get('interviews/:interviewId/scorecards')
   async listScorecards(
     @CurrentUser() user: User,
@@ -404,6 +417,7 @@ export class AtsController {
 
   /** Saves the caller's own card. A reviewer can never write a colleague's. */
   @RequiresCapability('interviews:write')
+  @AboutCandidate('interview', 'params.interviewId')
   @Post('interviews/:interviewId/scorecards')
   async saveScorecard(
     @CurrentUser() user: User,

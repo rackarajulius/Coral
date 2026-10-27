@@ -95,7 +95,12 @@ export class InterviewService {
     return this.prisma.interview.findMany({
       // Company-wide, so an interview booked by a colleague still appears on
       // the shared schedule.
-      where: { employerId: { in: await this.companyContext.memberUserIds(employer.id) } },
+      where: {
+        employerId: { in: await this.companyContext.memberUserIds(employer.id) },
+        // Their own interview, if they applied to their own company, is in
+        // their candidate schedule — not the company's.
+        candidateId: { not: employer.id },
+      },
       orderBy: { createdAt: 'desc' },
       take: 100,
     });

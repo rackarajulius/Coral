@@ -1,6 +1,7 @@
 ﻿import {
   ChevronsUpDown,
   CircleUser,
+  UserRound,
   CreditCard,
   BellDot,
   LogOut,
@@ -133,10 +134,17 @@ export function SidebarUserMenu() {
         {/* Settings Group */}
         {/* Every item here goes somewhere that exists. "Account" used to point
             at /employers/account/settings, which no route matches — it fell
-            through to the 404 page. There is no personal account page on the
-            employer side yet, so the item is gone rather than pointed at the
-            company record under a label that says "Account". */}
+            through to the 404 page. Your own page is now your personal
+            profile: one account does everything, as on LinkedIn, and this is
+            the way back to it from the company side. */}
         <DropdownMenuGroup>
+          <DropdownMenuItem
+            className="gap-2 cursor-pointer"
+            onClick={() => navigate("/jobseeker/profile")}
+          >
+            <UserRound className="h-4 w-4" />
+            My profile
+          </DropdownMenuItem>
           <DropdownMenuItem
             className="gap-2 cursor-pointer"
             onClick={() => navigate("/employers/settings/general")}

@@ -52,7 +52,7 @@ export class ShortlistService {
         },
         include: { items: { orderBy: { addedAt: 'asc' } } },
       });
-      return this.shape(touched);
+      return this.shape(touched, employer.id);
     }
 
     const shortlist = await this.prisma.shortlist.upsert({
@@ -70,7 +70,7 @@ export class ShortlistService {
       },
       include: { items: { orderBy: { addedAt: 'asc' } } },
     });
-    return this.shape(shortlist);
+    return this.shape(shortlist, employer.id);
   }
 
   /**
@@ -216,7 +216,7 @@ export class ShortlistService {
       where: { queryKey: this.keyFor(trimmed), employerId: { in: memberIds } },
       include: { items: { orderBy: { addedAt: 'asc' } } },
     });
-    return found ? this.shape(found) : null;
+    return found ? this.shape(found, employer.id) : null;
   }
 
   /**
@@ -240,7 +240,7 @@ export class ShortlistService {
       },
       include: { items: { orderBy: { addedAt: 'asc' } } },
     });
-    return this.shape(project);
+    return this.shape(project, employer.id);
   }
 
   /**
@@ -426,7 +426,7 @@ export class ShortlistService {
       data: { lastOpenedAt: new Date() },
       include: { items: { orderBy: { addedAt: 'asc' } } },
     });
-    return this.shape(shortlist);
+    return this.shape(shortlist, employer.id);
   }
 
   async update(
@@ -446,7 +446,7 @@ export class ShortlistService {
       },
       include: { items: { orderBy: { addedAt: 'asc' } } },
     });
-    return this.shape(shortlist);
+    return this.shape(shortlist, employer.id);
   }
 
   /** Deletes the session and its pipeline. Items cascade. */
@@ -494,13 +494,15 @@ export class ShortlistService {
       snapshot: Prisma.JsonValue;
       addedAt: Date;
     }[];
-  }) {
+  }, viewerId: string) {
     return {
       id: s.id,
       name: s.name,
       query: s.query,
       roleTitle: s.roleTitle,
-      items: s.items.map((i) => this.shapeItem(i)),
+      // Someone saved into their own company's project (an internal applicant,
+      // say) is on it for everyone but themselves.
+      items: s.items.filter((i) => i.candidateId !== viewerId).map((i) => this.shapeItem(i)),
     };
   }
 

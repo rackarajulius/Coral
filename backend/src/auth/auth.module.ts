@@ -9,6 +9,7 @@ import { StripeClient } from '../billing/stripe.client';
 import { IntegrationsModule } from '../integrations/integrations.module';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
+import { SelfReviewGuard } from '../company/self-review.guard';
 
 @Global()
 @Module({
@@ -27,6 +28,12 @@ import { RolesGuard } from './guards/roles.guard';
     {
       provide: APP_GUARD,
       useClass: RolesGuard,
+    },
+    // After RolesGuard: refuses company-side actions on the caller's own
+    // candidacy, for routes marked @AboutCandidate.
+    {
+      provide: APP_GUARD,
+      useClass: SelfReviewGuard,
     },
   ],
   exports: [AuthService],

@@ -16,10 +16,14 @@ interface EmployerAuthGateProps {
 }
 
 /**
- * Gates the employer dashboard routes:
+ * Gates the company dashboard routes:
  * - requires sign-in (shows the sign-up modal inline if not authenticated)
  * - auto-promotes a brand-new account to EMPLOYER on first visit
- * - blocks existing non-employer accounts with an explanatory message
+ * - lets anyone else in through a company seat, as on LinkedIn: a job seeker
+ *   with a seat uses the dashboard from the account they already have, and one
+ *   without a seat is taken to company setup, where they can create a company
+ *   page or ask to join theirs
+ * - keeps freelancer accounts out for now, with an explanation
  */
 export function EmployerAuthGate({ children }: EmployerAuthGateProps) {
   const { user, isAuthenticated, isLoading, refreshUser, logout } = useAuth();
@@ -111,12 +115,24 @@ export function EmployerAuthGate({ children }: EmployerAuthGateProps) {
       return <Spinner />;
     }
 
+    // One account: a seat is what lets someone act for a company.
+    if (user.company) return <>{children}</>;
+
+    // No seat yet. Company setup is where they create a company page, or ask
+    // to join the one their work email belongs to — and it is the one
+    // dashboard route they may open before they have a company.
+    if (user.role === "JOB_SEEKER") {
+      return location.pathname.startsWith("/employers/onboarding")
+        ? <>{children}</>
+        : <Navigate to="/employers/onboarding" replace />;
+    }
+
     return (
-      <div className="min-h-screen bg-white flex items-center justify-center px-4">
+      <div className="min-h-screen bg-background flex items-center justify-center px-4">
         <div className="text-center max-w-sm">
-          <p className="text-foreground font-medium mb-2">This account is registered as a job seeker</p>
+          <p className="text-foreground font-medium mb-2">Freelancer accounts can't run a company page yet</p>
           <p className="text-sm text-muted-foreground mb-4">
-            Sign in with an employer account to access the employer dashboard.
+            Sign in with a different account to use the company dashboard.
           </p>
           <div className="flex items-center justify-center gap-4">
             <button

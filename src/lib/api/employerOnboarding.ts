@@ -36,6 +36,14 @@ export interface OnboardingState {
   /** Null for free-mail addresses; they can't identify a company. */
   workDomain: string | null;
   profile: Record<string, unknown> | null;
+  /** The person setting up, so the company step can show what it knows. */
+  person?: { firstName: string | null; lastName: string | null };
+  /**
+   * Whether they already act for a company. Without a seat the company step
+   * creates one, and asks for their name and their word that they may
+   * represent it.
+   */
+  hasCompany?: boolean;
 }
 
 /** A company the signed-in employer may already belong to. */
@@ -61,6 +69,10 @@ export interface CompanyStepInput {
   isHiringManager?: boolean;
   isAdmin?: boolean;
   joinCompanyId?: string;
+  firstName?: string;
+  lastName?: string;
+  /** "I'm an authorized representative of this organization." Needed to create a page. */
+  authorizedRepresentative?: boolean;
 }
 
 export const getOnboardingState = () => req<OnboardingState>("me/onboarding");

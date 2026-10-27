@@ -39,20 +39,17 @@ export class CompanyEnrolmentService {
       invitedById: string;
     },
   ): Promise<EnrolmentResult> {
-    // Joining a company makes this an employer account, which is only for an
-    // employer, an admin (who keeps their role), or a brand-new account that
-    // hasn't chosen yet. An established job seeker used to be converted
-    // silently — and with it lose their side of the product — so they're
-    // refused, before anything is written.
+    // One account, as on LinkedIn: a person joins their company from the
+    // account they already have and keeps their own side of the product — the
+    // seat is what lets them act for the company. Freelancers are not included
+    // yet; that side has its own rules.
     const mayJoin =
       user.role === UserRole.EMPLOYER ||
       user.role === UserRole.ADMIN ||
-      (user.role === UserRole.JOB_SEEKER && user.status === UserStatus.PENDING_ONBOARDING);
+      user.role === UserRole.JOB_SEEKER;
     if (!mayJoin) {
       throw new ForbiddenException(
-        user.role === UserRole.JOB_SEEKER
-          ? "This is a job seeker account, so it can't join a company. Sign in with an employer account — or create one with a different email — to join."
-          : "This account can't join a company. Sign in with an employer account to join.",
+        "This account can't join a company yet. Sign in with an employer or job seeker account to join.",
       );
     }
 
@@ -125,13 +122,12 @@ export class CompanyEnrolmentService {
         });
       }
 
-      // Without this they bounce off the employer gate into company setup and
-      // are asked to create a second company — the thing they just avoided.
-      // Admins keep their role; only the account's employer status changes.
-      if (
-        user.role !== UserRole.ADMIN &&
-        (user.status === UserStatus.PENDING_ONBOARDING || user.role !== UserRole.EMPLOYER)
-      ) {
+      // A brand-new account that hasn't chosen a side lands on the company side,
+      // or it bounces off the employer gate into company setup and is asked to
+      // create a second company — the thing it just avoided. An established
+      // job seeker keeps their account as it is: the seat is what lets them act
+      // for the company. Admins keep their role.
+      if (user.role !== UserRole.ADMIN && user.status === UserStatus.PENDING_ONBOARDING) {
         await tx.user.update({
           where: { id: user.id },
           data: { status: UserStatus.ACTIVE, role: UserRole.EMPLOYER },

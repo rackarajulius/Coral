@@ -39,4 +39,26 @@ export class SaveCompanyStepDto {
   @IsString()
   @MaxLength(200)
   joinCompanyId?: string;
+
+  /**
+   * The creator's own name. A company page is created by a person, as on
+   * LinkedIn, and only their name is asked for — not a full profile.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  firstName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  lastName?: string;
+
+  /**
+   * "I'm an authorized representative of this organization." Required when
+   * creating a company page; recorded in the company's audit log.
+   */
+  @IsOptional()
+  @IsBoolean()
+  authorizedRepresentative?: boolean;
 }

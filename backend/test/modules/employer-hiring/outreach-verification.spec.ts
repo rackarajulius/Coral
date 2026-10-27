@@ -21,7 +21,7 @@ const draft: SendOutreachDto = {
 
 function harness(
   level: string | null = 'unverified',
-  seat: { role: CompanyRole; status: CompanyMemberStatus } = activeSeat(),
+  seat: { role: CompanyRole; status: CompanyMemberStatus } | null = activeSeat(),
 ) {
   const prisma = {
     employerProfile: {
@@ -51,6 +51,7 @@ function harness(
   const companyContext = {
     membershipFor: jest.fn().mockResolvedValue(seat),
     memberUserIds: jest.fn().mockResolvedValue(['employer-a', 'colleague-a']),
+    colleagueIds: jest.fn().mockResolvedValue(['employer-a', 'colleague-a']),
   };
   const notifications = { create: jest.fn().mockResolvedValue(undefined) };
   const email = { sendPlainText: jest.fn().mockResolvedValue(undefined) };
@@ -71,7 +72,7 @@ function harness(
     collaborator({}), verification, collaborator({}), collaborator({}),
   );
   const reflector = new Reflector();
-  const roles = new RolesGuard(reflector);
+  const roles = new RolesGuard(reflector, collaborator(companyContext));
   const capabilities = new CompanyCapabilityGuard(reflector, collaborator(companyContext));
 
   async function authorize(user: User, handler: 'sendOutreach' | 'cancelScheduledOutreach' | 'inviteScreen') {
@@ -80,7 +81,7 @@ function harness(
       getHandler: () => controller[handler],
       switchToHttp: () => ({ getRequest: () => ({ user }) }),
     } as unknown as ExecutionContext;
-    roles.canActivate(context);
+    await roles.canActivate(context);
     await capabilities.canActivate(context);
   }
 
@@ -165,10 +166,17 @@ describe('Employer outreach initiation: company verification boundary', () => {
     },
   );
 
-  it('keeps candidate accounts off the employer initiation route', async () => {
-    const { dispatch, verify, send } = harness('verified');
+  it('keeps a job seeker without a company seat off the employer initiation route', async () => {
+    const { dispatch, verify, send } = harness('verified', null);
     await expect(dispatch(draft, employer(UserRole.JOB_SEEKER))).rejects.toBeInstanceOf(ForbiddenException);
     expect(verify).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('puts a job seeker holding a seat through the same verification boundary', async () => {
+    const { dispatch, verify, send } = harness('unverified');
+    await expect(dispatch(draft, employer(UserRole.JOB_SEEKER))).rejects.toBeInstanceOf(ForbiddenException);
+    expect(verify).toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
   });
 
@@ -249,8 +257,8 @@ describe('Individual AI-screen invitation: company verification boundary', () =>
     expect(notifications.create).not.toHaveBeenCalled();
   });
 
-  it('keeps candidate accounts off the employer invitation route', async () => {
-    const { dispatchInvite, verify, invite } = harness('verified');
+  it('keeps a job seeker without a company seat off the employer invitation route', async () => {
+    const { dispatchInvite, verify, invite } = harness('verified', null);
     await expect(dispatchInvite({ candidateId: 'candidate-a' }, employer(UserRole.JOB_SEEKER)))
       .rejects.toBeInstanceOf(ForbiddenException);
     expect(verify).not.toHaveBeenCalled();

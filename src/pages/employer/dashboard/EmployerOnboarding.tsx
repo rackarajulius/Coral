@@ -59,8 +59,11 @@ export default function EmployerOnboarding() {
   });
 
   // Someone who has already finished setup and came back for one specific
-  // thing, rather than a new employer working through it.
-  const returning = stateQuery.data ? !stateQuery.data.needsOnboarding : false;
+  // thing, rather than someone new to the company side. "New" includes a job
+  // seeker creating their first company page from the account they have.
+  const returning = stateQuery.data
+    ? !stateQuery.data.needsOnboarding && !!stateQuery.data.hasCompany
+    : false;
 
   // Resumed from the server's derived state, so re-entering setup lands on the
   // step that's actually outstanding rather than always starting at the top.
@@ -76,7 +79,13 @@ export default function EmployerOnboarding() {
     isRecruiter: false,
     isHiringManager: false,
     isAdmin: false,
+    firstName: "",
+    lastName: "",
+    authorizedRepresentative: false,
   });
+  // Creating a company page, as opposed to editing one or asking to join one,
+  // asks for the person's name and their word that they may represent it.
+  const creating = !joining && !stateQuery.data?.hasCompany;
 
   // Seed from any profile that already exists, so re-entering setup doesn't
   // ask for details the employer has already given.
@@ -87,6 +96,16 @@ export default function EmployerOnboarding() {
     const next = stateQuery.data?.next;
     if (next === "publicFace") setStep("publicFace");
   }, [stateQuery.data?.next, requested]);
+
+  useEffect(() => {
+    const person = stateQuery.data?.person;
+    if (!person) return;
+    setForm((f) => ({
+      ...f,
+      firstName: f.firstName || person.firstName || "",
+      lastName: f.lastName || person.lastName || "",
+    }));
+  }, [stateQuery.data?.person]);
 
   useEffect(() => {
     const p = stateQuery.data?.profile as Record<string, string | boolean | null> | null;
@@ -144,7 +163,12 @@ export default function EmployerOnboarding() {
 
   const busy = save.isPending || finish.isPending;
   const canSubmit =
-    !!joining || (form.companyName.trim().length >= 2 && !!form.industry && !!form.companySize);
+    !!joining ||
+    (form.companyName.trim().length >= 2 &&
+      !!form.industry &&
+      !!form.companySize &&
+      (!creating ||
+        (!!form.firstName.trim() && !!form.lastName.trim() && form.authorizedRepresentative)));
 
   if (stateQuery.isLoading) {
     return (
@@ -230,7 +254,7 @@ export default function EmployerOnboarding() {
     <div className="mx-auto max-w-2xl space-y-6 p-6 py-10">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">
-          {returning ? "Company details" : "Set up your company"}
+          {returning ? "Company details" : creating ? "Create a company page" : "Set up your company"}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
           This is what candidates see when they find your jobs. You can change any of it later.
@@ -298,6 +322,33 @@ export default function EmployerOnboarding() {
 
       {!joining && (
         <div className="space-y-4 rounded-xl border border-border bg-card p-5">
+          {/* A page is created by a person, as on LinkedIn. Only the name is
+              asked for; it is what the team sees as the page's creator. */}
+          {creating && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="firstName">Your first name</Label>
+                <Input
+                  id="firstName"
+                  value={form.firstName}
+                  onChange={(e) => setForm({ ...form, firstName: e.target.value })}
+                  autoComplete="given-name"
+                  className="mt-1.5"
+                />
+              </div>
+              <div>
+                <Label htmlFor="lastName">Your last name</Label>
+                <Input
+                  id="lastName"
+                  value={form.lastName}
+                  onChange={(e) => setForm({ ...form, lastName: e.target.value })}
+                  autoComplete="family-name"
+                  className="mt-1.5"
+                />
+              </div>
+            </div>
+          )}
+
           <div>
             <Label htmlFor="companyName">Company name</Label>
             <Input
@@ -393,6 +444,20 @@ export default function EmployerOnboarding() {
               ))}
             </div>
           </div>
+
+          {creating && (
+            <label className="flex cursor-pointer items-start gap-2.5 border-t border-border pt-4 text-sm">
+              <Checkbox
+                className="mt-0.5"
+                checked={form.authorizedRepresentative}
+                onCheckedChange={(v) => setForm({ ...form, authorizedRepresentative: v === true })}
+              />
+              <span className="text-muted-foreground">
+                I'm an authorized representative of this organization, and I may create and manage
+                its page on Coral. Your team will see that you created it.
+              </span>
+            </label>
+          )}
         </div>
       )}
 

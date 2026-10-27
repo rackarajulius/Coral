@@ -116,26 +116,30 @@ export class EmployersController {
 
   /* ── Onboarding (phases 1-2) ── */
 
-  @Roles(UserRole.EMPLOYER, UserRole.ADMIN)
+  // Setting up a company is open to any person, as on LinkedIn: a job seeker
+  // creates a company page from the account they already have, and keeps it.
+  // Freelancers are not included yet.
+
+  @Roles(UserRole.EMPLOYER, UserRole.JOB_SEEKER, UserRole.ADMIN)
   @Get('me/onboarding')
   async onboardingState(@CurrentUser() user: User) {
     return { success: true, data: await this.onboarding.state(user) };
   }
 
   /** Companies matching this person's work-email domain. */
-  @Roles(UserRole.EMPLOYER, UserRole.ADMIN)
+  @Roles(UserRole.EMPLOYER, UserRole.JOB_SEEKER, UserRole.ADMIN)
   @Get('me/onboarding/matches')
   async onboardingMatches(@CurrentUser() user: User) {
     return { success: true, data: await this.onboarding.matches(user) };
   }
 
-  @Roles(UserRole.EMPLOYER, UserRole.ADMIN)
+  @Roles(UserRole.EMPLOYER, UserRole.JOB_SEEKER, UserRole.ADMIN)
   @Post('me/onboarding/company')
   async saveCompanyStep(@CurrentUser() user: User, @Body() dto: SaveCompanyStepDto) {
     return { success: true, data: await this.onboarding.saveCompany(user, dto) };
   }
 
-  @Roles(UserRole.EMPLOYER, UserRole.ADMIN)
+  @Roles(UserRole.EMPLOYER, UserRole.JOB_SEEKER, UserRole.ADMIN)
   @Post('me/onboarding/complete')
   async completeOnboarding(@CurrentUser() user: User) {
     return { success: true, data: await this.onboarding.complete(user) };

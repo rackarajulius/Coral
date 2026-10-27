@@ -1,8 +1,9 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { Prisma } from '@prisma/client';
+import { CompanyMemberStatus, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
+import { ROLE_LABELS, roleHasCapability } from '../company/capabilities';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MESSAGE_ATTACHMENT_BUCKET, StorageService } from '../storage/storage.service';
 import { AiService } from '../services/ai/ai.service';
@@ -77,8 +78,11 @@ export class MessagingService {
     });
     if (convos.length === 0) return [];
 
-    const isEmployerSideOf = (employerId: string) => employerIds.includes(employerId);
-    const peerIds = convos.map((c) => (isEmployerSideOf(c.employerId) ? c.candidateId : c.employerId));
+    // A thread about the viewer's own application is theirs as the candidate,
+    // even when the recruiter on the other end is a colleague.
+    const isEmployerSideOf = (c: { employerId: string; candidateId: string }) =>
+      c.candidateId !== user.id && employerIds.includes(c.employerId);
+    const peerIds = convos.map((c) => (isEmployerSideOf(c) ? c.candidateId : c.employerId));
     const [users, employers, seekers, unreads] = await Promise.all([
       this.prisma.user.findMany({
         where: { id: { in: peerIds } },
@@ -94,7 +98,7 @@ export class MessagingService {
       }),
       Promise.all(
         convos.map((c) => {
-          const lastRead = isEmployerSideOf(c.employerId) ? c.employerLastReadAt : c.candidateLastReadAt;
+          const lastRead = isEmployerSideOf(c) ? c.employerLastReadAt : c.candidateLastReadAt;
           return this.prisma.message.count({
             where: {
               conversationId: c.id,
@@ -111,7 +115,7 @@ export class MessagingService {
     const seekerById = new Map(seekers.map((s) => [s.userId, s]));
 
     return convos.map((c, i) => {
-      const viewerIsEmployer = isEmployerSideOf(c.employerId);
+      const viewerIsEmployer = isEmployerSideOf(c);
       const peerId = viewerIsEmployer ? c.candidateId : c.employerId;
       let name: string;
       let role: string;
@@ -163,7 +167,7 @@ export class MessagingService {
     });
     rows.reverse();
 
-    const peerLastRead = (await this.isEmployerSide(user, convo.employerId))
+    const peerLastRead = (await this.actsForCompany(user, convo))
       ? convo.candidateLastReadAt
       : convo.employerLastReadAt;
     return Promise.all(
@@ -186,7 +190,8 @@ export class MessagingService {
 
   /** Uploads a message attachment to the private bucket; the path is scoped to the conversation. */
   async uploadAttachment(user: User, conversationId: string, file: Express.Multer.File) {
-    await this.requireParticipant(user, conversationId);
+    const convo = await this.requireParticipant(user, conversationId);
+    if (await this.actsForCompany(user, convo)) await this.assertMayWriteForCompany(user);
     if (!file?.buffer?.length) throw new BadRequestException('No file received.');
     const safe = (file.originalname || 'file').replace(/[^\w.\-]+/g, '_').slice(0, 80);
     const path = `messages/${conversationId}/${randomUUID()}-${safe}`;
@@ -196,6 +201,10 @@ export class MessagingService {
 
   /** Employer starts (or reopens) a thread with a candidate who applied to their company's job. */
   async startConversation(employer: User, dto: StartConversationDto) {
+    // An internal applicant is on the hiring team's board, but not their own.
+    if (dto.candidateId === employer.id) {
+      throw new ForbiddenException("You can't open a hiring conversation with yourself.");
+    }
     const memberIds = await this.companyContext.memberUserIds(employer.id);
     const application = await this.prisma.application.findFirst({
       // The consent that licenses this contact is the application to the
@@ -232,7 +241,8 @@ export class MessagingService {
   /** Sends a message; bumps the thread, marks the sender caught-up, notifies the recipient. */
   async sendMessage(user: User, conversationId: string, dto: SendMessageDto) {
     const convo = await this.requireParticipant(user, conversationId);
-    const viewerIsEmployer = await this.isEmployerSide(user, convo.employerId);
+    const viewerIsEmployer = await this.actsForCompany(user, convo);
+    if (viewerIsEmployer) await this.assertMayWriteForCompany(user);
 
     const body = (dto.body ?? '').trim();
     const attachments = dto.attachments ?? [];
@@ -299,7 +309,7 @@ export class MessagingService {
     const convo = await this.requireParticipant(user, conversationId);
     await this.prisma.conversation.update({
       where: { id: conversationId },
-      data: (await this.isEmployerSide(user, convo.employerId))
+      data: (await this.actsForCompany(user, convo))
         ? { employerLastReadAt: new Date() }
         : { candidateLastReadAt: new Date() },
     });
@@ -328,6 +338,41 @@ export class MessagingService {
   private async isEmployerSide(user: User, employerId: string): Promise<boolean> {
     if (employerId === user.id) return true;
     return (await this.companyContext.memberUserIds(user.id)).includes(employerId);
+  }
+
+  /**
+   * Whether the caller is writing for the company in this particular thread.
+   *
+   * Someone who applied to their own company is the candidate in that thread,
+   * though a colleague is on the employer side — counting them as the company
+   * would file their reply as the company's and notify them of it.
+   */
+  private async actsForCompany(user: User, convo: ConversationRow): Promise<boolean> {
+    return convo.candidateId !== user.id && this.isEmployerSide(user, convo.employerId);
+  }
+
+  /**
+   * The seat check CompanyCapabilityGuard leaves to this service: the send
+   * route is shared, and only the thread says which side the caller is on.
+   */
+  private async assertMayWriteForCompany(user: User): Promise<void> {
+    if (user.role === UserRole.ADMIN) return;
+    const seat = await this.companyContext.membershipFor(user.id);
+    if (!seat) {
+      // An employer account that never joined a company writes for itself.
+      if (user.role === UserRole.EMPLOYER) return;
+      throw new ForbiddenException('You are not an active member of this company.');
+    }
+    if (seat.status !== CompanyMemberStatus.ACTIVE) {
+      throw new ForbiddenException(
+        seat.status === CompanyMemberStatus.SUSPENDED
+          ? 'Your access to this company is suspended.'
+          : 'You are no longer a member of this company.',
+      );
+    }
+    if (!roleHasCapability(seat.role, 'messaging:write')) {
+      throw new ForbiddenException(`Your role (${ROLE_LABELS[seat.role]}) does not allow this.`);
+    }
   }
 
   /** Turns stored attachment paths into short-lived signed download URLs. */

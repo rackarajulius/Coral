@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { LIVE_JOB_STATUSES } from './job-lifecycle.service';
 import { PRIVATE_JOB_FIELDS } from './job-visibility';
-import { Prisma, UserRole } from '@prisma/client';
+import { CompanyMemberStatus, Prisma, UserRole } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { ApplicationStatus } from '../applications/dto/update-application-status.dto';
 import { User } from '../common/types/user.types';
@@ -1125,7 +1125,11 @@ export class JobsService {
     }
 
     const employer = await this.prisma.user.findUnique({ where: { id: employerId } });
-    if (!employer || employer.role !== UserRole.EMPLOYER) {
+    // An employer account, or anyone holding an active seat on a company team.
+    const seat = employer ? await this.companyContext.membershipFor(employer.id) : null;
+    const actsForCompany =
+      !!employer && (employer.role === UserRole.EMPLOYER || seat?.status === CompanyMemberStatus.ACTIVE);
+    if (!actsForCompany) {
       throw new BadRequestException('employerId must reference an existing employer account');
     }
 
