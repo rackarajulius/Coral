@@ -1705,6 +1705,15 @@ model JobBoost {
   @@map("job_boosts")
 }
 
+/// Who may comment on a post. FOLLOWERS means the people who follow its
+/// author — or, on a company post, the company's page — plus the author and
+/// the company's own team.
+enum CommentPolicy {
+  ANYONE
+  FOLLOWERS
+  OFF
+}
+
 // Community post
 model Post {
   id             String     @id @default(uuid())
@@ -1747,6 +1756,10 @@ model Post {
   /// Set on TIDE posts. The tide is the record; the post is one announcement
   /// of it, and there may be several.
   tideId         String?    @map("tide_id")
+  /// Who may comment, chosen by the author: anyone, the author's (or for a
+  /// company post, the company page's) followers, or nobody. Existing
+  /// comments stay visible whichever is chosen; this governs new ones.
+  commentPolicy  CommentPolicy @default(ANYONE) @map("comment_policy")
   likesCount     Int        @default(0) @map("likes_count")
   commentsCount  Int        @default(0) @map("comments_count")
   bookmarksCount Int        @default(0) @map("bookmarks_count")

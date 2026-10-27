@@ -9,7 +9,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem,
+  DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
@@ -48,6 +49,9 @@ import {
   unbookmarkPost,
   unlikePost,
   updatePost,
+  setCommentPolicy,
+  COMMENT_POLICY_LABELS,
+  type CommentPolicy,
   type CommunityPost,
   type ResharedPost,
 } from "@/lib/api/community";
@@ -157,6 +161,28 @@ export function FeedPost({
   const draftChanged = draft.trim() !== content;
   const canSaveEdit =
     draftChanged && (!!draft.trim() || post.mediaUrls.length > 0) && !edit.isPending;
+
+  // Who may comment, changeable after posting as on LinkedIn. Held locally so
+  // the menu reflects the choice at once; the feed refetch confirms it.
+  const [commentPolicy, setPolicy] = useState<CommentPolicy>(post.commentPolicy ?? "ANYONE");
+  useEffect(() => setPolicy(post.commentPolicy ?? "ANYONE"), [post.commentPolicy]);
+  const changePolicy = useMutation({
+    mutationFn: (next: CommentPolicy) => setCommentPolicy(post.id, next),
+    onMutate: (next) => {
+      const previous = commentPolicy;
+      setPolicy(next);
+      return { previous };
+    },
+    onSuccess: (_updated, next) => {
+      toast.success(`Comments: ${COMMENT_POLICY_LABELS[next]}`);
+      void queryClient.invalidateQueries({ queryKey: ["community-posts"] });
+      void queryClient.invalidateQueries({ queryKey: ["community-post", post.id] });
+    },
+    onError: (e, _next, ctx) => {
+      if (ctx) setPolicy(ctx.previous);
+      toast.error((e as Error).message);
+    },
+  });
 
   const remove = useMutation({
     mutationFn: () => deletePost(post.id),
@@ -374,6 +400,25 @@ export function FeedPost({
                 >
                   <Pencil className="h-4 w-4" /> Edit
                 </DropdownMenuItem>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger className="gap-2">
+                    <MessageCircle className="h-4 w-4" /> Comments: {COMMENT_POLICY_LABELS[commentPolicy]}
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DropdownMenuRadioGroup
+                      value={commentPolicy}
+                      onValueChange={(v) => {
+                        if (v !== commentPolicy) changePolicy.mutate(v as CommentPolicy);
+                      }}
+                    >
+                      {(Object.keys(COMMENT_POLICY_LABELS) as CommentPolicy[]).map((p) => (
+                        <DropdownMenuRadioItem key={p} value={p}>
+                          {COMMENT_POLICY_LABELS[p]}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
                 <DropdownMenuItem
                   className="gap-2 text-destructive"
                   onSelect={() => setConfirmingDelete(true)}
@@ -596,7 +641,13 @@ export function FeedPost({
       </footer>
 
       {showComments && (
-        <CommentThread postId={post.id} postAuthorId={post.authorId} />
+        <CommentThread
+          postId={post.id}
+          postAuthorId={post.authorId}
+          commentPolicy={commentPolicy}
+          canComment={post.canComment ?? true}
+          followName={post.company ? post.company.name : authorName(post.author)}
+        />
       )}
 
       <ReportDialog

@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { CompanyMemberStatus, CompanyRole, PostPurpose, Prisma } from '@prisma/client';
+import { CommentPolicy, CompanyMemberStatus, CompanyRole, PostPurpose, Prisma } from '@prisma/client';
 import { isUUID } from 'class-validator';
 import { MarketplaceService } from '../../marketplace/marketplace.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -19,6 +19,7 @@ import { User } from '../../common/types/user.types';
 import { AnnouncementReferenceDto, AnnouncementReferenceType, CommunityPostPurpose, CreatePostDto } from './dto/create-post.dto';
 import { ListPostsQueryDto } from './dto/list-posts-query.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
+import { commentAccess } from '../comment-policy';
 
 type AnnouncementCard = Awaited<ReturnType<MarketplaceService['projectAnnouncementReference']>>;
 
@@ -250,6 +251,7 @@ export class PostsService {
       purpose: purpose.toUpperCase() as PostPurpose,
       mediaUrls: dto.mediaUrls ?? [],
       hashtags: mergedHashtags,
+      commentPolicy: dto.commentPolicy ?? CommentPolicy.ANYONE,
     };
     // Validate the canonical record within the same transaction as publication.
     const created = dto.reference
@@ -342,6 +344,19 @@ export class PostsService {
         : 'You can only edit your own post');
     }
 
+    // Changing who may comment is a setting, not an edit: the post keeps its
+    // words, its purpose and its links, and earns no "Edited" label for it.
+    const { commentPolicy, ...contentChanges } = dto;
+    if (commentPolicy !== undefined && Object.values(contentChanges).every((v) => v === undefined)) {
+      const updated = await this.prisma.post.update({
+        where: { id: postId },
+        data: { commentPolicy },
+        include: this.buildPostInclude(),
+      });
+      const [normalized] = await this.addViewerFlags([updated], currentUser.id);
+      return { success: true, data: normalized, message: 'Comment setting updated' };
+    }
+
     const nextContent = dto.content !== undefined ? dto.content : existing.content;
     const nextMediaUrls = dto.mediaUrls !== undefined ? dto.mediaUrls : existing.mediaUrls;
     this.assertPostContent(nextContent, nextMediaUrls);
@@ -367,6 +382,7 @@ export class PostsService {
         linkedGigId: null,
         linkedJobId: null,
         hashtags: mergedHashtags,
+        ...(commentPolicy !== undefined ? { commentPolicy } : {}),
         isEdited: true,
     };
     const updated = reference
@@ -870,10 +886,10 @@ export class PostsService {
     }));
   }
 
-  private async addViewerFlags<T extends { id: string; authorId?: string; companyId?: string | null }>(
+  private async addViewerFlags<T extends { id: string; authorId?: string; companyId?: string | null; commentPolicy?: CommentPolicy | null }>(
     posts: T[],
     currentUserId?: string,
-  ): Promise<Array<T & { likedByMe: boolean; bookmarkedByMe: boolean; canEdit: boolean; linkedRecord: AnnouncementCard; linkedRecordUnavailable: boolean }>> {
+  ): Promise<Array<T & { likedByMe: boolean; bookmarkedByMe: boolean; canEdit: boolean; canComment: boolean; linkedRecord: AnnouncementCard; linkedRecordUnavailable: boolean }>> {
     // A live reshare may outlast its removed source. Retain the sharer's words,
     // but do not serialize the removed original into any ordinary read payload.
     const visiblePosts = await this.withLinkedRecords(posts.map((post) => {
@@ -881,12 +897,21 @@ export class PostsService {
       return source?.removedAt ? { ...post, resharedFrom: null } : post;
     }));
 
+    // Whether this viewer may comment, from the same rule the server enforces,
+    // so the comment box never offers what the server would refuse.
+    const commentable = await commentAccess(
+      this.prisma,
+      posts.map((post) => ({ ...post, authorId: post.authorId ?? '' })),
+      currentUserId,
+    );
+
     if (!currentUserId || posts.length === 0) {
       return visiblePosts.map((post) => ({
         ...post,
         likedByMe: false,
         bookmarkedByMe: false,
         canEdit: false,
+        canComment: commentable.get(post.id) ?? true,
       }));
     }
 
@@ -933,6 +958,7 @@ export class PostsService {
       canEdit: post.companyId
         ? managedCompanyIds.has(post.companyId)
         : post.authorId === currentUserId,
+      canComment: commentable.get(post.id) ?? true,
     }));
   }
 

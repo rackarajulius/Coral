@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, ArrowUpDown, ChevronDown, Loader2 } from "lucide-react";
+import { ArrowUp, ArrowUpDown, ChevronDown, Loader2, MessageCircleOff } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -19,7 +19,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
 import {
   addComment, authorName, deleteComment, initials, listComments, personPath, timeAgo,
-  type CommentSort, type CommunityComment,
+  type CommentPolicy, type CommentSort, type CommunityComment,
 } from "@/lib/api/community";
 
 /**
@@ -38,10 +38,19 @@ const SORTS: { key: CommentSort; label: string }[] = [
 export function CommentThread({
   postId,
   postAuthorId,
+  commentPolicy = "ANYONE",
+  canComment = true,
+  followName,
 }: {
   postId: string;
   /** So the original poster's own replies can be marked. */
   postAuthorId: string;
+  /** Who may comment, as the author chose. */
+  commentPolicy?: CommentPolicy;
+  /** Whether this viewer may comment or reply — the server's own answer. */
+  canComment?: boolean;
+  /** Who to follow to join in when it is followers only: the author or the company. */
+  followName?: string;
 }) {
   const [sort, setSort] = useState<CommentSort>("newest");
   const [replyTo, setReplyTo] = useState<CommunityComment | null>(null);
@@ -100,12 +109,23 @@ export function CommentThread({
         </span>
       </div>
 
-      <ReplyBox
-        postId={postId}
-        replyTo={replyTo}
-        onCancelReply={() => setReplyTo(null)}
-        inputRef={inputRef}
-      />
+      {canComment ? (
+        <ReplyBox
+          postId={postId}
+          replyTo={replyTo}
+          onCancelReply={() => setReplyTo(null)}
+          inputRef={inputRef}
+        />
+      ) : (
+        // Said instead of a box that would refuse, so nobody writes a comment
+        // only to be told afterwards. Existing comments stay readable below.
+        <p className="flex items-center gap-1.5 py-2 text-sm text-muted-foreground">
+          <MessageCircleOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          {commentPolicy === "OFF"
+            ? "Comments are turned off for this post."
+            : `Only people who follow ${followName ?? "the author"} can comment.`}
+        </p>
+      )}
 
       {comments.isLoading && <CommentListSkeleton />}
 
@@ -120,7 +140,8 @@ export function CommentThread({
 
       {comments.isSuccess && list.length === 0 && (
         <p className="py-4 text-sm text-muted-foreground">
-          No comments yet. Start the conversation.
+          {/* No invitation to start what the comment setting would refuse. */}
+          {canComment ? "No comments yet. Start the conversation." : "No comments yet."}
         </p>
       )}
 
@@ -131,7 +152,7 @@ export function CommentThread({
             comment={comment}
             postId={postId}
             postAuthorId={postAuthorId}
-            onReply={startReply}
+            onReply={canComment ? startReply : undefined}
           />
         ))}
       </div>
@@ -276,7 +297,8 @@ function CommentRow({
   comment: CommunityComment;
   postId: string;
   postAuthorId: string;
-  onReply: (comment: CommunityComment) => void;
+  /** Absent when the viewer may not reply — the post's comment setting. */
+  onReply?: (comment: CommunityComment) => void;
   depth?: number;
 }) {
   const { user } = useAuth();
@@ -346,7 +368,7 @@ function CommentRow({
           <div className="mt-1 flex items-center gap-3">
             {/* Only top level: the API returns one level of nesting, so a
                 reply to a reply would be stored and never shown. */}
-            {depth === 0 && (
+            {depth === 0 && onReply && (
               <button
                 type="button"
                 onClick={() => onReply(comment)}

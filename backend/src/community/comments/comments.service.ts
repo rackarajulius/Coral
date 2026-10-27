@@ -11,6 +11,7 @@ import { User } from '../../common/types/user.types';
 import { CreateCommentDto } from './dto/create-comment.dto';
 import { ListCommentsQueryDto } from './dto/list-comments-query.dto';
 import { UpdateCommentDto } from './dto/update-comment.dto';
+import { assertMayComment } from '../comment-policy';
 
 /** First line or so of a comment, for a notification that has to fit one. */
 function excerpt(text: string, max = 120): string {
@@ -121,12 +122,14 @@ export class CommentsService {
   async create(postId: string, userId: string, dto: CreateCommentDto) {
     const post = await this.prisma.post.findUnique({
       where: { id: postId },
-      select: { id: true, authorId: true, removedAt: true },
+      select: { id: true, authorId: true, companyId: true, commentPolicy: true, removedAt: true },
     });
 
     if (!post || post.removedAt) {
       throw new NotFoundException('Post not found');
     }
+    // The author's comment setting, for replies as much as for comments.
+    await assertMayComment(this.prisma, post, userId);
 
     let parentAuthorId: string | null = null;
     if (dto.parentId) {

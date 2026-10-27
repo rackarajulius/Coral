@@ -9,6 +9,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { CommentPolicy } from '@prisma/client';
 import { AnnouncementReferenceDto, CommunityPostPurpose, CommunityPostType } from './create-post.dto';
 
 export class UpdatePostDto {
@@ -43,4 +44,9 @@ export class UpdatePostDto {
   @IsString({ each: true })
   @MaxLength(50, { each: true })
   hashtags?: string[];
+
+  /** Changeable after posting, as on LinkedIn. Changing only this is not an edit. */
+  @IsOptional()
+  @IsEnum(CommentPolicy)
+  commentPolicy?: CommentPolicy;
 }

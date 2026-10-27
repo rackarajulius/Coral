@@ -12,6 +12,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { CommentPolicy } from '@prisma/client';
 
 export enum CommunityPostType {
   TEXT = 'TEXT',
@@ -121,4 +122,9 @@ export class CreatePostDto {
   @IsString({ each: true })
   @MaxLength(50, { each: true })
   hashtags?: string[];
+
+  /** Who may comment: anyone (the default), followers only, or nobody. */
+  @IsOptional()
+  @IsEnum(CommentPolicy)
+  commentPolicy?: CommentPolicy;
 }

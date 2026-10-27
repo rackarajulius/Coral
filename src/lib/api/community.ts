@@ -238,7 +238,23 @@ export interface CommunityPost {
   _count: { likes: number; comments: number; bookmarks: number; reshares: number };
   likedByMe: boolean;
   bookmarkedByMe: boolean;
+  /** Who may comment, as the author chose. Absent on servers that predate it. */
+  commentPolicy?: CommentPolicy;
+  /**
+   * Whether the viewer may comment or reply, from the same rule the server
+   * enforces. Signed out, only "anyone" posts say yes — sign-in comes first.
+   */
+  canComment?: boolean;
 }
+
+/** Who may comment on a post — LinkedIn's three settings. */
+export type CommentPolicy = "ANYONE" | "FOLLOWERS" | "OFF";
+
+export const COMMENT_POLICY_LABELS: Record<CommentPolicy, string> = {
+  ANYONE: "Anyone",
+  FOLLOWERS: "Followers only",
+  OFF: "No one",
+};
 
 export interface CommunityComment {
   id: string;
@@ -365,7 +381,16 @@ export const createPost = (input: {
   asCompany?: boolean;
   /** Optional company choice; the server verifies its current publishing seat. */
   companyId?: string;
+  /** Who may comment. Omitted means anyone. */
+  commentPolicy?: CommentPolicy;
 }, expectedSupabaseId?: string) => req<{ data: CommunityPost }>("/posts", { method: "POST", body: JSON.stringify(input) }, expectedSupabaseId);
+
+/** Changes who may comment on a post. A setting, not an edit — no "Edited" label. */
+export const setCommentPolicy = (id: string, commentPolicy: CommentPolicy) =>
+  req<{ data: CommunityPost }>(`/posts/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ commentPolicy }),
+  }).then((r) => r.data);
 
 /**
  * The company this person may publish for, or null.

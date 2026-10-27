@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BarChart3, Building2, CalendarPlus, ChevronRight, Globe, ImagePlus, Loader2, Search, Video, X,
+  BarChart3, Building2, CalendarPlus, ChevronRight, Globe, ImagePlus, Loader2, MessageCircle, Search, Video, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
@@ -22,8 +22,8 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
 import {
-  createPost, getAnnouncementOptions, getCompanyVoice, getGifStatus, listSpaces, uploadPostMedia,
-  type MediaKind, type PostPurpose, type Space,
+  COMMENT_POLICY_LABELS, createPost, getAnnouncementOptions, getCompanyVoice, getGifStatus, listSpaces, uploadPostMedia,
+  type CommentPolicy, type MediaKind, type PostPurpose, type Space,
 } from "@/lib/api/community";
 import { GifPicker } from "./GifPicker";
 import { postPurposeLabels } from "./CommunityLinkedCard";
@@ -209,6 +209,8 @@ function ComposerDialog({
   const [poll, setPoll] = useState<string[] | null>(null);
   const [gifOpen, setGifOpen] = useState(false);
   const [purpose, setPurpose] = useState<PostPurpose>("general");
+  // Who may comment. Changeable later from the post's menu, as on LinkedIn.
+  const [commentPolicy, setCommentPolicy] = useState<CommentPolicy>("ANYONE");
   const [selectedReference, setSelectedReference] = useState("");
   const [tide, setTide] = useState<TideDraft | null>(null);
   const [selectedCompanyId, setSelectedCompanyId] = useState("");
@@ -307,6 +309,7 @@ function ComposerDialog({
         ...(reference ? { reference: { type: reference.type, id: reference.id } } : {}),
         ...(poll ? { poll: { options: poll.filter((o) => o.trim()) } } : {}),
         ...(publishingAsCompany ? { asCompany: true, ...(publishingCompanyId ? { companyId: publishingCompanyId } : {}) } : {}),
+        ...(commentPolicy !== "ANYONE" ? { commentPolicy } : {}),
       }, user?.supabaseId);
     },
     onSuccess: () => {
@@ -447,6 +450,36 @@ function ComposerDialog({
                 )}
                 <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
                 <SpacePicker chosen={target} onChoose={setTarget} />
+                {/* Beside the audience, as on LinkedIn: who sees it, then who
+                    may answer. A tide's announcement keeps the default. */}
+                {!tide && (
+                  <label
+                    className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs hover:bg-muted"
+                    title={
+                      commentPolicy === "FOLLOWERS"
+                        ? publishingAsCompany
+                          ? "People who follow the company's page can comment, and your team."
+                          : "People who follow you can comment."
+                        : commentPolicy === "OFF"
+                          ? "Nobody can comment, you included. You can change this after posting."
+                          : "Anyone who can see it can comment."
+                    }
+                  >
+                    <MessageCircle className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
+                    <select
+                      aria-label="Who can comment"
+                      value={commentPolicy}
+                      onChange={(e) => setCommentPolicy(e.target.value as CommentPolicy)}
+                      className="cursor-pointer bg-transparent font-medium text-foreground focus:outline-none"
+                    >
+                      {(Object.keys(COMMENT_POLICY_LABELS) as CommentPolicy[]).map((p) => (
+                        <option key={p} value={p}>
+                          Comments: {COMMENT_POLICY_LABELS[p]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
               </div>
 
               {speakingAs && (
