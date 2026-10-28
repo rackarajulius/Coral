@@ -213,6 +213,32 @@ export class PostsService {
     return this.marketplace.getAnnouncementOptions(userId, companyId);
   }
 
+  /**
+   * Every check `create` makes before it writes, without writing anything.
+   *
+   * For a post that will be created later by the job that publishes
+   * scheduled posts — which then runs `create` itself, so everything is
+   * checked again against how things stand at that moment. Returns the
+   * company the post would speak for.
+   */
+  async checkDraft(userId: string, dto: CreatePostDto): Promise<{ companyId: string | null }> {
+    if (dto.companyId !== undefined && dto.asCompany !== true) throw new BadRequestException('A company choice requires company publishing.');
+    const document = this.documentFor(userId, dto);
+    this.assertPostContent(dto.content, dto.mediaUrls, !!document);
+    if (dto.spaceId) await this.spaces.assertPostable(dto.spaceId);
+    this.media.assertOwnMedia(dto.mediaUrls ?? []);
+    this.assertPurposeReference(dto.purpose ?? CommunityPostPurpose.GENERAL, dto.reference);
+    if (dto.poll && new Set(dto.poll.options.map((o) => o.trim()).filter(Boolean)).size < 2) {
+      throw new BadRequestException('A poll needs at least 2 different choices.');
+    }
+    // Refuses too many mentions now rather than at publishing time.
+    await resolveMentions(this.prisma, dto.content);
+    if (!dto.asCompany) return { companyId: null };
+    const company = await this.selectedCompanyVoiceFor(userId, dto.companyId);
+    if (!company) throw new ForbiddenException('Only an owner or admin of a company can post in its name.');
+    return { companyId: company.id };
+  }
+
   async create(userId: string, dto: CreatePostDto) {
     if (dto.companyId !== undefined && dto.asCompany !== true) throw new BadRequestException('A company choice requires company publishing.');
     const document = this.documentFor(userId, dto);
@@ -950,6 +976,8 @@ export class PostsService {
     if (!currentUserId || posts.length === 0) {
       return visiblePosts.map((post) => ({
         ...post,
+        // Views are told only to whoever may manage the post.
+        viewsCount: undefined,
         likedByMe: false,
         bookmarkedByMe: false,
         canEdit: false,
@@ -993,15 +1021,19 @@ export class PostsService {
     const bookmarkedPostIds = new Set(bookmarks.map((item) => item.postId));
     const managedCompanyIds = new Set(companySeats.map((seat) => seat.companyId));
 
-    return visiblePosts.map((post) => ({
-      ...post,
-      likedByMe: likedPostIds.has(post.id),
-      bookmarkedByMe: bookmarkedPostIds.has(post.id),
-      canEdit: post.companyId
+    return visiblePosts.map((post) => {
+      const canEdit = post.companyId
         ? managedCompanyIds.has(post.companyId)
-        : post.authorId === currentUserId,
-      canComment: commentable.get(post.id) ?? true,
-    }));
+        : post.authorId === currentUserId;
+      return {
+        ...post,
+        viewsCount: canEdit ? (post as { viewsCount?: number }).viewsCount : undefined,
+        likedByMe: likedPostIds.has(post.id),
+        bookmarkedByMe: bookmarkedPostIds.has(post.id),
+        canEdit,
+        canComment: commentable.get(post.id) ?? true,
+      };
+    });
   }
 
   /** Company attribution survives a seat change; permission to act does not. */

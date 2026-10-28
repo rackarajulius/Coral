@@ -24,11 +24,15 @@ import { MarketplaceModule } from '../marketplace/marketplace.module';
 import { PeopleController } from './people.controller';
 import { PeopleFollowService } from './people-follow.service';
 import { MentionsController } from './mentions.controller';
+import { ScheduledPostsController } from './scheduled-posts/scheduled-posts.controller';
+import { ScheduledPostsService } from './scheduled-posts/scheduled-posts.service';
+import { PostStatsController } from './post-stats/post-stats.controller';
+import { PostStatsService } from './post-stats/post-stats.service';
 
 @Module({
   imports: [StorageModule, NotificationsModule, MarketplaceModule],
-  controllers: [PostsController, CommentsController, FeedController, SpacesController, ModerationController, PollsController, TidesController, PeopleController, MentionsController],
-  providers: [PostsService, CommentsService, FeedService, SpacesService, SpaceSuggestionsService, CommunityIdentityService, ModerationService, CommunityMediaService, PollsService, GifsService, LinkPreviewService, TidesService, PeopleFollowService],
+  controllers: [PostsController, CommentsController, FeedController, SpacesController, ModerationController, PollsController, TidesController, PeopleController, MentionsController, ScheduledPostsController, PostStatsController],
+  providers: [PostsService, CommentsService, FeedService, SpacesService, SpaceSuggestionsService, CommunityIdentityService, ModerationService, CommunityMediaService, PollsService, GifsService, LinkPreviewService, TidesService, PeopleFollowService, ScheduledPostsService, PostStatsService],
   exports: [PostsService, CommentsService, FeedService],
 })
 export class CommunityModule {}

@@ -117,6 +117,8 @@ model User {
   postComments       PostComment[]
   postLikes          PostLike[]
   postBookmarks      PostBookmark[]
+  scheduledPosts     ScheduledPost[]
+  postViews          PostView[]
   interviewPrepSessions InterviewPrepSession[]
   interviewPrepFeedback InterviewPrepFeedback[]
   paymentTransactions PaymentTransaction[]
@@ -1025,6 +1027,7 @@ model Company {
   candidateTags  CandidateTag[]
   candidateReactions CandidateReaction[]
   posts          Post[]
+  scheduledPosts ScheduledPost[]
   tides          Tide[]
   offers         Offer[]
   emailTemplates EmailTemplate[]
@@ -1714,6 +1717,66 @@ enum CommentPolicy {
   OFF
 }
 
+enum ScheduledPostStatus {
+  SCHEDULED
+  /// Taken by the publishing job. Only ever seen if a run died mid-way.
+  PUBLISHING
+  PUBLISHED
+  /// Could not be published when its time came; `failureReason` says why.
+  FAILED
+}
+
+/// A company post written now and published at a set time.
+///
+/// Kept apart from Post until it goes out, so nothing that reads posts — the
+/// feeds, search, counts, a permalink — has to know about posts that do not
+/// exist yet. When its time comes the publishing job creates the post the
+/// ordinary way, with every check a post written then would get, including
+/// whether the person who scheduled it still speaks for the company.
+model ScheduledPost {
+  id            String              @id @default(uuid())
+  companyId     String              @map("company_id")
+  /// Who scheduled it. The post is published as theirs, in the company's name.
+  authorId      String              @map("author_id")
+  publishAt     DateTime            @map("publish_at")
+  /// What POST /community/posts would take: words, pictures or a document,
+  /// space, comment setting, purpose, poll. Checked when scheduled and again
+  /// when published.
+  payload       Json
+  status        ScheduledPostStatus @default(SCHEDULED)
+  postId        String?             @unique @map("post_id")
+  failureReason String?             @map("failure_reason") @db.Text
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  author  User    @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  post    Post?   @relation(fields: [postId], references: [id], onDelete: SetNull)
+
+  @@index([status, publishAt])
+  @@index([companyId, status, publishAt])
+  @@map("scheduled_posts")
+}
+
+/// Someone had a post on screen, once per person per post per UTC day.
+///
+/// Only counts leave this table — never who. Signed-in readers only, and
+/// never the author or, for a company post, the company's own team. Rows
+/// older than the stats window are pruned; Post.viewsCount keeps the total.
+model PostView {
+  postId   String   @map("post_id")
+  viewerId String   @map("viewer_id")
+  day      DateTime @db.Date
+
+  post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  viewer User @relation(fields: [viewerId], references: [id], onDelete: Cascade)
+
+  @@id([postId, viewerId, day])
+  @@index([postId, day])
+  @@index([day])
+  @@map("post_views")
+}
+
 // Community post
 model Post {
   id             String     @id @default(uuid())
@@ -1768,6 +1831,10 @@ model Post {
   /// comments stay visible whichever is chosen; this governs new ones.
   commentPolicy  CommentPolicy @default(ANYONE) @map("comment_policy")
   likesCount     Int        @default(0) @map("likes_count")
+  /// Times someone other than the author (or, for a company post, its team)
+  /// had it on screen, counted once per person per day — see PostView. Shown
+  /// only to whoever may manage the post.
+  viewsCount     Int        @default(0) @map("views_count")
   commentsCount  Int        @default(0) @map("comments_count")
   bookmarksCount Int        @default(0) @map("bookmarks_count")
   resharesCount  Int        @default(0) @map("reshares_count")
@@ -1791,6 +1858,8 @@ model Post {
   poll       Poll?
   likes      PostLike[]
   bookmarks  PostBookmark[]
+  views      PostView[]
+  scheduledFrom ScheduledPost?
 
   @@index([authorId, createdAt])
   @@index([createdAt])

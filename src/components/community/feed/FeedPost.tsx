@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Bookmark, Building2, EyeOff, FileText, Flag, Link2, Loader2,MessageCircle,MoreHorizontal,Pencil, Repeat2,
+  BarChart3, Bookmark, Building2, EyeOff, FileText, Flag, Link2, Loader2,MessageCircle,MoreHorizontal,Pencil, Repeat2,
   Share2, ThumbsUp, Trash2, UserRoundCheck, UserRoundPlus,
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
@@ -27,6 +27,8 @@ import { PollCard } from "./PollCard";
 import { PostText } from "./PostText";
 import { MentionField } from "./MentionField";
 import { DocumentViewer } from "./DocumentViewer";
+import { PostStatsDialog } from "./PostStatsDialog";
+import { usePostView } from "./usePostView";
 import { plainText, toDisplay, toStored, type Mention } from "@/lib/mentions";
 import { CommentThread } from "./CommentThread";
 import { IdentityLine } from "./IdentityLine";
@@ -118,6 +120,12 @@ export function FeedPost({
   const menuCloseTimer = useRef<number>();
   // Preview cards open under the header, starting at the avatar.
   const headerRef = useRef<HTMLElement>(null);
+
+  // A signed-in reader having it on screen is a view. Whoever manages the
+  // post is not its audience; the server refuses those anyway.
+  const articleRef = useRef<HTMLElement>(null);
+  usePostView(articleRef, post.id, post.canEdit ? null : user?.id);
+  const [statsOpen, setStatsOpen] = useState(false);
   const cancelMenuClose = () => window.clearTimeout(menuCloseTimer.current);
   const scheduleMenuClose = (e: React.PointerEvent) => {
     if (e.pointerType !== "mouse") return;
@@ -244,7 +252,7 @@ export function FeedPost({
   return (
     <>
     {!avatarReady && <PostSkeleton />}
-    <article hidden={!avatarReady} className="rounded-2xl border border-border bg-card px-5 pb-2 pt-5">
+    <article ref={articleRef} hidden={!avatarReady} className="rounded-2xl border border-border bg-card px-5 pb-2 pt-5">
       {/* The anchor every preview card in this header lines up with. */}
       <header ref={headerRef} className="flex items-start gap-3">
         {post.company ? (
@@ -653,6 +661,25 @@ export function FeedPost({
           <Bookmark className={cn("h-4 w-4", bookmarked && "fill-current")} aria-hidden="true" />
         </button>
       </footer>
+
+      {/* Sent only to whoever may manage the post, as on LinkedIn: readers see
+          reactions and comments, not how many people scrolled past. */}
+      {post.viewsCount !== undefined && (
+        <button
+          type="button"
+          onClick={() => setStatsOpen(true)}
+          className="mt-2 flex items-center gap-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground"
+        >
+          <BarChart3 className="h-3.5 w-3.5" aria-hidden="true" />
+          <span className="tabular-nums">{post.viewsCount.toLocaleString()}</span>
+          {post.viewsCount === 1 ? "view" : "views"}
+          <span aria-hidden="true">·</span>
+          <span className="text-link">View stats</span>
+        </button>
+      )}
+      {post.viewsCount !== undefined && (
+        <PostStatsDialog postId={post.id} open={statsOpen} onOpenChange={setStatsOpen} forCompany={post.company?.name} />
+      )}
 
       {showComments && (
         <CommentThread

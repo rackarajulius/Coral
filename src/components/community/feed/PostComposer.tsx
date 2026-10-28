@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BarChart3, Building2, CalendarPlus, ChevronRight, FileText, Globe, ImagePlus, Loader2, MessageCircle, Search, Video, X,
+  BarChart3, Building2, CalendarPlus, ChevronRight, Clock, FileText, Globe, ImagePlus, Loader2, MessageCircle, Search, Video, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
@@ -22,11 +22,12 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
 import {
-  COMMENT_POLICY_LABELS, createPost, getAnnouncementOptions, getCompanyVoice, getGifStatus, listSpaces, uploadPostDocument, uploadPostMedia,
+  COMMENT_POLICY_LABELS, createPost, getAnnouncementOptions, getCompanyVoice, getGifStatus, listSpaces, schedulePost, uploadPostDocument, uploadPostMedia,
   type CommentPolicy, type MediaKind, type PostPurpose, type Space, type UploadedDocument,
 } from "@/lib/api/community";
 import { GifPicker } from "./GifPicker";
 import { MentionField } from "./MentionField";
+import { defaultScheduleTime, formatWhen, localZone, scheduleProblem, toLocalInput, SCHEDULE_MAX_MS, SCHEDULE_MIN_MS } from "./schedule";
 import { toStored, type Mention } from "@/lib/mentions";
 import { postPurposeLabels } from "./CommunityLinkedCard";
 
@@ -297,6 +298,41 @@ function ComposerDialog({
     if (spaceId) setTarget({ id: spaceId, name: spaceName ?? "" });
   }, [spaceId, spaceName]);
 
+  // What the post is, the same whether it goes out now or later.
+  const postInput = () => ({
+    spaceId: target?.id,
+    content: toStored(content.trim(), mentions),
+    mediaUrls: media.map((m) => m.url),
+    postType: "TEXT" as const,
+    purpose,
+    ...(reference ? { reference: { type: reference.type, id: reference.id } } : {}),
+    ...(poll ? { poll: { options: poll.filter((o) => o.trim()) } } : {}),
+    ...(attachedDoc ? { document: { url: attachedDoc.url, title: docTitle.trim() } } : {}),
+    ...(publishingAsCompany ? { asCompany: true, ...(publishingCompanyId ? { companyId: publishingCompanyId } : {}) } : {}),
+    ...(commentPolicy !== "ANYONE" ? { commentPolicy } : {}),
+  });
+
+  /**
+   * Later, for a company page, as on LinkedIn. Personal posts, tides (which
+   * have their own time) and listing announcements (which must go out while
+   * the listing is open) are posted now.
+   */
+  const canSchedule = !tide && publishingAsCompany && !structured && !reference;
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleAt, setScheduleAt] = useState("");
+  const schedule = useMutation({
+    mutationFn: () => schedulePost({ ...postInput(), publishAt: new Date(scheduleAt).toISOString() }, user?.supabaseId),
+    onSuccess: (item) => {
+      toast.success(`Scheduled for ${formatWhen(item.publishAt)}`, {
+        description: "It's in the Scheduled list on the company's community page.",
+      });
+      void queryClient.invalidateQueries({ queryKey: ["scheduled-posts"] });
+      setScheduleOpen(false);
+      onClose();
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
   const post = useMutation({
     // Returns nothing on purpose: the two calls hand back different shapes
     // and neither result is used, so the mutation's type stays honest.
@@ -310,18 +346,7 @@ function ComposerDialog({
         });
         return;
       }
-      await createPost({
-        spaceId: target?.id,
-        content: toStored(content.trim(), mentions),
-        mediaUrls: media.map((m) => m.url),
-        postType: "TEXT",
-        purpose,
-        ...(reference ? { reference: { type: reference.type, id: reference.id } } : {}),
-        ...(poll ? { poll: { options: poll.filter((o) => o.trim()) } } : {}),
-        ...(attachedDoc ? { document: { url: attachedDoc.url, title: docTitle.trim() } } : {}),
-        ...(publishingAsCompany ? { asCompany: true, ...(publishingCompanyId ? { companyId: publishingCompanyId } : {}) } : {}),
-        ...(commentPolicy !== "ANYONE" ? { commentPolicy } : {}),
-      }, user?.supabaseId);
+      await createPost(postInput(), user?.supabaseId);
     },
     onSuccess: () => {
       rememberAudience(user?.id, target);
@@ -798,15 +823,62 @@ function ComposerDialog({
                       ? "Announcing to anyone — Home and your followers"
                       : "Posting to anyone — Home and your followers"}
           </span>
-          <Button
-            size="sm"
-            className="rounded-full px-5"
-            onClick={() => post.mutate()}
-            disabled={tide ? !tideReady(tide) || post.isPending : !canPost}
-          >
-            {post.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
-            {tide ? "Hold it" : "Post"}
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            {canSchedule && (
+              <Popover
+                open={scheduleOpen}
+                onOpenChange={(open) => {
+                  setScheduleOpen(open);
+                  if (open && !scheduleAt) setScheduleAt(defaultScheduleTime());
+                }}
+              >
+                <PopoverTrigger asChild>
+                  <Button size="sm" variant="outline" className="gap-1.5 rounded-full" disabled={!canPost || schedule.isPending}>
+                    <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+                    Schedule
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" className="w-72 space-y-3 rounded-xl p-4">
+                  <div>
+                    <label htmlFor="schedule-at" className="text-sm font-medium">Publish on</label>
+                    <input
+                      id="schedule-at"
+                      type="datetime-local"
+                      value={scheduleAt}
+                      min={toLocalInput(new Date(Date.now() + SCHEDULE_MIN_MS))}
+                      max={toLocalInput(new Date(Date.now() + SCHEDULE_MAX_MS))}
+                      onChange={(e) => setScheduleAt(e.target.value)}
+                      className="mt-1.5 w-full rounded-lg border border-border bg-background px-2.5 py-2 text-sm outline-none focus:border-foreground/30"
+                    />
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      {scheduleProblem(scheduleAt) ?? `${formatWhen(new Date(scheduleAt).toISOString())}, ${localZone()}`}
+                    </p>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    It goes out as {speakingAs?.name ?? "the company"}, under your name. Owners and admins can change or cancel it until then.
+                  </p>
+                  <Button
+                    size="sm"
+                    className="w-full rounded-full"
+                    onClick={() => schedule.mutate()}
+                    disabled={!canPost || !!scheduleProblem(scheduleAt) || schedule.isPending}
+                  >
+                    {schedule.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+                    Schedule post
+                  </Button>
+                </PopoverContent>
+              </Popover>
+            )}
+            <Button
+              size="sm"
+              className="rounded-full px-5"
+              onClick={() => post.mutate()}
+              disabled={tide ? !tideReady(tide) || post.isPending : !canPost || schedule.isPending}
+            >
+              {post.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+              {tide ? "Hold it" : "Post"}
+            </Button>
+          </div>
         </footer>
       </DialogContent>
 

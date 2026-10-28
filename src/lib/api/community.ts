@@ -203,6 +203,11 @@ export interface CommunityPost {
   documentUrl?: string | null;
   documentTitle?: string | null;
   documentPages?: number | null;
+  /**
+   * Times people other than its author (or its company's team) had it on
+   * screen, once per person per day. Sent only to whoever may manage the post.
+   */
+  viewsCount?: number;
   hashtags: string[];
   isEdited: boolean;
   createdAt: string;
@@ -487,6 +492,107 @@ export interface MentionSuggestions {
 /** Who the "@" menu offers for what was typed after the @. */
 export const suggestMentions = (q: string, signal?: AbortSignal) =>
   req<{ data: MentionSuggestions }>(`/mentions?q=${encodeURIComponent(q)}`, { signal }).then((r) => r.data);
+
+/* ----------------------------- scheduled posts ---------------------------- */
+
+export type ScheduledPostStatus = "SCHEDULED" | "PUBLISHING" | "PUBLISHED" | "FAILED";
+
+/** A company post waiting for its time. Only the page's owners and admins see these. */
+export interface ScheduledPost {
+  id: string;
+  companyId: string;
+  publishAt: string;
+  status: ScheduledPostStatus;
+  /** Why it did not go out, when it did not. */
+  failureReason: string | null;
+  createdAt: string;
+  /** Who wrote it; the post goes out under their name, in the company's. */
+  author: { id: string; name: string; avatarUrl: string | null };
+  /** Stored words: mentions as tokens, as in a post. */
+  content: string;
+  mediaUrls: string[];
+  document: { title: string; pages: number | null } | null;
+  poll: { options: string[] } | null;
+  spaceId: string | null;
+  commentPolicy: CommentPolicy;
+}
+
+/** Everything `createPost` takes, as a company, plus when. Between 10 minutes and 90 days ahead. */
+export const schedulePost = (input: Parameters<typeof createPost>[0] & { publishAt: string }, expectedSupabaseId?: string) =>
+  req<{ data: ScheduledPost }>("/scheduled-posts", { method: "POST", body: JSON.stringify(input) }, expectedSupabaseId)
+    .then((r) => r.data);
+
+/** A company page's queue. Refused for anyone who does not run the page. */
+export const listScheduledPosts = (companyId: string) =>
+  req<{ data: ScheduledPost[] }>(`/scheduled-posts/company/${companyId}`).then((r) => r.data);
+
+/** A new time (which also retries a failed one), new words, or both. */
+export const updateScheduledPost = (id: string, input: { publishAt?: string; content?: string }) =>
+  req<{ data: ScheduledPost }>(`/scheduled-posts/${id}`, { method: "PATCH", body: JSON.stringify(input) }).then((r) => r.data);
+
+export const cancelScheduledPost = (id: string) =>
+  req<unknown>(`/scheduled-posts/${id}`, { method: "DELETE" });
+
+/* -------------------------------- post stats ------------------------------- */
+
+export interface DailyViews {
+  /** "YYYY-MM-DD", UTC. */
+  day: string;
+  views: number;
+}
+
+/** One post's numbers, for its author or its company's page admins. */
+export interface PostStats {
+  postId: string;
+  publishedAt: string;
+  views: number;
+  /** Different people, over the last `retentionDays`. */
+  peopleReached: number;
+  reactions: number;
+  comments: number;
+  reshares: number;
+  /** Percent of views that led to a reaction, comment or reshare; null before any view. */
+  engagementRate: number | null;
+  daily: DailyViews[];
+  retentionDays: number;
+}
+
+export const getPostStats = (id: string) =>
+  req<{ data: PostStats }>(`/posts/${id}/stats`).then((r) => r.data);
+
+/** A company page's recent numbers. */
+export interface CompanyInsights {
+  days: number;
+  since: string;
+  published: number;
+  views: number;
+  peopleReached: number;
+  reactions: number;
+  comments: number;
+  reshares: number;
+  followers: number;
+  followersGained: number;
+  daily: DailyViews[];
+  topPosts: Array<{
+    id: string;
+    preview: string;
+    publishedAt: string;
+    /** In the window. */
+    views: number;
+    totalViews: number;
+    reactions: number;
+    comments: number;
+    reshares: number;
+  }>;
+}
+
+/** Null for anyone who does not run the page, so a page can ask without checking first. */
+export const getCompanyInsights = (companyId: string, days = 30) =>
+  req<{ data: CompanyInsights | null }>(`/company-pages/${companyId}/insights?days=${days}`).then((r) => r.data);
+
+/** Posts the reader had on screen. The server decides what counts. */
+export const recordPostViews = (postIds: string[]) =>
+  req<{ data: { counted: number } }>("/post-views", { method: "POST", body: JSON.stringify({ postIds }), keepalive: true });
 
 /* ---------------------------------- polls --------------------------------- */
 

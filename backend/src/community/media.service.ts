@@ -321,11 +321,24 @@ export class CommunityMediaService {
          * absolute URLs while these are storage paths, so an exact-match query
          * finds nothing and the sweep would then treat every file as an orphan.
          */
-        const referenced = await this.prisma.post.findMany({
-          where: { authorId: folder.name },
-          select: { mediaUrls: true, documentUrl: true },
-        });
-        const inUse = new Set(referenced.flatMap((p) => (p.documentUrl ? [...p.mediaUrls, p.documentUrl] : p.mediaUrls)));
+        const [referenced, queued] = await Promise.all([
+          this.prisma.post.findMany({
+            where: { authorId: folder.name },
+            select: { mediaUrls: true, documentUrl: true },
+          }),
+          // A scheduled post's files are in use: it goes out later, not never.
+          this.prisma.scheduledPost.findMany({
+            where: { authorId: folder.name, status: { not: 'PUBLISHED' } },
+            select: { payload: true },
+          }),
+        ]);
+        const inUse = new Set([
+          ...referenced.flatMap((p) => (p.documentUrl ? [...p.mediaUrls, p.documentUrl] : p.mediaUrls)),
+          ...queued.flatMap(({ payload }) => {
+            const draft = (payload ?? {}) as { mediaUrls?: string[]; document?: { url?: string } };
+            return [...(draft.mediaUrls ?? []), ...(draft.document?.url ? [draft.document.url] : [])];
+          }),
+        ]);
 
         for (const path of paths) {
           // Stored URLs are absolute, so a path is in use when some stored URL

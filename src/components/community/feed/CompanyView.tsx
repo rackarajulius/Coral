@@ -12,6 +12,7 @@ import { useFollowCompany } from "@/hooks/useFollowCompany";
 import { getCompanyById, type EmployerCompany } from "@/lib/api/employerCompany";
 import { listPosts } from "@/lib/api/community";
 import { CompanyTides } from "@/components/company/CompanyTides";
+import { CompanyPageAdmin } from "./CompanyPageAdmin";
 import { FeedPost } from "./FeedPost";
 import { PostListSkeleton } from "./skeletons";
 import { companyLocation } from "./ProfileHoverCard";
@@ -58,6 +59,10 @@ export function CompanyView({ profileId }: { profileId: string }) {
   return (
     <>
       <CompanyHeader company={company.data} />
+      {/* Renders only for the page's owners and admins. */}
+      {company.data.companyId && (
+        <CompanyPageAdmin companyId={company.data.companyId} companyName={company.data.companyName} />
+      )}
       {/* Its own section, which hides itself when nothing is coming up. */}
       <div className="mb-5">
         <CompanyTides company={company.data} />

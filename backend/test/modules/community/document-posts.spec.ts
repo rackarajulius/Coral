@@ -154,6 +154,7 @@ describe('The hourly clean-up', () => {
     const stale = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
     const prisma = {
       post: { findMany: jest.fn().mockResolvedValue([{ mediaUrls: [], documentUrl: documentUrl(WRITER, 4) }]) },
+      scheduledPost: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const { service, storage } = media(prisma);
     storage.listFiles.mockImplementation(async (path: string) =>
@@ -169,4 +170,27 @@ describe('The hourly clean-up', () => {
       `posts/${WRITER}/44444444-4444-4444-8444-444444444444-9p.pdf`, COMMUNITY_BUCKET);
   });
 
+  it('keeps the files of a post that is scheduled to go out later', async () => {
+    const stale = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    const queuedPicture = `${STORAGE}/posts/${WRITER}/55555555-5555-4555-8555-555555555555.png`;
+    const prisma = {
+      post: { findMany: jest.fn().mockResolvedValue([]) },
+      scheduledPost: {
+        findMany: jest.fn().mockResolvedValue([
+          { payload: { mediaUrls: [queuedPicture] } },
+          { payload: { document: { url: documentUrl(WRITER, 4), title: 'Deck' } } },
+        ]),
+      },
+    };
+    const { service, storage } = media(prisma);
+    storage.listFiles.mockImplementation(async (path: string) =>
+      path === 'posts'
+        ? [{ name: WRITER, id: null }]
+        : [
+            { name: '55555555-5555-4555-8555-555555555555.png', id: 'picture', createdAt: stale },
+            { name: `${FILE_ID}-4p.pdf`, id: 'deck', createdAt: stale },
+          ]);
+    await service.sweepOrphans();
+    expect(storage.deletePublicFile).not.toHaveBeenCalled();
+  });
 });
