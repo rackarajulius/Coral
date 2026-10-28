@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { CalendarDays, Heart, MessageCircle } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { listPosts, authorName, type CommunityPost } from "@/lib/api/community";
+import { plainText } from "@/lib/mentions";
 import { listTides, tideWhen, type Tide } from "@/lib/api/tides";
 
 /**
@@ -105,7 +106,7 @@ function TideRow({ tide }: { tide: Tide }) {
 }
 
 function PostRow({ post }: { post: CommunityPost }) {
-  const text = post.content.trim();
+  const text = plainText(post.content).trim();
   const byline = post.company?.name ?? authorName(post.author);
   return (
     <Link to={`/community/posts/${post.id}`} className="block px-4 py-3 transition-colors hover:bg-muted/60">

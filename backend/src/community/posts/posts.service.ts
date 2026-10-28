@@ -16,10 +16,11 @@ import { CommunityMediaService } from '../media.service';
 import { PollsService } from '../polls.service';
 import { LinkPreviewService } from '../link-preview.service';
 import { User } from '../../common/types/user.types';
-import { AnnouncementReferenceDto, AnnouncementReferenceType, CommunityPostPurpose, CreatePostDto } from './dto/create-post.dto';
+import { AnnouncementReferenceDto, AnnouncementReferenceType, CommunityPostPurpose, CommunityPostType, CreatePostDto } from './dto/create-post.dto';
 import { ListPostsQueryDto } from './dto/list-posts-query.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
 import { commentAccess } from '../comment-policy';
+import { announceMentions, plainText, resolveMentions, withoutMentions } from '../mentions';
 
 type AnnouncementCard = Awaited<ReturnType<MarketplaceService['projectAnnouncementReference']>>;
 
@@ -214,7 +215,8 @@ export class PostsService {
 
   async create(userId: string, dto: CreatePostDto) {
     if (dto.companyId !== undefined && dto.asCompany !== true) throw new BadRequestException('A company choice requires company publishing.');
-    this.assertPostContent(dto.content, dto.mediaUrls);
+    const document = this.documentFor(userId, dto);
+    this.assertPostContent(dto.content, dto.mediaUrls, !!document);
     // A space is optional; one that is named must exist and be open, refused
     // at the door rather than producing a post in a room that is gone.
     if (dto.spaceId) await this.spaces.assertPostable(dto.spaceId);
@@ -235,8 +237,10 @@ export class PostsService {
       }
     }
 
+    // Every @mention checked and given its own name before anything is saved.
+    const content = await resolveMentions(this.prisma, dto.content);
     const hashtags = this.normalizeHashtags(dto.hashtags ?? []);
-    const contentHashtags = this.extractHashtags(dto.content);
+    const contentHashtags = this.extractHashtags(withoutMentions(content));
     const mergedHashtags = Array.from(new Set([...hashtags, ...contentHashtags]));
     const purpose = dto.purpose ?? CommunityPostPurpose.GENERAL;
     this.assertPurposeReference(purpose, dto.reference);
@@ -246,8 +250,9 @@ export class PostsService {
       // None means everyone: Home, the author's followers, their profile or
       // the company's page.
       spaceId: dto.spaceId ?? null,
-      content: dto.content?.trim() || '',
-      postType: dto.poll ? 'POLL' as const : dto.postType || 'TEXT' as const,
+      content: content?.trim() || '',
+      postType: dto.poll ? 'POLL' as const : document ? 'DOCUMENT' as const : dto.postType || 'TEXT' as const,
+      ...document,
       purpose: purpose.toUpperCase() as PostPurpose,
       mediaUrls: dto.mediaUrls ?? [],
       hashtags: mergedHashtags,
@@ -288,6 +293,15 @@ export class PostsService {
     // behind.
     if (dto.spaceId) await this.spaces.joinOnPost(userId, dto.spaceId);
 
+    // Told only once the post is safely there, poll and all.
+    void announceMentions(this.prisma, this.notifications, {
+      actorId: userId,
+      voiceCompanyId: companyId,
+      where: 'post',
+      postId: created.id,
+      content: created.content,
+    });
+
     /**
       * Unfurled after the post exists, and never allowed to fail it.
       *
@@ -295,7 +309,7 @@ export class PostsService {
       * hostile. The post is already saved by the time this runs; a preview
       * that does not arrive costs a card, not the thing someone wrote.
       */
-    const link = this.links.firstUrl(created.content);
+    const link = this.links.firstUrl(withoutMentions(created.content));
     if (link && !dto.poll) {
       const preview = await this.links.build(link, userId);
       if (preview) {
@@ -330,6 +344,7 @@ export class PostsService {
         linkedGigId: true,
         linkedJobId: true,
         tideId: true,
+        documentUrl: true,
         removedAt: true,
       },
     });
@@ -357,10 +372,14 @@ export class PostsService {
       return { success: true, data: normalized, message: 'Comment setting updated' };
     }
 
-    const nextContent = dto.content !== undefined ? dto.content : existing.content;
+    const content = await resolveMentions(this.prisma, dto.content);
+    const nextContent = content !== undefined ? content : existing.content;
     const nextMediaUrls = dto.mediaUrls !== undefined ? dto.mediaUrls : existing.mediaUrls;
-    this.assertPostContent(nextContent, nextMediaUrls);
+    this.assertPostContent(nextContent, nextMediaUrls, !!existing.documentUrl);
     if (dto.mediaUrls !== undefined) this.media.assertOwnMedia(nextMediaUrls ?? []);
+    if (existing.documentUrl && ((dto.mediaUrls?.length ?? 0) > 0 || (dto.postType !== undefined && dto.postType !== CommunityPostType.DOCUMENT))) {
+      throw new BadRequestException('A document is shared on its own, without pictures or video.');
+    }
 
     const purpose = dto.purpose ?? (existing.purpose ?? 'GENERAL').toLowerCase() as CommunityPostPurpose;
     const reference = dto.reference === undefined ? this.referenceOf(existing) : dto.reference;
@@ -370,11 +389,11 @@ export class PostsService {
     }
 
     const hashtags = this.normalizeHashtags(dto.hashtags ?? existing.hashtags);
-    const contentHashtags = this.extractHashtags(nextContent);
+    const contentHashtags = this.extractHashtags(withoutMentions(nextContent));
     const mergedHashtags = Array.from(new Set([...hashtags, ...contentHashtags]));
 
     const updateData = {
-        ...(dto.content !== undefined ? { content: dto.content.trim() } : {}),
+        ...(content !== undefined ? { content: content.trim() } : {}),
         ...(dto.postType !== undefined ? { postType: dto.postType } : {}),
         ...(dto.mediaUrls !== undefined ? { mediaUrls: dto.mediaUrls } : {}),
         purpose: purpose.toUpperCase() as PostPurpose,
@@ -391,6 +410,18 @@ export class PostsService {
           return tx.post.update({ where: { id: postId }, data: { ...updateData, ...referenceData }, include: this.buildPostInclude() });
         })
       : await this.prisma.post.update({ where: { id: postId }, data: updateData, include: this.buildPostInclude() });
+
+    // Only someone the edit newly mentions is news; the rest were told the first time.
+    if (content !== undefined) {
+      void announceMentions(this.prisma, this.notifications, {
+        actorId: currentUser.id,
+        voiceCompanyId: existing.companyId,
+        where: 'post',
+        postId,
+        content: updated.content,
+        previous: existing.content,
+      });
+    }
 
     const [normalized] = await this.addViewerFlags([updated], currentUser.id);
     return {
@@ -461,7 +492,7 @@ export class PostsService {
       throw new NotFoundException('Post not found');
     }
 
-    const trimmed = content?.trim() || '';
+    const trimmed = (await resolveMentions(this.prisma, content?.trim() || '')).trim();
 
     const created = await this.prisma.$transaction(async (tx) => {
       const post = await tx.post.create({
@@ -492,10 +523,18 @@ export class PostsService {
         userId: target.authorId,
         type: 'community',
         title: `${await this.nameOf(userId)} shared your post`,
-        message: trimmed || 'They passed it on without adding anything.',
+        message: plainText(trimmed) || 'They passed it on without adding anything.',
         link: `/community/posts/${created.id}`,
       });
     }
+    // The original's author already heard about this share, so is not told twice.
+    void announceMentions(this.prisma, this.notifications, {
+      actorId: userId,
+      where: 'post',
+      postId: created.id,
+      content: trimmed,
+      alreadyTold: [target.authorId],
+    });
 
     const [visible] = await this.addViewerFlags([created], userId);
     return { success: true, data: visible, message: 'Post shared' };
@@ -809,6 +848,9 @@ export class PostsService {
           id: true,
           content: true,
           mediaUrls: true,
+          documentUrl: true,
+          documentTitle: true,
+          documentPages: true,
           postType: true,
           purpose: true,
           linkedServiceListingId: true,
@@ -1046,13 +1088,33 @@ export class PostsService {
     });
   }
 
-  private assertPostContent(content?: string, mediaUrls?: string[]) {
+  private assertPostContent(content?: string, mediaUrls?: string[], hasDocument = false) {
     const hasText = Boolean(content && content.trim().length > 0);
     const hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
 
-    if (!hasText && !hasMedia) {
+    if (!hasText && !hasMedia && !hasDocument) {
       throw new BadRequestException('A post requires content or media');
     }
+  }
+
+  /**
+   * The document a new post shares, checked, or null.
+   *
+   * Its page count comes from the file's stored name, which the server chose
+   * when it read the file (`CommunityMediaService.uploadDocument`); the writer
+   * sends only the address and a title. A document goes on its own — a deck
+   * with three photos under it is two posts.
+   */
+  private documentFor(userId: string, dto: CreatePostDto) {
+    if (!dto.document) return null;
+    if (dto.poll || (dto.mediaUrls?.length ?? 0) > 0) {
+      throw new BadRequestException('A document is shared on its own, without pictures, video or a poll.');
+    }
+    const documentPages = this.media.documentPagesFor(dto.document.url, userId);
+    if (!documentPages) throw new BadRequestException('Upload the document here before sharing it.');
+    const documentTitle = dto.document.title.replace(/\s+/g, ' ').trim().slice(0, 150);
+    if (!documentTitle) throw new BadRequestException('Give the document a title.');
+    return { documentUrl: dto.document.url, documentTitle, documentPages };
   }
 
   private normalizeHashtags(hashtags: string[]): string[] {

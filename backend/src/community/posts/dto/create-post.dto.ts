@@ -9,8 +9,10 @@ import {
   IsUUID,
   MaxLength,
   IsISO8601,
+  IsNotEmpty,
   ValidateNested,
 } from 'class-validator';
+import { MaxReadableLength } from '../../readable-length.validator';
 import { Type } from 'class-transformer';
 import { CommentPolicy } from '@prisma/client';
 
@@ -59,10 +61,28 @@ export class PollDto {
   closesAt?: string;
 }
 
+/** A PDF uploaded through POST /community/posts/documents, and what to call it. */
+export class PostDocumentDto {
+  @IsUrl({ require_tld: false })
+  @MaxLength(2048)
+  url!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(150)
+  title!: string;
+}
+
 export class CreatePostDto {
   @IsOptional()
   @IsEnum(CommunityPostPurpose)
   purpose?: CommunityPostPurpose;
+
+  /** Present when the post shares a document. It goes on its own: no pictures, video or poll. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => PostDocumentDto)
+  document?: PostDocumentDto;
 
   @IsOptional()
   @ValidateNested()
@@ -103,7 +123,7 @@ export class CreatePostDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(5000)
+  @MaxReadableLength(5000)
   content?: string;
 
   @IsOptional()

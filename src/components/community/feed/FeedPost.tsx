@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Bookmark, Building2, EyeOff, Flag, Link2, Loader2,MessageCircle,MoreHorizontal,Pencil, Repeat2,
+  Bookmark, Building2, EyeOff, FileText, Flag, Link2, Loader2,MessageCircle,MoreHorizontal,Pencil, Repeat2,
   Share2, ThumbsUp, Trash2, UserRoundCheck, UserRoundPlus,
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
@@ -25,6 +25,9 @@ import { getCompanyById } from "@/lib/api/employerCompany";
 import { ReportDialog } from "./ReportDialog";
 import { PollCard } from "./PollCard";
 import { PostText } from "./PostText";
+import { MentionField } from "./MentionField";
+import { DocumentViewer } from "./DocumentViewer";
+import { plainText, toDisplay, toStored, type Mention } from "@/lib/mentions";
 import { CommentThread } from "./CommentThread";
 import { IdentityLine } from "./IdentityLine";
 import { ImageLightbox } from "./ImageLightbox";
@@ -143,14 +146,17 @@ export function FeedPost({
    */
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(post.content);
+  // The mentions the post had, plus any picked while editing.
+  const [draftMentions, setDraftMentions] = useState<Mention[]>([]);
   const [savedContent, setSavedContent] = useState<string | null>(null);
   useEffect(() => setSavedContent(null), [post.content]);
   const content = savedContent ?? post.content;
+  const storedDraft = toStored(draft.trim(), draftMentions);
 
   const edit = useMutation({
-    mutationFn: () => updatePost(post.id, draft.trim()),
+    mutationFn: () => updatePost(post.id, storedDraft),
     onSuccess: () => {
-      setSavedContent(draft.trim());
+      setSavedContent(storedDraft);
       setEditing(false);
       toast.success("Post updated");
       void queryClient.invalidateQueries({ queryKey: ["community-posts"] });
@@ -158,9 +164,9 @@ export function FeedPost({
     },
     onError: (e) => toast.error((e as Error).message),
   });
-  const draftChanged = draft.trim() !== content;
+  const draftChanged = storedDraft !== content;
   const canSaveEdit =
-    draftChanged && (!!draft.trim() || post.mediaUrls.length > 0) && !edit.isPending;
+    draftChanged && (!!draft.trim() || post.mediaUrls.length > 0 || !!post.documentUrl) && !edit.isPending;
 
   // Who may comment, changeable after posting as on LinkedIn. Held locally so
   // the menu reflects the choice at once; the feed refetch confirms it.
@@ -394,7 +400,9 @@ export function FeedPost({
                 <DropdownMenuItem
                   className="gap-2"
                   onSelect={() => {
-                    setDraft(content);
+                    const shown = toDisplay(content);
+                    setDraft(shown.text);
+                    setDraftMentions(shown.mentions);
                     setEditing(true);
                   }}
                 >
@@ -446,10 +454,12 @@ export function FeedPost({
 
       {editing ? (
         <div className="mt-3">
-          <textarea
+          <MentionField
+            multiline
             autoFocus
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onValueChange={setDraft}
+            onMention={(m) => setDraftMentions((all) => [...all, m])}
             onKeyDown={(e) => {
               if (e.key === "Escape") setEditing(false);
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSaveEdit) edit.mutate();
@@ -483,7 +493,7 @@ export function FeedPost({
 
       {/* Shown only when there is no media of the author's own — a card about
           someone else's page should not outrank the picture they chose. */}
-      {post.linkPreview && !post.linkedRecord && !post.linkedRecordUnavailable && post.mediaUrls.length === 0 && (
+      {post.linkPreview && !post.linkedRecord && !post.linkedRecordUnavailable && post.mediaUrls.length === 0 && !post.documentUrl && (
         <a
           href={post.linkPreview.url}
           target="_blank"
@@ -515,6 +525,10 @@ export function FeedPost({
             )}
           </div>
         </a>
+      )}
+
+      {post.documentUrl && (
+        <DocumentViewer url={post.documentUrl} title={post.documentTitle || "Document"} pages={post.documentPages ?? null} />
       )}
 
       {post.tideId && <TidePostCard tideId={post.tideId} />}
@@ -752,14 +766,16 @@ function ReshareDialog({
 }) {
   const queryClient = useQueryClient();
   const [thoughts, setThoughts] = useState("");
+  const [mentions, setMentions] = useState<Mention[]>([]);
   // A reshare of a reshare passes on whatever was originally written.
   const original = post.resharedFrom ?? post;
 
   const reshare = useMutation({
-    mutationFn: () => resharePost(post.id, thoughts.trim() || undefined),
+    mutationFn: () => resharePost(post.id, toStored(thoughts.trim(), mentions) || undefined),
     onSuccess: () => {
       toast.success("Reshared");
       setThoughts("");
+      setMentions([]);
       onClose();
       void queryClient.invalidateQueries({ queryKey: ["community-posts"] });
     },
@@ -774,10 +790,12 @@ function ReshareDialog({
           <DialogDescription>It will appear as a new post from you, with the original attached.</DialogDescription>
         </DialogHeader>
 
-        <textarea
+        <MentionField
+          multiline
           autoFocus
           value={thoughts}
-          onChange={(e) => setThoughts(e.target.value)}
+          onValueChange={setThoughts}
+          onMention={(m) => setMentions((all) => [...all, m])}
           placeholder="Add your thoughts (optional)"
           maxLength={MAX_LENGTH}
           rows={3}
@@ -789,8 +807,9 @@ function ReshareDialog({
             {original.company ? original.company.name : authorName(original.author)}
           </p>
           {original.content && (
-            <p className="mt-1 line-clamp-3 whitespace-pre-wrap [overflow-wrap:anywhere] text-sm text-muted-foreground">{original.content}</p>
+            <p className="mt-1 line-clamp-3 whitespace-pre-wrap [overflow-wrap:anywhere] text-sm text-muted-foreground">{plainText(original.content)}</p>
           )}
+          {original.documentUrl && <DocumentLine title={original.documentTitle} pages={original.documentPages} />}
         </div>
 
         <div className="flex justify-end gap-2">
@@ -802,6 +821,21 @@ function ReshareDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * A reshared document, named rather than shown: the embed is a link to the
+ * original, where it is read, and a viewer inside a link is a control inside
+ * a control.
+ */
+function DocumentLine({ title, pages }: { title?: string | null; pages?: number | null }) {
+  return (
+    <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+      <FileText className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <span className="min-w-0 truncate font-medium text-foreground">{title || "Document"}</span>
+      {pages ? <span className="shrink-0">· {pages} {pages === 1 ? "page" : "pages"}</span> : null}
+    </p>
   );
 }
 
@@ -846,9 +880,10 @@ function ResharedCard({ original }: { original: ResharedPost }) {
 
       {original.content && (
         <p className="mt-2 line-clamp-4 whitespace-pre-wrap [overflow-wrap:anywhere] text-sm text-muted-foreground">
-          {original.content}
+          {plainText(original.content)}
         </p>
       )}
+      {original.documentUrl && <DocumentLine title={original.documentTitle} pages={original.documentPages} />}
 
       {original.mediaUrls.length > 0 && !isVideoUrl(original.mediaUrls[0]) && (
         // Whole, like a picture in the feed itself: a diagram cropped to a

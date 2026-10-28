@@ -14,6 +14,7 @@ import { NotificationsService } from '../../notifications/notifications.service'
 import { ConfigService } from '@nestjs/config';
 import { buildIcs } from '../../integrations/ics.util';
 import { CreateTideDto, UpdateTideDto, CancelTideDto, RsvpDto } from './dto/tide.dto';
+import { announceMentions, resolveMentions } from '../mentions';
 
 /** How close a tide must be before the way in is handed out. */
 const JOIN_WINDOW_MS = 60 * 60_000;
@@ -62,13 +63,16 @@ export class TidesService {
       companyId = context.companyId;
     }
 
+    // Mentions in the announcement are checked like those in any post.
+    const announcement = (await resolveMentions(this.prisma, dto.announcement?.trim() || '')).trim();
+
     /**
      * The tide and its announcement are written together.
      *
      * Separately, a failed post leaves a tide nobody was told about — which
      * looks to the host like nothing happened, so they make it again.
      */
-    return this.prisma.$transaction(async (tx) => {
+    const { tide, postId } = await this.prisma.$transaction(async (tx) => {
       const tide = await tx.tide.create({
         data: {
           title: dto.title.trim(),
@@ -101,7 +105,7 @@ export class TidesService {
         });
       }
 
-      await tx.post.create({
+      const post = await tx.post.create({
         data: {
           authorId: userId,
           companyId,
@@ -110,12 +114,22 @@ export class TidesService {
           postType: 'TIDE',
           // The card carries the title, time and place. Repeating them in
           // the text would be the same thing said twice.
-          content: dto.announcement?.trim() || '',
+          content: announcement,
         },
+        select: { id: true },
       });
 
-      return tide;
+      return { tide, postId: post.id };
     });
+
+    void announceMentions(this.prisma, this.notifications, {
+      actorId: userId,
+      voiceCompanyId: companyId,
+      where: 'post',
+      postId,
+      content: announcement,
+    });
+    return tide;
   }
 
   async update(tideId: string, userId: string, dto: UpdateTideDto) {

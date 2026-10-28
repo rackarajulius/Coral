@@ -23,10 +23,11 @@ import { TidesService } from './tides/tides.service';
 import { MarketplaceModule } from '../marketplace/marketplace.module';
 import { PeopleController } from './people.controller';
 import { PeopleFollowService } from './people-follow.service';
+import { MentionsController } from './mentions.controller';
 
 @Module({
   imports: [StorageModule, NotificationsModule, MarketplaceModule],
-  controllers: [PostsController, CommentsController, FeedController, SpacesController, ModerationController, PollsController, TidesController, PeopleController],
+  controllers: [PostsController, CommentsController, FeedController, SpacesController, ModerationController, PollsController, TidesController, PeopleController, MentionsController],
   providers: [PostsService, CommentsService, FeedService, SpacesService, SpaceSuggestionsService, CommunityIdentityService, ModerationService, CommunityMediaService, PollsService, GifsService, LinkPreviewService, TidesService, PeopleFollowService],
   exports: [PostsService, CommentsService, FeedService],
 })

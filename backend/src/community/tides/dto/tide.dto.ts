@@ -11,6 +11,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { MaxReadableLength } from '../../readable-length.validator';
 import { TideMode, TideRsvp } from '@prisma/client';
 
 /**
@@ -93,7 +94,7 @@ export class CreateTideDto {
   /** The words on that announcement. The tide's own details are not repeated. */
   @IsOptional()
   @IsString()
-  @MaxLength(5000)
+  @MaxReadableLength(5000)
   announcement?: string;
 }
 

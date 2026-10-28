@@ -102,10 +102,14 @@ const BUCKETS: BucketConfig[] = [
      * other viewer gets a black rectangle — and the uploader is the last
      * person who would notice. Nothing here transcodes, so the only honest
      * option is to refuse the format and say why.
+     *
+     * PDFs are document posts, read page by page in the feed; the server has
+     * opened each one and counted its pages before it gets here.
      */
     allowedMimeTypes: [
       'image/png', 'image/jpeg', 'image/webp', 'image/gif',
       'video/mp4', 'video/webm',
+      'application/pdf',
     ],
   },
   {

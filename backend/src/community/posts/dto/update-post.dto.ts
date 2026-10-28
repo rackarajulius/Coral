@@ -8,6 +8,7 @@ import {
   MaxLength,
   ValidateNested,
 } from 'class-validator';
+import { MaxReadableLength } from '../../readable-length.validator';
 import { Type } from 'class-transformer';
 import { CommentPolicy } from '@prisma/client';
 import { AnnouncementReferenceDto, CommunityPostPurpose, CommunityPostType } from './create-post.dto';
@@ -25,7 +26,7 @@ export class UpdatePostDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(5000)
+  @MaxReadableLength(5000)
   content?: string;
 
   @IsOptional()

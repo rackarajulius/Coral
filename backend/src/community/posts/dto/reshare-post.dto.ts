@@ -1,4 +1,5 @@
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsOptional, IsString } from 'class-validator';
+import { MaxReadableLength } from '../../readable-length.validator';
 
 export class ResharePostDto {
   /**
@@ -10,6 +11,6 @@ export class ResharePostDto {
    */
   @IsOptional()
   @IsString()
-  @MaxLength(5000)
+  @MaxReadableLength(5000)
   content?: string;
 }

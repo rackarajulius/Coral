@@ -1,8 +1,9 @@
-import { IsString, MaxLength } from 'class-validator';
+import { IsString } from 'class-validator';
+import { MaxReadableLength } from '../../readable-length.validator';
 
 export class UpdateCommentDto {
   @IsString()
-  @MaxLength(2000)
+  @MaxReadableLength(2000)
   content: string;
 }
 

@@ -141,15 +141,16 @@ export class ModerationService {
     }, WRITE_TRANSACTION);
 
     /**
-     * The text is kept and the pictures are not.
+     * The text is kept and the pictures are not, nor a shared document.
      *
      * A public image URL survives the post vanishing from every feed, so with
      * an abusive picture continued hosting is itself the harm. What was
      * decided and why stays in the moderation record; the bytes do not.
      * Restoring brings the post back without them, which is stated below.
      */
-    await this.media.deleteForUrls(post.mediaUrls);
-    return { id: postId, removed: true, mediaDeleted: post.mediaUrls.length };
+    const files = post.documentUrl ? [...post.mediaUrls, post.documentUrl] : post.mediaUrls;
+    await this.media.deleteForUrls(files);
+    return { id: postId, removed: true, mediaDeleted: files.length };
   }
 
   /**
@@ -164,7 +165,10 @@ export class ModerationService {
       await this.authorizedPost(tx, user.id, postId);
       await tx.post.update({
         where: { id: postId },
-        data: { removedAt: null, removedById: null, removalReason: null, mediaUrls: [] },
+        data: {
+          removedAt: null, removedById: null, removalReason: null, mediaUrls: [],
+          documentUrl: null, documentTitle: null, documentPages: null,
+        },
       });
     }, WRITE_TRANSACTION);
     return { id: postId, removed: false };
@@ -229,7 +233,7 @@ export class ModerationService {
     // Spaces after authorization but before the moderation decision commits.
     await tx.$queryRaw(Prisma.sql`SELECT id FROM posts WHERE id = ${postId} FOR UPDATE`);
     const scope = await this.moderationScope(tx, userId);
-    const post = await tx.post.findFirst({ where: { id: postId, ...(scope ?? {}) }, select: { id: true, mediaUrls: true } });
+    const post = await tx.post.findFirst({ where: { id: postId, ...(scope ?? {}) }, select: { id: true, mediaUrls: true, documentUrl: true } });
     if (!post) throw new NotFoundException('Post not found');
     return post;
   }

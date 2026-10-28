@@ -5,7 +5,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { CommunityIdentityService } from './identity.service';
 
 /** Accounts that are not followable, and whose follows do not count. */
-const HIDDEN_STATUSES: UserStatus[] = [UserStatus.INACTIVE, UserStatus.SUSPENDED, UserStatus.BANNED];
+export const HIDDEN_STATUSES: UserStatus[] = [UserStatus.INACTIVE, UserStatus.SUSPENDED, UserStatus.BANNED];
 
 /** The notification type the bell and the notifications page label "New follower". */
 export const FOLLOW_NOTIFICATION = 'follow';

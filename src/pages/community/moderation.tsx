@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import MarketplaceModeration from "@/components/marketplace/MarketplaceModeration";
 import MarketplaceRequestReports from "@/components/marketplace/MarketplaceRequestReports";
+import { plainText } from "@/lib/mentions";
 import {
   dismissReport,
   listReports,
@@ -172,7 +173,7 @@ function ReportCard({ report }: { report: ModerationReport }) {
           than on how it was described. */}
       {report.target ? (
         <blockquote className="mt-3 whitespace-pre-wrap rounded-xl bg-muted/50 p-3 text-sm">
-          {report.target.content || <span className="text-muted-foreground">(no text)</span>}
+          {plainText(report.target.content) || <span className="text-muted-foreground">(no text)</span>}
         </blockquote>
       ) : (
         <p className="mt-3 text-sm text-muted-foreground">

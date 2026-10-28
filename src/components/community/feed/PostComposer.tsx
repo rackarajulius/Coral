@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BarChart3, Building2, CalendarPlus, ChevronRight, Globe, ImagePlus, Loader2, MessageCircle, Search, Video, X,
+  BarChart3, Building2, CalendarPlus, ChevronRight, FileText, Globe, ImagePlus, Loader2, MessageCircle, Search, Video, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
@@ -22,10 +22,12 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
 import {
-  COMMENT_POLICY_LABELS, createPost, getAnnouncementOptions, getCompanyVoice, getGifStatus, listSpaces, uploadPostMedia,
-  type CommentPolicy, type MediaKind, type PostPurpose, type Space,
+  COMMENT_POLICY_LABELS, createPost, getAnnouncementOptions, getCompanyVoice, getGifStatus, listSpaces, uploadPostDocument, uploadPostMedia,
+  type CommentPolicy, type MediaKind, type PostPurpose, type Space, type UploadedDocument,
 } from "@/lib/api/community";
 import { GifPicker } from "./GifPicker";
+import { MentionField } from "./MentionField";
+import { toStored, type Mention } from "@/lib/mentions";
 import { postPurposeLabels } from "./CommunityLinkedCard";
 
 const MAX_LENGTH = 5000;
@@ -199,12 +201,19 @@ function ComposerDialog({
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [content, setContent] = useState("");
+  // People and companies picked from the "@" menu, turned into stored
+  // mentions only when the post is sent.
+  const [mentions, setMentions] = useState<Mention[]>([]);
   // Null is Anyone. Opened from a space, it is that space; otherwise
   // whatever this person posted to last time.
   const [target, setTarget] = useState<PickedSpace | null>(() =>
     spaceId ? { id: spaceId, name: spaceName ?? "" } : readLastAudience(user?.id),
   );
   const [media, setMedia] = useState<Attachment[]>([]);
+  // A PDF shared as the post, and what to call it. On its own: no pictures,
+  // video, poll or tide beside it.
+  const [attachedDoc, setAttachedDoc] = useState<UploadedDocument | null>(null);
+  const [docTitle, setDocTitle] = useState("");
   const [uploading, setUploading] = useState(false);
   const [poll, setPoll] = useState<string[] | null>(null);
   const [gifOpen, setGifOpen] = useState(false);
@@ -264,6 +273,7 @@ function ComposerDialog({
    */
   const photoRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLInputElement>(null);
+  const docRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
   // Hidden rather than shown-and-broken when no API key is configured.
@@ -295,19 +305,20 @@ function ComposerDialog({
         await createTide({
           ...tidePayload(tide),
           spaceId: target?.id,
-          announcement: content.trim() || undefined,
+          announcement: toStored(content.trim(), mentions) || undefined,
           ...(asCompany ? { asCompany: true } : {}),
         });
         return;
       }
       await createPost({
         spaceId: target?.id,
-        content: content.trim(),
+        content: toStored(content.trim(), mentions),
         mediaUrls: media.map((m) => m.url),
         postType: "TEXT",
         purpose,
         ...(reference ? { reference: { type: reference.type, id: reference.id } } : {}),
         ...(poll ? { poll: { options: poll.filter((o) => o.trim()) } } : {}),
+        ...(attachedDoc ? { document: { url: attachedDoc.url, title: docTitle.trim() } } : {}),
         ...(publishingAsCompany ? { asCompany: true, ...(publishingCompanyId ? { companyId: publishingCompanyId } : {}) } : {}),
         ...(commentPolicy !== "ANYONE" ? { commentPolicy } : {}),
       }, user?.supabaseId);
@@ -362,12 +373,30 @@ function ComposerDialog({
     }
   };
 
+  const pickDocument = async (file: File | undefined) => {
+    if (!file) return;
+    setUploading(true);
+    try {
+      const uploaded = await uploadPostDocument(file);
+      setAttachedDoc(uploaded);
+      setDocTitle(uploaded.title || "Document");
+    } catch (e) {
+      // Verbatim, as for pictures: the server says what was wrong with the file.
+      toast.error((e as Error).message);
+    } finally {
+      setUploading(false);
+      if (docRef.current) docRef.current.value = "";
+    }
+  };
+
   const name = user?.displayName?.trim() || "You";
   // A poll needs two real choices, so the button waits for them rather than
   // letting the server refuse a post someone thought they had finished.
   const pollReady = !poll || poll.filter((o) => o.trim()).length >= 2;
-  const canPost = !!content.trim() && pollReady && referenceReady && !uploading && !post.isPending;
-  const dirty = !!content.trim() || media.length > 0 || !!poll;
+  // A document can be the whole post, under its title.
+  const docReady = !attachedDoc || !!docTitle.trim();
+  const canPost = (!!content.trim() || !!attachedDoc) && docReady && pollReady && referenceReady && !uploading && !post.isPending;
+  const dirty = !!content.trim() || media.length > 0 || !!poll || !!attachedDoc;
 
   return (
     <Dialog
@@ -514,17 +543,20 @@ function ComposerDialog({
                 </div>
               )}
 
-              <textarea
-                ref={textRef}
+              <MentionField
+                multiline
+                fieldRef={textRef}
                 autoFocus
                 value={content}
-                onChange={(e) => setContent(e.target.value)}
+                onValueChange={setContent}
+                onMention={(m) => setMentions((all) => [...all, m])}
                 placeholder={
-                  tide ? "Say something about it (optional)" : "What have you been working on?"
+                  tide ? "Say something about it (optional)" : "What have you been working on? Type @ to mention someone"
                 }
                 maxLength={MAX_LENGTH}
                 rows={1}
-                className="mt-1 w-full resize-none border-0 bg-transparent p-0 text-sm outline-none placeholder:text-muted-foreground"
+                wrapperClassName="mt-1"
+                className="w-full resize-none border-0 bg-transparent p-0 text-sm outline-none placeholder:text-muted-foreground"
               />
 
               {tide && <TideFields value={tide} onChange={setTide} />}
@@ -557,6 +589,35 @@ function ComposerDialog({
                       </button>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {attachedDoc && (
+                <div className="mt-3 flex items-start gap-3 rounded-xl border border-border p-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                    <FileText className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <input
+                      value={docTitle}
+                      onChange={(e) => setDocTitle(e.target.value)}
+                      maxLength={150}
+                      placeholder="Give it a title"
+                      aria-label="Document title"
+                      className="w-full rounded-md border border-transparent bg-transparent px-1 py-0.5 text-sm font-medium outline-none hover:border-border focus:border-foreground/30"
+                    />
+                    <p className="px-1 text-xs text-muted-foreground">
+                      PDF · {attachedDoc.pages} {attachedDoc.pages === 1 ? "page" : "pages"} · read page by page in the feed
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAttachedDoc(null)}
+                    aria-label="Remove document"
+                    className="rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  >
+                    <X className="h-4 w-4" aria-hidden="true" />
+                  </button>
                 </div>
               )}
 
@@ -643,20 +704,34 @@ function ComposerDialog({
                   className="hidden"
                   onChange={(e) => void pickMedia(e.target.files)}
                 />
+                <input
+                  ref={docRef}
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  className="hidden"
+                  onChange={(e) => void pickDocument(e.target.files?.[0])}
+                />
 
                 <MediaButton
                   icon={ImagePlus}
                   label="Photo"
                   busy={uploading}
-                  disabled={uploading || media.length >= MAX_MEDIA || !!poll}
+                  disabled={uploading || media.length >= MAX_MEDIA || !!poll || !!attachedDoc}
                   onClick={() => photoRef.current?.click()}
                 />
                 <MediaButton
                   icon={Video}
                   label="Video"
                   busy={uploading}
-                  disabled={uploading || media.length >= MAX_MEDIA || !!poll}
+                  disabled={uploading || media.length >= MAX_MEDIA || !!poll || !!attachedDoc}
                   onClick={() => videoRef.current?.click()}
+                />
+                <MediaButton
+                  icon={FileText}
+                  label="Document"
+                  busy={uploading}
+                  disabled={uploading || media.length > 0 || !!poll || !!tide || !!attachedDoc}
+                  onClick={() => docRef.current?.click()}
                 />
 
                 {/* Media and a poll are alternatives, not companions: a card
@@ -668,7 +743,7 @@ function ComposerDialog({
                     icon={GifIcon}
                     label="GIF"
                     busy={false}
-                    disabled={uploading || media.length >= MAX_MEDIA || !!poll}
+                    disabled={uploading || media.length >= MAX_MEDIA || !!poll || !!attachedDoc}
                     onClick={() => setGifOpen(true)}
                   />
                 )}
@@ -676,7 +751,7 @@ function ComposerDialog({
                   icon={BarChart3}
                   label="Poll"
                   busy={false}
-                  disabled={media.length > 0 || !!tide}
+                  disabled={media.length > 0 || !!tide || !!attachedDoc}
                   onClick={() => setPoll(poll ? null : ["", ""])}
                 />
                 {/* A tide replaces the body rather than adding to it: the card
@@ -686,7 +761,7 @@ function ComposerDialog({
                   icon={CalendarPlus}
                   label="Tide"
                   busy={false}
-                  disabled={media.length > 0 || !!poll}
+                  disabled={media.length > 0 || !!poll || !!attachedDoc}
                   onClick={() => {
                     if (!tide && selectedCompanyId && selectedCompanyId !== companyVoice.data?.id) setAsCompany(false);
                     setSelectedCompanyId(""); setTide(tide ? null : emptyTide()); setPurpose("general"); setSelectedReference("");
@@ -702,7 +777,7 @@ function ComposerDialog({
                   QuickTime, which the server rejects, and finding that out
                   after a 30MB upload is the worst place to learn it. */}
               <p className="mt-1.5 text-[11px] text-muted-foreground">
-                MP4 or WebM, up to {MAX_VIDEO_SECONDS}s. iPhone videos need exporting as MP4.
+                MP4 or WebM, up to {MAX_VIDEO_SECONDS}s. iPhone videos need exporting as MP4. Documents: a PDF, up to 15MB.
               </p>
             </div>
           </div>

@@ -196,6 +196,13 @@ export interface CommunityPost {
   content: string;
   postType: PostType;
   mediaUrls: string[];
+  /**
+   * A PDF shared as the post, read page by page. All three are set together,
+   * or none; the page count was read from the file when it was uploaded.
+   */
+  documentUrl?: string | null;
+  documentTitle?: string | null;
+  documentPages?: number | null;
   hashtags: string[];
   isEdited: boolean;
   createdAt: string;
@@ -340,6 +347,13 @@ export interface ResharedPost {
   id: string;
   content: string;
   mediaUrls: string[];
+  /**
+   * A PDF shared as the post, read page by page. All three are set together,
+   * or none; the page count was read from the file when it was uploaded.
+   */
+  documentUrl?: string | null;
+  documentTitle?: string | null;
+  documentPages?: number | null;
   postType: PostType;
   createdAt: string;
   /** Set when a moderator removed it; the embed says so instead of showing it. */
@@ -373,6 +387,8 @@ export const createPost = (input: {
   hashtags?: string[];
   /** Turns the post into a poll; the content is the question. */
   poll?: { options: string[]; closesAt?: string };
+  /** A PDF from `uploadPostDocument`, shared as the post. On its own: no media or poll. */
+  document?: { url: string; title: string };
   /**
    * Publish in the company's name. A request only — the server decides
    * whether the caller may, and which company, and refuses rather than
@@ -459,6 +475,19 @@ export const setPersonFollow = (personId: string, follow: boolean) =>
     method: follow ? "POST" : "DELETE",
   }).then((r) => r.data);
 
+/* -------------------------------- mentions -------------------------------- */
+
+export interface MentionSuggestions {
+  /** People with a community page. Never the person asking. */
+  people: Array<{ id: string; name: string; avatarUrl: string | null }>;
+  /** Company pages, keyed by page id like `companyPath`. */
+  companies: Array<{ id: string; name: string; logoUrl: string | null }>;
+}
+
+/** Who the "@" menu offers for what was typed after the @. */
+export const suggestMentions = (q: string, signal?: AbortSignal) =>
+  req<{ data: MentionSuggestions }>(`/mentions?q=${encodeURIComponent(q)}`, { signal }).then((r) => r.data);
+
 /* ---------------------------------- polls --------------------------------- */
 
 export const votePoll = (pollId: string, optionId: string) =>
@@ -535,6 +564,34 @@ export async function uploadPostMedia(
   body.append("file", file);
 
   const res = await fetch(`${API_BASE_URL}/community/posts/media`, {
+    method: "POST",
+    headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+    body,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Upload failed");
+  }
+  return (await res.json()).data;
+}
+
+/** What the server tells us about an uploaded PDF. */
+export interface UploadedDocument {
+  url: string;
+  path: string;
+  /** Read from the file by the server. */
+  pages: number;
+  /** From the file's name; the writer can change it before posting. */
+  title: string;
+}
+
+/** Uploads one PDF to share as a document post. Up to 15MB and 300 pages. */
+export async function uploadPostDocument(file: File): Promise<UploadedDocument> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const body = new FormData();
+  body.append("file", file);
+
+  const res = await fetch(`${API_BASE_URL}/community/posts/documents`, {
     method: "POST",
     headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
     body,

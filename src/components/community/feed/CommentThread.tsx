@@ -11,6 +11,9 @@ import {
 import { IdentityLine } from "./IdentityLine";
 import { CommentListSkeleton } from "./skeletons";
 import { ReportDialog } from "./ReportDialog";
+import { MentionField } from "./MentionField";
+import { PostText } from "./PostText";
+import { toStored, type Mention } from "@/lib/mentions";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -197,11 +200,13 @@ function ReplyBox({
   const { openAuth } = useAuthModal();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState("");
+  const [mentions, setMentions] = useState<Mention[]>([]);
 
   const send = useMutation({
-    mutationFn: () => addComment(postId, draft.trim(), replyTo?.id),
+    mutationFn: () => addComment(postId, toStored(draft.trim(), mentions), replyTo?.id),
     onSuccess: () => {
       setDraft("");
+      setMentions([]);
       onCancelReply();
       void queryClient.invalidateQueries({ queryKey: ["community-comments", postId] });
       void queryClient.invalidateQueries({ queryKey: ["community-posts"] });
@@ -248,10 +253,11 @@ function ReplyBox({
           </AvatarFallback>
         </Avatar>
 
-        <input
-          ref={inputRef}
+        <MentionField
+          fieldRef={inputRef}
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onValueChange={setDraft}
+          onMention={(m) => setMentions((all) => [...all, m])}
           onKeyDown={(e) => {
             // isComposing: Enter that confirms an IME candidate is not a send.
             if (e.key === "Enter" && !e.nativeEvent.isComposing && ready && !send.isPending) send.mutate();
@@ -261,8 +267,10 @@ function ReplyBox({
             replyTo ? `Reply to ${authorName(replyTo.author)}…` : "Add a comment…"
           }
           aria-label={replyTo ? `Reply to ${authorName(replyTo.author)}` : "Add a comment"}
-          maxLength={5000}
-          className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          // The server's limit for a comment, counted as the words read.
+          maxLength={2000}
+          wrapperClassName="min-w-0 flex-1"
+          className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
         />
 
         {ready && (
@@ -363,7 +371,7 @@ function CommentRow({
             )}
           </p>
 
-          <p className="mt-0.5 whitespace-pre-wrap [overflow-wrap:anywhere] text-sm">{comment.content}</p>
+          <PostText text={comment.content} className="mt-0.5 leading-normal" />
 
           <div className="mt-1 flex items-center gap-3">
             {/* Only top level: the API returns one level of nesting, so a

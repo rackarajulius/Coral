@@ -12,6 +12,7 @@ import { CreateCommentDto } from './dto/create-comment.dto';
 import { ListCommentsQueryDto } from './dto/list-comments-query.dto';
 import { UpdateCommentDto } from './dto/update-comment.dto';
 import { assertMayComment } from '../comment-policy';
+import { announceMentions, plainText, resolveMentions } from '../mentions';
 
 /** First line or so of a comment, for a notification that has to fit one. */
 function excerpt(text: string, max = 120): string {
@@ -155,6 +156,8 @@ export class CommentsService {
       parentAuthorId = parent.authorId;
     }
 
+    const content = (await resolveMentions(this.prisma, dto.content)).trim();
+
     const result = await this.prisma.$transaction(async (tx) => {
       // Lock/update the live post first, matching hard post/comment deletion.
       // If moderation won the race after the read, create nothing and notify nobody.
@@ -182,7 +185,7 @@ export class CommentsService {
           postId,
           authorId: userId,
           parentId: dto.parentId,
-          content: dto.content.trim(),
+          content,
         },
         include: this.commentInclude(),
       });
@@ -201,7 +204,7 @@ export class CommentsService {
       postAuthorId: post.authorId,
       parentAuthorId,
       commenterId: userId,
-      comment: dto.content.trim(),
+      comment: content,
     });
 
     return result;
@@ -247,7 +250,7 @@ export class CommentsService {
         userId: input.parentAuthorId,
         type: 'community',
         title: `${who} replied to your comment`,
-        message: excerpt(input.comment),
+        message: excerpt(plainText(input.comment)),
         link,
       });
     }
@@ -259,10 +262,19 @@ export class CommentsService {
         type: 'community',
         title: `${who} commented on your post`,
         // The comment, not the post: the reader already knows what they wrote.
-        message: excerpt(input.comment),
+        message: excerpt(plainText(input.comment)),
         link,
       });
     }
+
+    // Anyone it names who has not just heard about it in one of the ways above.
+    await announceMentions(this.prisma, this.notifications, {
+      actorId: input.commenterId,
+      where: 'comment',
+      postId: input.postId,
+      content: input.comment,
+      alreadyTold: told,
+    });
   }
 
   async update(postId: string, commentId: string, currentUser: User, dto: UpdateCommentDto) {
@@ -272,6 +284,7 @@ export class CommentsService {
         id: true,
         postId: true,
         authorId: true,
+        content: true,
       },
     });
 
@@ -286,10 +299,19 @@ export class CommentsService {
     const updated = await this.prisma.postComment.update({
       where: { id: commentId },
       data: {
-        content: dto.content.trim(),
+        content: (await resolveMentions(this.prisma, dto.content)).trim(),
         isEdited: true,
       },
       include: this.commentInclude(),
+    });
+
+    // Only someone the edit newly names is news.
+    void announceMentions(this.prisma, this.notifications, {
+      actorId: currentUser.id,
+      where: 'comment',
+      postId,
+      content: updated.content,
+      previous: existing.content,
     });
 
     return {

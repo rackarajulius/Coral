@@ -1736,6 +1736,13 @@ model Post {
   linkedGigId     String? @map("linked_gig_id")
   linkedJobId     String? @map("linked_job_id")
   mediaUrls      String[]   @default([]) @map("media_urls")
+  /// A PDF shared as the post itself, read page by page in the feed. The
+  /// file is in the community bucket; its page count was read from the file
+  /// on upload, never taken from the writer. Kept apart from mediaUrls, which
+  /// are pictures and video and are drawn as such everywhere.
+  documentUrl    String?    @map("document_url")
+  documentTitle  String?    @map("document_title") @db.VarChar(150)
+  documentPages  Int?       @map("document_pages")
   hashtags       String[]   @default([])
   /// Frozen at posting time: title, description, image and site for the first
   /// link in the text. Stored rather than fetched on read so every reader and

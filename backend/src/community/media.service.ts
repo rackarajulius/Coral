@@ -2,6 +2,9 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { CronExpression } from '@nestjs/schedule';
 import { ExclusiveCron } from '../common/scheduling/exclusive-cron';
 import { randomUUID } from 'crypto';
+// pdf-parse is CommonJS, and this project compiles without esModuleInterop, so a
+// default import of it would be undefined at run time; this one is the function.
+import * as pdfParse from 'pdf-parse';
 import { PrismaService } from '../prisma/prisma.service';
 import { COMMUNITY_BUCKET, StorageService } from '../storage/storage.service';
 import { User } from '../common/types/user.types';
@@ -12,6 +15,20 @@ const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 /** Roughly a minute of 720p H.264. Longer than that nobody watches anyway. */
 const MAX_VIDEO_BYTES = 30 * 1024 * 1024;
+
+/** A long slide deck with pictures. Documents are read on phones, page by page. */
+const MAX_DOCUMENT_BYTES = 15 * 1024 * 1024;
+const MAX_DOCUMENT_PAGES = 300;
+
+/**
+ * Where an uploaded document is kept: the uploader's folder, and a name that
+ * carries the page count read from the file, `{uuid}-{pages}p.pdf`.
+ *
+ * Only the server writes to the bucket and it chooses every name, so a post
+ * that names such a file can be told its page count without the file being
+ * fetched and read again — and without taking the writer's word for it.
+ */
+const DOCUMENT_PATH = /^posts\/([0-9a-f-]{36})\/[0-9a-f-]{36}-(\d{1,4})p\.pdf$/i;
 
 /**
  * Accepted image formats, keyed by the bytes a file actually starts with.
@@ -150,6 +167,62 @@ export class CommunityMediaService {
   }
 
   /**
+   * A PDF to share as a post, read page by page in the feed.
+   *
+   * Checked like the pictures: by its own first bytes, never its name or
+   * declared type. Then opened, to count its pages — which also turns away
+   * files that only start like a PDF, and ones locked with a password nobody
+   * reading the feed would have. The suggested title is the file's name,
+   * which people choose; a PDF's own title field is more often "Microsoft
+   * Word - Document1".
+   */
+  async uploadDocument(
+    user: User,
+    file: Express.Multer.File,
+  ): Promise<{ url: string; path: string; pages: number; title: string }> {
+    if (!file?.buffer?.length) throw new BadRequestException('No file received.');
+    if (file.buffer.subarray(0, 5).toString('latin1') !== '%PDF-') {
+      throw new BadRequestException('Documents must be PDFs. Save or export it as a PDF and try again.');
+    }
+    if (file.size > MAX_DOCUMENT_BYTES) {
+      throw new BadRequestException('Documents must be 15MB or smaller.');
+    }
+
+    let pages = 0;
+    try {
+      // Only the count is needed, so no page's text is read. A plain byte
+      // array, not the Buffer: the PDF reader inside pdf-parse misreads a
+      // Buffer's cross-reference table and calls a sound file broken.
+      const bytes = new Uint8Array(file.buffer) as unknown as Buffer;
+      pages = (await pdfParse(bytes, { max: 1, pagerender: async () => '' })).numpages;
+    } catch {
+      throw new BadRequestException('That PDF could not be opened. If it has a password, remove it and try again.');
+    }
+    if (!pages) throw new BadRequestException('That PDF has no pages.');
+    if (pages > MAX_DOCUMENT_PAGES) {
+      throw new BadRequestException(`Documents can have up to ${MAX_DOCUMENT_PAGES} pages.`);
+    }
+
+    const path = `posts/${user.id}/${randomUUID()}-${pages}p.pdf`;
+    const url = await this.storage.uploadPublicFile(path, file.buffer, 'application/pdf', COMMUNITY_BUCKET);
+    return { url, path, pages, title: titleFromFileName(file.originalname) };
+  }
+
+  /**
+   * The page count a document URL carries, when it is a document this person
+   * uploaded here; null for anything else.
+   *
+   * Their own folder only: the hourly sweep keeps a file while its uploader's
+   * posts name it, so a post naming someone else's file would lose it.
+   */
+  documentPagesFor(url: string, authorId: string): number | null {
+    const path = this.isOwnMedia(url) ? this.pathFromUrl(url) : null;
+    const match = path ? DOCUMENT_PATH.exec(path) : null;
+    if (!match || match[1].toLowerCase() !== authorId.toLowerCase()) return null;
+    return Number(match[2]);
+  }
+
+  /**
    * An ISO-container file whose brand marks it as QuickTime.
    *
    * Only used to explain a refusal — nothing is accepted on this basis.
@@ -250,9 +323,9 @@ export class CommunityMediaService {
          */
         const referenced = await this.prisma.post.findMany({
           where: { authorId: folder.name },
-          select: { mediaUrls: true },
+          select: { mediaUrls: true, documentUrl: true },
         });
-        const inUse = new Set(referenced.flatMap((p) => p.mediaUrls));
+        const inUse = new Set(referenced.flatMap((p) => (p.documentUrl ? [...p.mediaUrls, p.documentUrl] : p.mediaUrls)));
 
         for (const path of paths) {
           // Stored URLs are absolute, so a path is in use when some stored URL
@@ -279,4 +352,16 @@ export class CommunityMediaService {
       return null;
     }
   }
+}
+
+/**
+ * A title from an uploaded file's name: without ".pdf", with underscores as
+ * spaces. Browsers send the name as UTF-8 and multer reads it as Latin-1, so
+ * it is turned back first, or "Résumé.pdf" arrives as "RÃ©sumÃ©".
+ */
+function titleFromFileName(name: string | undefined): string {
+  if (!name) return '';
+  const utf8 = Buffer.from(name, 'latin1').toString('utf8');
+  const readable = utf8.includes('\uFFFD') ? name : utf8;
+  return readable.replace(/\.pdf$/i, '').replace(/[_]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 150);
 }
