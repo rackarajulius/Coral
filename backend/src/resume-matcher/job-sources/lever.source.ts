@@ -7,6 +7,7 @@ import {
   SearchInput,
   cachedBoardJson,
   employmentTypeOf,
+  htmlToText,
   isoDate,
   parseBoards,
   searchBoards,
@@ -24,6 +25,21 @@ interface LeverPosting {
   salaryRange?: { min?: number; max?: number; currency?: string; interval?: string };
   hostedUrl?: string;
   descriptionPlain?: string;
+  /** The ad's sections ("What you bring", "The details"…), as HTML. */
+  lists?: { text?: string; content?: string }[];
+  additionalPlain?: string;
+}
+
+/**
+ * The whole ad. `descriptionPlain` is often just the company's opening, with
+ * the role, its requirements and pay in `lists`: Maple's (checked 2026-10-29)
+ * said nothing about the job itself.
+ */
+function leverDescription(p: LeverPosting): string {
+  const sections = (p.lists ?? [])
+    .map((l) => [l.text?.trim(), htmlToText(l.content ?? '')].filter(Boolean).join('\n'))
+    .filter(Boolean);
+  return [p.descriptionPlain?.trim(), ...sections, p.additionalPlain?.trim()].filter(Boolean).join('\n\n');
 }
 
 /**
@@ -70,7 +86,7 @@ export class LeverJobSource implements JobSource {
       title: p.text ?? 'Role',
       company,
       location: p.categories?.location?.trim() || '',
-      description: p.descriptionPlain ?? '',
+      description: leverDescription(p),
       url: p.hostedUrl,
       source: this.name,
       companyDomain: domain,

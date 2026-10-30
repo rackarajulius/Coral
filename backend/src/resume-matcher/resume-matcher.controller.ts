@@ -43,6 +43,16 @@ export class ResumeMatcherController {
     return { success: true, data: await this.service.run(user, dto, { visitorCountry }) };
   }
 
+  /**
+   * The AI's scores for a search `run` answered with `scoreLater`: send the
+   * same search, get it back re-ranked. Counts no further web search.
+   */
+  @Post('run/scores')
+  async scores(@CurrentUser() user: User, @Body() dto: RunMatchDto, @Req() req: Request) {
+    const visitorCountry = countryFromRequest(req) ?? undefined;
+    return { success: true, data: await this.service.score(user, dto, { visitorCountry }) };
+  }
+
   /** "Not interested": the matcher leaves this job out from now on. */
   @Post('dismissed')
   async dismiss(@CurrentUser() user: User, @Body() dto: DismissMatchDto) {

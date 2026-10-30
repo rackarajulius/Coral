@@ -1,4 +1,4 @@
-import { IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
 export class RunMatchDto {
   /** Optional role/keyword from the search bar. Omitted = match the stored profile. */
@@ -20,4 +20,13 @@ export class RunMatchDto {
   @IsOptional()
   @Matches(/^[A-Za-z]{2}$/)
   countryCode?: string;
+
+  /**
+   * Answer with the jobs as soon as they are found, ranked by keywords, and
+   * leave the AI's scores to `POST /resume-matcher/run/scores` with the same
+   * search. Not part of what makes two searches the same.
+   */
+  @IsOptional()
+  @IsBoolean()
+  scoreLater?: boolean;
 }

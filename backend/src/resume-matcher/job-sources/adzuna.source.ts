@@ -6,6 +6,7 @@ import {
   SearchInput,
   cleanCompanyName,
   employmentTypeOf,
+  ResultCache,
   fetchJson,
   formatPay,
   isoDate,
@@ -30,12 +31,20 @@ interface AdzunaResult {
 }
 
 /**
+ * Answers are kept an hour, as JSearch's are. Adzuna took 2.6–4s from the dev
+ * machine on every search, the same one included (measured 2026-10-30).
+ */
+const RESULTS_FOR_MS = 60 * 60_000;
+const MAX_CACHED_SEARCHES = 500;
+
+/**
  * Adzuna job-search API (Canada by default). Structured, ToS-friendly.
  * Disabled unless ADZUNA_APP_ID + ADZUNA_APP_KEY are configured.
  */
 @Injectable()
 export class AdzunaJobSource implements JobSource {
   readonly name = 'adzuna' as const;
+  private readonly results = new ResultCache<AdzunaResult[]>(RESULTS_FOR_MS, MAX_CACHED_SEARCHES);
 
   constructor(private readonly config: ConfigService) {}
 
@@ -89,10 +98,14 @@ export class AdzunaJobSource implements JobSource {
     });
     // "Toronto, ON" and "Toronto" both work as a place for Adzuna.
     if (location.trim()) params.set('where', location.trim());
-    const json = (await fetchJson(
-      `https://api.adzuna.com/v1/api/jobs/${country}/search/1?${params.toString()}`,
-    )) as { results?: AdzunaResult[] };
-    return json.results ?? [];
+    // Case and spacing don't make a different search.
+    const key = [country, what, location, limit].map((part) => String(part).toLowerCase().replace(/\s+/g, ' ').trim()).join('|');
+    return this.results.get(key, async () => {
+      const json = (await fetchJson(
+        `https://api.adzuna.com/v1/api/jobs/${country}/search/1?${params.toString()}`,
+      )) as { results?: AdzunaResult[] };
+      return json.results ?? [];
+    });
   }
 
   private toCandidate(r: AdzunaResult, i: number, currency: string): CandidateJob {
@@ -102,6 +115,8 @@ export class AdzunaJobSource implements JobSource {
       company: cleanCompanyName(r.company?.display_name ?? '') || 'Company',
       location: r.location?.display_name?.trim() || '',
       description: r.description ?? '',
+      // Adzuna's API gives the first 500 or so characters, never the whole ad.
+      excerpt: true,
       url: r.redirect_url,
       // Adzuna reports salaries in the searched country's money.
       salary: formatPay(r.salary_min, r.salary_max, currency),

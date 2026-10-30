@@ -200,17 +200,43 @@ export async function searchBoards(
   return out;
 }
 
-/** Decode common entities and strip tags from ATS HTML (e.g. Greenhouse content). */
-export function stripHtml(html: string): string {
-  return html
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
-    .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
+const ENTITIES: Record<string, string> = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'", nbsp: ' ' };
+
+function decodeEntities(text: string): string {
+  return text.replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z]+));/gi, (whole, dec, hex, name) => {
+    if (dec || hex) {
+      const code = dec ? Number(dec) : parseInt(hex, 16);
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+    }
+    return ENTITIES[(name as string).toLowerCase()] ?? whole;
+  });
+}
+
+/**
+ * ATS HTML as plain text that keeps its shape: paragraphs and headings on
+ * their own lines, list items as "• " lines. The job details drawer shows ads
+ * with it, and the AI's digest finds a requirements heading by its line.
+ *
+ * This used to collapse everything into one line, so a Greenhouse ad read as
+ * a single paragraph. Greenhouse sends its HTML entity-encoded
+ * (`&lt;p&gt;…`), so that is decoded first.
+ */
+export function htmlToText(html: string): string {
+  const markup = !/<[a-z]/i.test(html) && /&lt;[a-z]/i.test(html) ? decodeEntities(html) : html;
+  return decodeEntities(
+    markup
+      .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, '')
+      .replace(/<li\b[^>]*>/gi, '\n• ')
+      .replace(/<br\b[^>]*>/gi, '\n')
+      .replace(/<\/?(?:p|div|h[1-6]|ul|ol|li|tr|table|section|blockquote)\b[^>]*>/gi, '\n')
+      .replace(/<[^>]+>/g, ''),
+  )
+    .replace(/[ \t\u00a0]+/g, ' ')
+    .replace(/ *\n */g, '\n')
+    // "<li><p>text</p></li>" leaves the bullet on a line of its own.
+    .replace(/•\n+/g, '• ')
+    .replace(/\n+(?=• )/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
@@ -223,6 +249,8 @@ export interface CandidateJob {
   /** The job's country (ISO 3166, upper case), when the source states it rather than leaving it to `location`. */
   countryCode?: string;
   description: string; // used for scoring (may be truncated)
+  /** The source shares only the start of the ad (Adzuna), so `description` is not all of it. */
+  excerpt?: boolean;
   url?: string; // apply / detail link
   salary?: string;
   source: JobSourceName;
@@ -439,15 +467,82 @@ export class ResultCache<T> {
   }
 }
 
-/**
- * Every search read every configured board in full, descriptions included:
- * over a megabyte for some employers, eight boards per source, on each
- * search. Board listings change over days, so ten minutes old is current
- * enough.
- */
-const boardCache = new ResultCache<unknown>(10 * 60_000, 64);
+/** How long a search waits for a board it has no copy of. */
+const BOARD_WAIT_MS = 6000;
+/** How long a board's download may take; it carries on after the search stops waiting. */
+const BOARD_DOWNLOAD_TIMEOUT_MS = 45_000;
+/** Board listings change over days, so a copy this old is used as it is. */
+const BOARD_FRESH_MS = 10 * 60_000;
+/** After a failed download with no copy to fall back on, searches skip the board this long. */
+const BOARD_RETRY_MS = 2 * 60_000;
+const MAX_BOARD_COPIES = 64;
 
-/** fetchJson for public job boards, kept for ten minutes. */
-export function cachedBoardJson(url: string, timeoutMs = 8000): Promise<unknown> {
-  return boardCache.get(url, () => fetchJson(url, { timeoutMs }));
+interface BoardCopy {
+  json?: unknown;
+  readAt: number;
+  download?: Promise<unknown>;
+  failure?: { at: number; error: unknown };
+}
+
+const boardCopies = new Map<string, BoardCopy>();
+
+/** `work`, or a failure saying so once `ms` pass; `work` itself carries on. */
+function within<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_, fail) => (timer = setTimeout(() => fail(new Error(message)), ms)));
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+}
+
+function download(url: string, copy: BoardCopy): void {
+  if (copy.download) return;
+  copy.download = fetchJson(url, { timeoutMs: BOARD_DOWNLOAD_TIMEOUT_MS })
+    .then(
+      (json) => {
+        Object.assign(copy, { json, readAt: Date.now(), failure: undefined });
+        return json;
+      },
+      (error: unknown) => {
+        copy.failure = { at: Date.now(), error };
+        throw error;
+      },
+    )
+    .finally(() => (copy.download = undefined));
+  // The search that started it may have stopped waiting.
+  copy.download.catch(() => undefined);
+}
+
+/**
+ * A public job board's JSON, as a search reads it.
+ *
+ * Downloads used to be cut off at 8 seconds, and a failure wasn't kept. From
+ * the dev machine (2026-10-30) Magnet Forensics' 900 KB board took 8.9s and
+ * Maple's over 20s, so both failed on every search, and every search waited
+ * the full 8 seconds for nothing. Now a search waits a few seconds at most for
+ * a board it has never read; the download carries on and the next search has
+ * it. A board read before is used at once, and refreshed behind the search
+ * once it is ten minutes old.
+ */
+export function cachedBoardJson(url: string): Promise<unknown> {
+  let copy = boardCopies.get(url);
+  if (!copy) {
+    copy = { readAt: 0 };
+    boardCopies.set(url, copy);
+    if (boardCopies.size > MAX_BOARD_COPIES) boardCopies.delete(boardCopies.keys().next().value as string);
+  }
+
+  if (copy.json !== undefined) {
+    if (Date.now() - copy.readAt >= BOARD_FRESH_MS) download(url, copy);
+    return Promise.resolve(copy.json);
+  }
+  // A board that is down, or gone, isn't waited on again by every search.
+  if (copy.failure && !copy.download && Date.now() - copy.failure.at < BOARD_RETRY_MS) {
+    return Promise.reject(copy.failure.error);
+  }
+  download(url, copy);
+  return within(copy.download!, BOARD_WAIT_MS, `still downloading after ${BOARD_WAIT_MS / 1000}s`);
+}
+
+/** Forgets every board read, so each test starts with none. */
+export function clearBoardCopies(): void {
+  boardCopies.clear();
 }

@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { User } from '../../../src/common/types/user.types';
 import { PrismaService } from '../../../src/prisma/prisma.service';
@@ -39,31 +39,38 @@ describe('ResumeMatcherService', () => {
   const sources = (['platform', 'adzuna', 'jsearch', 'greenhouse', 'lever', 'ashby'] as const).map((name) => ({
     name, isEnabled: jest.fn(), search: jest.fn(),
   }));
-  const service = new ResumeMatcherService(
-    { scoreJobMatches } as unknown as AiService,
-    { jobSeekerProfile: { findUnique: findProfile }, dismissedMatch: dismissed } as unknown as PrismaService,
-    new ConfigService(),
-    { status, isEnforced, record, tierOf } as unknown as SeekerEntitlementsService,
-    sources[0] as unknown as PlatformJobSource,
-    sources[1] as unknown as AdzunaJobSource,
-    sources[2] as unknown as JSearchJobSource,
-    sources[3] as unknown as GreenhouseJobSource,
-    sources[4] as unknown as LeverJobSource,
-    sources[5] as unknown as AshbyJobSource,
-    { prefetch, logoFor } as unknown as CompanyLogoService,
-    { countryOfText, countryCodeOf, readPlace, currencyOf } as unknown as CitiesService,
-    { localTitle } as unknown as RoleTranslationService,
-  );
+  // New for each test: it keeps finished searches and AI pauses.
+  const build = () =>
+    new ResumeMatcherService(
+      { scoreJobMatches } as unknown as AiService,
+      { jobSeekerProfile: { findUnique: findProfile }, dismissedMatch: dismissed } as unknown as PrismaService,
+      new ConfigService(),
+      { status, isEnforced, record, tierOf } as unknown as SeekerEntitlementsService,
+      sources[0] as unknown as PlatformJobSource,
+      sources[1] as unknown as AdzunaJobSource,
+      sources[2] as unknown as JSearchJobSource,
+      sources[3] as unknown as GreenhouseJobSource,
+      sources[4] as unknown as LeverJobSource,
+      sources[5] as unknown as AshbyJobSource,
+      { prefetch, logoFor } as unknown as CompanyLogoService,
+      { countryOfText, countryCodeOf, readPlace, currencyOf } as unknown as CitiesService,
+      { localTitle } as unknown as RoleTranslationService,
+    );
+  let service = build();
   const job = (source: JobSourceName, index = 0): CandidateJob => ({
     id: `${source}:${index}`, title: `${source} Engineer ${index}`, company: 'Acme',
     location: 'Kampala', description: 'TypeScript and PostgreSQL services.', source,
   });
   const candidates = (): CandidateJob[] => scoreJobMatches.mock.calls[0][1];
 
-  beforeAll(() => jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined));
+  beforeAll(() => {
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+  });
   afterAll(() => jest.restoreAllMocks());
   beforeEach(() => {
     jest.resetAllMocks();
+    service = build();
     findProfile.mockResolvedValue(profile);
     dismissed.findMany.mockResolvedValue([]);
     scoreJobMatches.mockImplementation(async (_profile: ParsedResume, jobs: CandidateJob[]) =>
@@ -89,7 +96,7 @@ describe('ResumeMatcherService', () => {
       hasProfile: false, query: 'engineer', matches: [], scope: 'platform', webBlockedReason: null,
       searchedSources: [], unavailableSources: [],
     });
-    expect(status).not.toHaveBeenCalled();
+    // The plan is read alongside the profile, but no use is counted.
     expect(scoreJobMatches).not.toHaveBeenCalled();
     expect(record).not.toHaveBeenCalled();
     for (const source of sources) expect(source.search).not.toHaveBeenCalled();
@@ -411,6 +418,198 @@ describe('ResumeMatcherService', () => {
       );
       const result = await service.run(user, {});
       expect(result.matches.map((m) => [m.id, m.matchScore])).toEqual([['jsearch:0', 88], ['adzuna:0', 80]]);
+    });
+  });
+
+  describe('a search made again', () => {
+    afterEach(() => jest.spyOn(Date, 'now').mockRestore());
+
+    it('shows the kept answer at once, without searching or counting a web search', async () => {
+      sources[2].search.mockResolvedValue([job('jsearch'), job('jsearch', 1)]);
+      const first = await service.run(user, { query: 'Engineer' });
+
+      dismissed.findMany.mockResolvedValue([{ jobId: 'jsearch:1', title: 'x', company: 'y' }]);
+      const again = await service.run(user, { query: ' Engineer ' });
+
+      expect(sources[2].search).toHaveBeenCalledTimes(1);
+      expect(scoreJobMatches).toHaveBeenCalledTimes(1);
+      expect(record).toHaveBeenCalledTimes(1);
+      // A job dismissed since is left out.
+      expect(again.matches.map((m) => m.id)).toEqual(first.matches.map((m) => m.id).filter((id) => id !== 'jsearch:1'));
+    });
+
+    it('searches again for another role, place or profile', async () => {
+      sources[2].search.mockResolvedValue([job('jsearch')]);
+      await service.run(user, { query: 'Engineer' });
+      await service.run(user, { query: 'Designer' });
+      await service.run(user, { query: 'Engineer', location: '' });
+      findProfile.mockResolvedValue({ ...profile, skills: [...profile.skills, 'React'] });
+      await service.run(user, { query: 'Engineer' });
+      expect(sources[2].search).toHaveBeenCalledTimes(4);
+    });
+
+    it('searches again when a source could not be reached, or once fifteen minutes pass', async () => {
+      const now = jest.spyOn(Date, 'now');
+      now.mockReturnValue(1_000_000);
+      sources[2].search.mockRejectedValueOnce(new Error('down')).mockResolvedValue([job('jsearch')]);
+      await service.run(user, {});
+      await service.run(user, {});
+      await service.run(user, {});
+      expect(sources[2].search).toHaveBeenCalledTimes(2);
+
+      now.mockReturnValue(1_000_000 + 15 * 60_000);
+      await service.run(user, {});
+      expect(sources[2].search).toHaveBeenCalledTimes(3);
+    });
+
+    it('brings a job back on reload once its dismissal is undone', async () => {
+      dismissed.findMany.mockResolvedValue([{ jobId: 'jsearch:1', title: 'x', company: 'y' }]);
+      sources[2].search.mockResolvedValue([job('jsearch'), job('jsearch', 1)]);
+      await service.run(user, {});
+
+      await service.undismiss(user, 'jsearch:1');
+      dismissed.findMany.mockResolvedValue([]);
+      const again = await service.run(user, {});
+      expect(again.matches.map((m) => m.id)).toContain('jsearch:1');
+    });
+  });
+
+  describe('when the AI is out of quota', () => {
+    afterEach(() => jest.spyOn(Date, 'now').mockRestore());
+
+    it('scores by keywords for five minutes rather than asking on every search', async () => {
+      const now = jest.spyOn(Date, 'now');
+      now.mockReturnValue(1_000_000);
+      sources[0].search.mockResolvedValue([job('platform')]);
+      scoreJobMatches.mockRejectedValue(new ServiceUnavailableException('The AI service is temporarily unavailable.'));
+
+      await service.run(user, { query: 'Engineer' });
+      const next = await service.run(user, { query: 'Designer' });
+      expect(scoreJobMatches).toHaveBeenCalledTimes(1);
+      expect(next.matches[0].scoringMode).toBe('heuristic');
+
+      now.mockReturnValue(1_000_000 + 5 * 60_000);
+      await service.run(user, { query: 'Tester' });
+      expect(scoreJobMatches).toHaveBeenCalledTimes(2);
+    });
+
+    it('asks again at once after a failure of its own, such as an answer that did not parse', async () => {
+      sources[0].search.mockResolvedValue([job('platform')]);
+      scoreJobMatches.mockRejectedValueOnce(new Error('Unexpected token'));
+      await service.run(user, { query: 'Engineer' });
+      const next = await service.run(user, { query: 'Designer' });
+      expect(scoreJobMatches).toHaveBeenCalledTimes(2);
+      expect(next.matches[0].scoringMode).toBe('ai');
+    });
+  });
+
+  describe('jobs first, AI scores after (scoreLater)', () => {
+    afterEach(() => jest.spyOn(Date, 'now').mockRestore());
+
+    const later = { query: 'Engineer', scoreLater: true };
+    const aiScores = (byId: Record<string, number>) =>
+      scoreJobMatches.mockImplementation(async (_p: ParsedResume, jobs: CandidateJob[]) =>
+        jobs.map(({ id }) => ({ id, score: byId[id] ?? 50, reason: `Scored ${id}.` })),
+      );
+
+    it('sends the jobs ranked by keywords, then re-ranks them by the AI without searching again', async () => {
+      sources[2].search.mockResolvedValue([
+        { ...job('jsearch'), description: 'Nothing in common.' },
+        { ...job('jsearch', 1), description: 'TypeScript and PostgreSQL.' },
+      ]);
+      aiScores({ 'jsearch:0': 75, 'jsearch:1': 40 });
+
+      const quick = await service.run(user, later);
+      expect(scoreJobMatches).not.toHaveBeenCalled();
+      expect(quick.matches.map((m) => [m.id, m.scoringMode])).toEqual([['jsearch:1', 'pending'], ['jsearch:0', 'pending']]);
+
+      const scored = await service.score(user, later);
+      expect(scored.matches.map((m) => [m.id, m.matchScore, m.scoringMode])).toEqual([
+        ['jsearch:0', 75, 'ai'],
+        ['jsearch:1', 40, 'ai'],
+      ]);
+      expect(sources[2].search).toHaveBeenCalledTimes(1);
+      expect(record).toHaveBeenCalledTimes(1);
+    });
+
+    it('scores once for requests that arrive together, and keeps the scored search for reloads', async () => {
+      sources[2].search.mockResolvedValue([job('jsearch')]);
+      await service.run(user, later);
+      await Promise.all([service.score(user, later), service.score(user, later)]);
+      expect(scoreJobMatches).toHaveBeenCalledTimes(1);
+
+      const reload = await service.run(user, later);
+      expect(reload.matches[0].scoringMode).toBe('ai');
+      expect(sources[2].search).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows a reload the jobs while their scores are still to come', async () => {
+      sources[2].search.mockResolvedValue([job('jsearch')]);
+      await service.run(user, later);
+      const reload = await service.run(user, later);
+      expect(reload.matches[0].scoringMode).toBe('pending');
+      expect(sources[2].search).toHaveBeenCalledTimes(1);
+    });
+
+    it('searches again and scores as it goes when this server has no such search', async () => {
+      sources[2].search.mockResolvedValue([job('jsearch')]);
+      const scored = await service.score(user, later);
+      expect(sources[2].search).toHaveBeenCalledTimes(1);
+      expect(scored.matches[0].scoringMode).toBe('ai');
+    });
+
+    it('answers with keyword scores at once while the AI is paused', async () => {
+      sources[2].search.mockResolvedValue([job('jsearch')]);
+      scoreJobMatches.mockRejectedValue(new ServiceUnavailableException('The AI service is temporarily unavailable.'));
+      await service.run(user, { query: 'Designer' });
+
+      const quick = await service.run(user, later);
+      expect(quick.matches[0].scoringMode).toBe('heuristic');
+      expect(scoreJobMatches).toHaveBeenCalledTimes(1);
+    });
+
+    it('scores a search missing a source, but searches again on reload', async () => {
+      sources[1].search.mockRejectedValue(new Error('down'));
+      sources[2].search.mockResolvedValue([job('jsearch')]);
+      await service.run(user, later);
+      const scored = await service.score(user, later);
+      expect(scored.matches[0].scoringMode).toBe('ai');
+      expect(sources[2].search).toHaveBeenCalledTimes(1);
+
+      await service.run(user, later);
+      expect(sources[2].search).toHaveBeenCalledTimes(2);
+    });
+
+    it('brings logos that were still loading with the scores', async () => {
+      sources[2].search.mockResolvedValue([{ ...job('jsearch'), companyDomain: 'acme.com' }]);
+      const quick = await service.run(user, later);
+      expect(quick.matches[0].logoUrl).toBeUndefined();
+
+      logoFor.mockReturnValue('https://cdn.example/acme.png');
+      const scored = await service.score(user, later);
+      expect(scored.matches[0].logoUrl).toBe('https://cdn.example/acme.png');
+    });
+  });
+
+  describe('the ad, for the job details drawer', () => {
+    it('returns the whole ad, and says when a source shared only its start', async () => {
+      const ad = `About the role\n${'Build things people use. '.repeat(100)}`;
+      sources[1].search.mockResolvedValue([{ ...job('adzuna'), description: 'Senior Frontend Engineer…', excerpt: true }]);
+      sources[2].search.mockResolvedValue([{ ...job('jsearch'), description: ad }]);
+      const { matches } = await service.run(user, {});
+      const byId = (id: string) => matches.find((m) => m.id === id);
+
+      expect(byId('jsearch:0')).toMatchObject({ description: ad.trim() });
+      expect(byId('jsearch:0')).not.toHaveProperty('descriptionPartial');
+      expect(byId('adzuna:0')).toMatchObject({ descriptionPartial: true });
+    });
+
+    it('cuts a very long ad at a word, and says so', async () => {
+      sources[2].search.mockResolvedValue([{ ...job('jsearch'), description: 'word '.repeat(4000) }]);
+      const [match] = (await service.run(user, {})).matches;
+      expect(match.description!.length).toBeLessThanOrEqual(10_000);
+      expect(match.description!.endsWith('word')).toBe(true);
+      expect(match.descriptionPartial).toBe(true);
     });
   });
 

@@ -9,7 +9,7 @@ import {
   parseBoards,
   isoDate,
   searchBoards,
-  stripHtml,
+  htmlToText,
   workplaceFromText,
 } from './types';
 
@@ -66,7 +66,7 @@ export class GreenhouseJobSource implements JobSource {
       title: j.title ?? 'Role',
       company,
       location: j.location?.name?.trim() || '',
-      description: stripHtml(j.content ?? ''),
+      description: htmlToText(j.content ?? ''),
       url: j.absolute_url,
       source: this.name,
       companyDomain: domain,

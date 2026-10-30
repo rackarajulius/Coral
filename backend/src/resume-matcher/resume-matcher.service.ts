@@ -1,9 +1,10 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { createHash } from 'crypto';
+import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AiService, ParsedResume } from '../services/ai/ai.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { isPremiumUser, isPremiumEnforced } from '../auth/guards/premium.guard';
-import { SeekerEntitlementsService } from '../seeker-entitlements/seeker-entitlements.service';
+import { MetricStatus, SeekerEntitlementsService } from '../seeker-entitlements/seeker-entitlements.service';
 import { User } from '../common/types/user.types';
 import { RunMatchDto } from './dto/run-match.dto';
 import { AssistDto } from './dto/assist.dto';
@@ -24,7 +25,7 @@ import {
   YearlyPay,
   normalizeName,
 } from './job-sources/types';
-import { CompanyLogoService } from './company-logos.service';
+import { CompanyLogoService, LogoSubject } from './company-logos.service';
 import { CitiesService } from '../locations/cities.service';
 import { RoleTranslationService } from './role-translation.service';
 import { jobAdLanguage, languageName } from './job-ad-language';
@@ -50,10 +51,54 @@ const BACKGROUND_LOGO_WAIT_MS = 5000;
  * date) have the whole set to narrow rather than only the top 20.
  */
 const MAX_TO_SCORE = 30;
+/**
+ * How much of each ad is returned. The job details drawer shows it, so it is
+ * the whole ad for nearly every listing; a longer one says where the rest is.
+ */
+const DESCRIPTION_MAX_CHARS = 10_000;
 /** Dismissed matches remembered per person, newest first. */
 const MAX_DISMISSED = 1000;
 /** How long a search will wait past scoring for logos still loading. */
 const LOGO_GRACE_MS = 1500;
+/**
+ * The same, for a search that sends its jobs before the AI scores them: the
+ * jobs shouldn't wait on pictures, and logos still loading come with the scores.
+ */
+const QUICK_LOGO_GRACE_MS = 500;
+/**
+ * After the AI can't score, searches score by keywords for this long rather
+ * than ask again. With both providers out of quota, each search spent 3.6s
+ * hearing so before falling back (measured 2026-10-30).
+ */
+const AI_PAUSE_MS = 5 * 60_000;
+/**
+ * How long a finished search is kept, so reloading the page or coming back to
+ * it shows the same jobs at once. A search took 13–17s from the dev machine
+ * (2026-10-30), and job listings don't change that fast.
+ */
+const RUN_FRESH_MS = 15 * 60_000;
+/** About 190 KB each, with the whole ads. */
+const MAX_KEPT_RUNS = 50;
+
+const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+
+/** The answer for someone with no profile to match on yet. */
+function noProfile(dto: RunMatchDto): MatchRun {
+  return {
+    hasProfile: false,
+    query: (dto.query || '').trim(),
+    matches: [],
+    scope: 'platform',
+    webBlockedReason: null,
+    searchedSources: [],
+    unavailableSources: [],
+  };
+}
+
+/** A kept search as the person sees it now: without jobs they have dismissed since. */
+function shown(run: MatchRun, notWanted: (job: Pick<CandidateJob, 'id' | 'title' | 'company'>) => boolean): MatchRun {
+  return { ...run, matches: run.matches.filter((m) => !notWanted(m)) };
+}
 
 /**
  * Where a listing was published, and whether that is the employer's own site:
@@ -96,11 +141,18 @@ export interface ResumeMatch {
   location: string;
   source: CandidateJob['source'];
   matchScore: number;
-  scoringMode: 'ai' | 'heuristic';
+  /**
+   * `pending`: the AI's score is still to come (`scoreLater`), and
+   * `matchScore` is the keyword score until it does.
+   */
+  scoringMode: 'ai' | 'heuristic' | 'pending';
   reason?: string;
   url?: string;
   salary?: string;
-  description?: string; // truncated — powers cover-letter / tailoring
+  /** The ad, up to DESCRIPTION_MAX_CHARS. Shown in the job details drawer and sent to cover letters and tailoring. */
+  description?: string;
+  /** `description` is not the whole ad: the source shares only its start, or it was cut for length. */
+  descriptionPartial?: boolean;
   /** The employer's logo, when there is a real one. The card shows a letter otherwise. */
   logoUrl?: string;
   /**
@@ -116,6 +168,45 @@ export interface ResumeMatch {
   yearlyPay?: YearlyPay;
 }
 
+/** A search's answer, as the page reads it. */
+export interface MatchRun {
+  /** False when the seeker hasn't a profile to match on yet. */
+  hasProfile: boolean;
+  query: string;
+  location?: string;
+  countryCode?: string;
+  homeCountryCode?: string;
+  localQuery?: string;
+  localLanguage?: string;
+  matches: ResumeMatch[];
+  scope: 'platform' | 'web';
+  webBlockedReason: MetricStatus['reason'];
+  searchedSources: JobSourceName[];
+  unavailableSources: JobSourceName[];
+}
+
+interface KeptRun {
+  at: number;
+  freshMs: number;
+  run: MatchRun;
+  /**
+   * Every source answered. A search missing one isn't shown again on reload,
+   * so reloading tries that source again; it is kept only for its scores.
+   */
+  complete: boolean;
+  /** The AI scoring a search left for later (`scoreLater`). */
+  pending?: PendingScoring;
+}
+
+interface PendingScoring {
+  profile: ParsedResume;
+  candidates: CandidateJob[];
+  /** Logos still loading when the jobs were sent; they come with the scores. */
+  logoSubjects: Map<string, LogoSubject>;
+  /** The scoring under way, shared by requests that arrive together. */
+  scoring?: Promise<MatchRun>;
+}
+
 interface Candidate {
   parsed: ParsedResume;
   currentTitle: string;
@@ -127,6 +218,10 @@ interface Candidate {
 export class ResumeMatcherService {
   private readonly logger = new Logger(ResumeMatcherService.name);
   private readonly sources: JobSource[];
+  /** Finished searches, by `runKey`; in this server's memory. */
+  private readonly runs = new Map<string, KeptRun>();
+  /** Until when searches skip AI scoring after it failed (AI_PAUSE_MS). */
+  private aiPausedUntil = 0;
 
   constructor(
     private readonly ai: AiService,
@@ -155,19 +250,28 @@ export class ResumeMatcherService {
    * Matches the signed-in seeker's stored profile (from onboarding) to jobs.
    * `visitorCountry` is where the request came from, when the CDN says: the
    * last way of knowing which country to search.
+   *
+   * With `scoreLater`, the jobs are sent as soon as they are found, ranked by
+   * keywords, and `score` brings the AI's scores after. The AI took about 7s
+   * of a search when it worked; the page now shows the jobs without it.
    */
-  async run(user: User, dto: RunMatchDto, context: { visitorCountry?: string } = {}) {
-    const candidate = await this.loadCandidate(user);
-    if (!candidate) {
-      return {
-        hasProfile: false,
-        query: (dto.query || '').trim(),
-        matches: [] as ResumeMatch[],
-        scope: 'platform' as const,
-        webBlockedReason: null,
-        searchedSources: [] as JobSourceName[],
-        unavailableSources: [] as JobSourceName[],
-      };
+  async run(user: User, dto: RunMatchDto, context: { visitorCountry?: string } = {}): Promise<MatchRun> {
+    const startedAt = Date.now();
+    const asked = await this.prepare(user, dto, context);
+    if (!asked) return noProfile(dto);
+    const { candidate, web, webAllowed, notWanted, runKey } = asked;
+
+    // The same search, from the same profile, a moment ago: reloading the
+    // page shows it again rather than searching again. It costs no web search
+    // from the allowance, as none is made. Jobs dismissed since stay hidden.
+    const kept = this.keptRun(runKey);
+    if (kept?.complete) {
+      this.logger.log(
+        `Matched ${kept.run.matches.length} in ${secs(Date.now() - startedAt)}, kept from ${secs(Date.now() - kept.at)} ago`,
+      );
+      // Someone not asking to score later gets the scores now.
+      const run = kept.pending && !dto.scoreLater ? await this.finishScoring(runKey, kept) : kept.run;
+      return shown(run, notWanted);
     }
 
     const query = this.buildQuery(candidate, dto.query);
@@ -176,38 +280,37 @@ export class ResumeMatcherService {
     const { search, language } = await this.planSearch(query, location, dto.countryCode, homeCountryCode);
     const { countryCode, localQuery } = search;
 
-    /**
-     * Platform jobs for everyone; the web for Premium.
-     *
-     * Free users used to be refused the matcher outright. Now they get what
-     * the free tier promises — jobs posted here, which cost no outside data —
-     * and web sources join only when the allowance covers them. While
-     * enforcement is off that is everyone, and the use is still counted, so
-     * the numbers are real before anyone is charged.
-     */
-    const web = await this.entitlements.status(user, 'matcher.web');
-    const webAllowed = !web.enforced || web.allowed;
     const enabled = this.sources.filter(
       (s) => s.isEnabled() && (s.name === 'platform' || webAllowed),
     );
     const usedWeb = enabled.some((s) => s.name !== 'platform');
 
-    const settled = await Promise.allSettled(enabled.map((s) => s.search(search)));
+    const searchedAt = Date.now();
+    const sourceMs: number[] = [];
+    const settled = await Promise.allSettled(
+      enabled.map((s, i) => {
+        const began = Date.now();
+        return s.search(search).finally(() => (sourceMs[i] = Date.now() - began));
+      }),
+    );
     const results = settled.map((r, i) => {
       if (r.status === 'fulfilled') return r.value;
       this.logger.warn(`Source ${enabled[i].name} failed: ${r.reason}`);
       return [];
     });
-    const notWanted = await this.dismissedFilter(user.id);
     const candidates = this.selectCandidates(
       results.map((jobs) => jobs.filter((j) => !notWanted(j) && this.inCountry(j, countryCode))),
     );
     const hasWebResults = results.some((jobs, i) => enabled[i].name !== 'platform' && jobs.length > 0);
+    // Counted while the jobs are scored, rather than after: the web was searched either way.
+    const counted = hasWebResults ? this.entitlements.record(user.id, 'matcher.web') : Promise.resolve();
+    // Not when the AI is paused: keyword scores are the answer then, and there is nothing to wait for.
+    const scoreLater = !!dto.scoreLater && candidates.length > 0 && Date.now() >= this.aiPausedUntil;
 
     // Logos are looked up while the jobs are scored, which usually takes
     // longer. Whatever is ready when scoring ends, after a short grace, is
     // shown; the rest is cached for the next search.
-    const subjects = new Map(
+    const logoSubjects = new Map(
       candidates
         .filter((c) => !c.logoUrl)
         .map((c) => [
@@ -215,17 +318,25 @@ export class ResumeMatcherService {
           { domain: c.companyDomain, company: c.company, imageUrl: c.logoImageUrl, byName: c.source !== 'platform' },
         ]),
     );
-    const logosLoaded = this.logos.prefetch([...subjects.values()]);
-    const ranked = await this.scoreAndRank(candidate.parsed, candidates);
-    await settleWithin(logosLoaded, LOGO_GRACE_MS);
-    const matches = ranked.map((m) => {
-      const subject = subjects.get(m.id);
-      const logoUrl = m.logoUrl ?? (subject && this.logos.logoFor(subject));
-      return logoUrl ? { ...m, logoUrl } : m;
-    });
-    if (hasWebResults) await this.entitlements.record(user.id, 'matcher.web');
+    const logosLoaded = this.logos.prefetch([...logoSubjects.values()]);
+    const scoringAt = Date.now();
+    const ranked = scoreLater
+      ? this.rank(candidate.parsed, candidates, undefined, 'pending')
+      : await this.scoreAndRank(candidate.parsed, candidates);
+    const scoredAt = Date.now();
+    await Promise.all([settleWithin(logosLoaded, scoreLater ? QUICK_LOGO_GRACE_MS : LOGO_GRACE_MS), counted]);
+    const matches = this.withLogos(ranked, logoSubjects);
 
-    return {
+    // Where a search's time goes, so a slow one can be pinned on its cause.
+    const aiScored = ranked.some((m) => m.scoringMode === 'ai');
+    const scoring = scoreLater ? 'later' : aiScored ? 'AI' : 'keywords';
+    this.logger.log(
+      `Matched ${matches.length} in ${secs(Date.now() - startedAt)}: setup ${secs(searchedAt - startedAt)}, ` +
+        `sources ${secs(scoringAt - searchedAt)} (${enabled.map((s, i) => `${s.name} ${secs(sourceMs[i] ?? 0)}`).join(', ')}), ` +
+        `scoring ${secs(scoredAt - scoringAt)} (${scoring}), logos +${secs(Date.now() - scoredAt)}`,
+    );
+
+    const run: MatchRun = {
       hasProfile: true,
       query,
       /**
@@ -244,7 +355,7 @@ export class ResumeMatcherService {
        * What was searched, so the page can say so. `platform` with a reason
        * means web results were withheld, not that the web had nothing.
        */
-      scope: usedWeb ? ('web' as const) : ('platform' as const),
+      scope: usedWeb ? 'web' : 'platform',
       webBlockedReason: usedWeb ? null : web.reason,
       /**
        * Which sources were asked, and which could not be reached. With no
@@ -254,6 +365,125 @@ export class ResumeMatcherService {
       searchedSources: enabled.map((s) => s.name),
       unavailableSources: enabled.filter((_, i) => settled[i].status === 'rejected').map((s) => s.name),
     };
+    const complete = run.unavailableSources.length === 0;
+    if (scoreLater) {
+      // Kept even when a source was missing: the page asks for its scores next.
+      this.keepRun(runKey, {
+        run,
+        complete,
+        freshMs: RUN_FRESH_MS,
+        pending: { profile: candidate.parsed, candidates, logoSubjects },
+      });
+    } else if (complete) {
+      // Keyword scores are kept only until the AI is tried again.
+      this.keepRun(runKey, { run, complete, freshMs: matches.length === 0 || aiScored ? RUN_FRESH_MS : AI_PAUSE_MS });
+    }
+    return run;
+  }
+
+  /**
+   * The AI's scores for a search `run` sent without them (`scoreLater`): the
+   * same search, re-ranked. Requests arriving together share one scoring.
+   *
+   * When this server doesn't have that search (another server answered it,
+   * or it has expired), it searches again and scores as it goes, so the page
+   * still ends up with scores.
+   */
+  async score(user: User, dto: RunMatchDto, context: { visitorCountry?: string } = {}): Promise<MatchRun> {
+    const asked = await this.prepare(user, dto, context);
+    if (!asked) return noProfile(dto);
+    const kept = this.keptRun(asked.runKey);
+    if (!kept) return this.run(user, { ...dto, scoreLater: false }, context);
+    return shown(kept.pending ? await this.finishScoring(asked.runKey, kept) : kept.run, asked.notWanted);
+  }
+
+  /**
+   * What every search reads first: the profile, whether the plan includes
+   * the web, and the jobs dismissed. Asked together, as each is a round trip
+   * to the database. Null when there is no profile to match on.
+   */
+  private async prepare(user: User, dto: RunMatchDto, context: { visitorCountry?: string }) {
+    const [candidate, web, notWanted] = await Promise.all([
+      this.loadCandidate(user),
+      this.entitlements.status(user, 'matcher.web'),
+      this.dismissedFilter(user.id),
+    ]);
+    if (!candidate) return null;
+
+    /**
+     * Platform jobs for everyone; the web for Premium.
+     *
+     * Free users used to be refused the matcher outright. Now they get what
+     * the free tier promises — jobs posted here, which cost no outside data —
+     * and web sources join only when the allowance covers them. While
+     * enforcement is off that is everyone, and the use is still counted, so
+     * the numbers are real before anyone is charged.
+     */
+    const webAllowed = !web.enforced || web.allowed;
+    const runKey = this.runKey(user.id, candidate, dto, context.visitorCountry, webAllowed);
+    return { candidate, web, webAllowed, notWanted, runKey };
+  }
+
+  /** Scores a kept search left for later, and keeps the scored one in its place. */
+  private finishScoring(key: string, kept: KeptRun): Promise<MatchRun> {
+    const pending = kept.pending!;
+    if (!pending.scoring) {
+      const startedAt = Date.now();
+      pending.scoring = this.scoreAndRank(pending.profile, pending.candidates).then((ranked) => {
+        // Logos that were still loading when the jobs were sent may be here now.
+        const run: MatchRun = { ...kept.run, matches: this.withLogos(ranked, pending.logoSubjects) };
+        const aiScored = ranked.some((m) => m.scoringMode === 'ai');
+        this.logger.log(`Scored ${ranked.length} in ${secs(Date.now() - startedAt)} (${aiScored ? 'AI' : 'keywords'})`);
+        this.keepRun(key, { run, complete: kept.complete, freshMs: aiScored ? RUN_FRESH_MS : AI_PAUSE_MS });
+        return run;
+      });
+      // A failure leaves the next request free to try again.
+      pending.scoring.catch(() => (pending.scoring = undefined));
+    }
+    return pending.scoring;
+  }
+
+  /** Each match with its logo, when one has loaded. */
+  private withLogos(ranked: ResumeMatch[], subjects: Map<string, LogoSubject>): ResumeMatch[] {
+    return ranked.map((m) => {
+      const subject = subjects.get(m.id);
+      const logoUrl = m.logoUrl ?? (subject && this.logos.logoFor(subject));
+      return logoUrl ? { ...m, logoUrl } : m;
+    });
+  }
+
+  /**
+   * What makes one search the same as another: the person, everything the
+   * search reads from their profile, what they asked for, and whether the web
+   * is included. An edited profile makes a new search.
+   */
+  private runKey(
+    userId: string,
+    candidate: Candidate,
+    dto: RunMatchDto,
+    visitorCountry: string | undefined,
+    webAllowed: boolean,
+  ): string {
+    const asked = [candidate, dto.query?.trim() ?? '', dto.location ?? null, dto.countryCode ?? '', visitorCountry ?? '', webAllowed];
+    return `${userId}|${createHash('sha256').update(JSON.stringify(asked)).digest('hex')}`;
+  }
+
+  private keptRun(key: string): KeptRun | undefined {
+    const kept = this.runs.get(key);
+    if (kept && Date.now() - kept.at < kept.freshMs) return kept;
+    if (kept) this.runs.delete(key);
+    return undefined;
+  }
+
+  private keepRun(key: string, kept: Omit<KeptRun, 'at'>): void {
+    this.runs.delete(key);
+    this.runs.set(key, { ...kept, at: Date.now() });
+    if (this.runs.size > MAX_KEPT_RUNS) this.runs.delete(this.runs.keys().next().value as string);
+  }
+
+  /** Forgets someone's kept searches, so a job they asked to see again is there on reload. */
+  private forgetRuns(userId: string): void {
+    for (const key of this.runs.keys()) if (key.startsWith(`${userId}|`)) this.runs.delete(key);
   }
 
   /**
@@ -356,13 +586,15 @@ export class ResumeMatcherService {
   /** Undoes a dismissal. */
   async undismiss(user: User, jobId: string): Promise<void> {
     await this.prisma.dismissedMatch.deleteMany({ where: { userId: user.id, jobId } });
+    // A search kept since it was dismissed was made without it.
+    this.forgetRuns(user.id);
   }
 
   /**
    * Whether a job was dismissed: by its id, or by title and company, since
    * the same job arrives from more than one source under different ids.
    */
-  private async dismissedFilter(userId: string): Promise<(job: CandidateJob) => boolean> {
+  private async dismissedFilter(userId: string): Promise<(job: Pick<CandidateJob, 'id' | 'title' | 'company'>) => boolean> {
     const rows = await this.prisma.dismissedMatch.findMany({
       where: { userId },
       select: { jobId: true, title: true, company: true },
@@ -585,17 +817,36 @@ export class ResumeMatcherService {
     if (candidates.length === 0) return [];
 
     const aiById = new Map<string, { score: number; reason: string }>();
-    try {
-      // The AI reads what each job asks for, not its opening blurb about the company.
-      const scores = await this.ai.scoreJobMatches(
-        profile,
-        candidates.map((c) => ({ ...c, description: jobDigest(c.description) })),
-      );
-      for (const s of scores) aiById.set(s.id, { score: s.score, reason: s.reason });
-    } catch (err) {
-      this.logger.warn(`AI scoring unavailable, using heuristic: ${err instanceof Error ? err.message : err}`);
+    if (Date.now() >= this.aiPausedUntil) {
+      try {
+        // The AI reads what each job asks for, not its opening blurb about the company.
+        const scores = await this.ai.scoreJobMatches(
+          profile,
+          candidates.map((c) => ({ ...c, description: jobDigest(c.description) })),
+        );
+        for (const s of scores) aiById.set(s.id, { score: s.score, reason: s.reason });
+      } catch (err) {
+        // Every provider out of quota, down or too slow: keywords for a while,
+        // rather than every search waiting to hear the same. Anything else
+        // (an answer that didn't parse) is this search's alone.
+        if (err instanceof ServiceUnavailableException) this.aiPausedUntil = Date.now() + AI_PAUSE_MS;
+        this.logger.warn(`AI scoring unavailable, using heuristic: ${err instanceof Error ? err.message : err}`);
+      }
     }
+    return this.rank(profile, candidates, aiById);
+  }
 
+  /**
+   * The jobs as matches, best first: by the AI's score where it gave one, and
+   * by keywords otherwise. Without AI scores, `unscored` says whether they
+   * are still to come (`pending`) or the AI couldn't give them.
+   */
+  private rank(
+    profile: ParsedResume,
+    candidates: CandidateJob[],
+    aiById: Map<string, { score: number; reason: string }> = new Map(),
+    unscored: 'heuristic' | 'pending' = 'heuristic',
+  ): ResumeMatch[] {
     return candidates
       .map<ResumeMatch>((j) => {
         const ai = aiById.get(j.id);
@@ -606,6 +857,8 @@ export class ResumeMatcherService {
         // hold). Capped here, so a confirmed fit ranks first.
         const snippet = (j.description ?? '').replace(/\s+/g, ' ').trim().length < SNIPPET_CHARS;
         const aiScore = ai && (snippet ? Math.min(ai.score, SNIPPET_MAX_SCORE) : ai.score);
+        const description = (j.description ?? '').trim();
+        const cut = description.length > DESCRIPTION_MAX_CHARS;
         return {
           id: j.id,
           title: j.title,
@@ -615,9 +868,10 @@ export class ResumeMatcherService {
           url: j.url,
           salary: j.salary,
           matchScore: aiScore ?? this.heuristicScore(profile, j),
-          scoringMode: ai ? 'ai' : 'heuristic',
+          scoringMode: ai ? 'ai' : unscored,
           reason: ai?.reason || undefined,
-          description: (j.description || '').slice(0, 1500) || undefined,
+          description: (cut ? description.slice(0, DESCRIPTION_MAX_CHARS).replace(/\s+\S*$/, '') : description) || undefined,
+          ...(description && (cut || j.excerpt) ? { descriptionPartial: true } : {}),
           postedAt: j.postedAt,
           employmentType: j.employmentType,
           workplace: j.workplace,

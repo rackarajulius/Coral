@@ -1,13 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getMyEntitlements, refusalFor, type SeekerMetric } from "@/lib/api/entitlements";
 import { isEntitlementError } from "@/lib/api/entitlementError";
 import { useUpgradePrompt } from "@/stores/upgradePromptStore";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { createExternalApplication } from "@/lib/api/externalApplications";
 import {
-  Sparkles,
   Lock,
   Loader2,
   Wand2,
@@ -38,15 +37,23 @@ import {
 } from "@/components/ui/dialog";
 import {
   runResumeMatch,
+  scoreResumeMatch,
   generateCoverLetter,
   tailorResume,
   researchCompany,
   dismissMatch,
   undismissMatch,
+  type MatchRunResult,
   type MatchSearch,
   type MatchedJob,
 } from "@/lib/api/resumeMatcher";
 import { MatchFilterBar } from "@/components/resumeMatcher/MatchFilterBar";
+import { DockedMatchDrawer, MatchDrawerSheet, type MatchActions } from "@/components/resumeMatcher/MatchDrawer";
+import { useWideLayout } from "@/hooks/useWideLayout";
+import { SourceBadge } from "@/components/resumeMatcher/SourceBadge";
+import CompanyLogo from "@/components/company/CompanyLogo";
+import MatchScore, { MatchScorePending } from "@/components/jobs/MatchScore";
+import ResumeMatcherLanding from "@/components/resumeMatcher/ResumeMatcherLanding";
 import {
   DEFAULT_FILTERS,
   EMPLOYMENT_LABELS,
@@ -56,8 +63,11 @@ import {
   type MatchFilters,
 } from "@/lib/resumeMatcher/matchFilters";
 import { useMatchSave } from "@/hooks/useMatchSave";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { CityAutocomplete } from "@/components/location/CityAutocomplete";
 import { countryNameOf } from "@/lib/location/places";
+import { MATCHER_PATH, handoffParams, readMatcherHandoff } from "@/lib/resumeMatcher/handoff";
+import { JobsTabs } from "@/components/jobs/JobsTabs";
 
 /**
  * "Anywhere in Uganda, or type a city". Searches cover one country at a
@@ -70,30 +80,43 @@ function anywherePlaceholder(countryCode: string | undefined): string {
 
 /** A search as part of a cache key: "anywhere" and "the profile's city" stay distinct. */
 function searchKey(search: MatchSearch | undefined): string[] {
-  return search ? [search.query ?? "", search.location ?? "", search.countryCode ?? ""] : ["profile"];
+  if (!search) return ["profile"];
+  const place = search.location === undefined ? "profile" : `at:${search.location}`;
+  return [search.query ?? "", place, search.countryCode ?? ""];
 }
 
 const ResumeMatcher = () => {
+  useDocumentTitle("AI Job Match");
   const { user, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const { openAuth } = useAuthModal();
+  const showUpgrade = useUpgradePrompt((s) => s.show);
   const queryClient = useQueryClient();
-  const [searchInput, setSearchInput] = useState("");
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Sign-in comes back here with the search the link carried.
+  const signInHere = () => openAuth({ redirectTo: `${MATCHER_PATH}${location.search}` });
+  /** A search carried here from Find Jobs or the home page. Read once, when the page opens. */
+  const [handoff] = useState(() => readMatcherHandoff(searchParams));
+  const [searchInput, setSearchInput] = useState(handoff.search?.query ?? "");
   /** The location box, and the country of the city picked in it (none when typed freely). */
-  const [locationInput, setLocationInput] = useState("");
-  const [locationCountry, setLocationCountry] = useState<string | undefined>(undefined);
-  const [locationTouched, setLocationTouched] = useState(false);
-  /** The search that was run. Undefined for the first one, which matches the profile as it stands. */
-  const [active, setActive] = useState<MatchSearch | undefined>(undefined);
-  const [filters, setFilters] = useState<MatchFilters>(DEFAULT_FILTERS);
+  const [locationInput, setLocationInput] = useState(handoff.search?.location ?? "");
+  const [locationCountry, setLocationCountry] = useState<string | undefined>(handoff.search?.countryCode);
+  const [locationTouched, setLocationTouched] = useState(handoff.search?.location !== undefined);
+  /** The search that was run. Undefined when it matches the profile as it stands. */
+  const [active, setActive] = useState<MatchSearch | undefined>(handoff.search);
+  const [filters, setFilters] = useState<MatchFilters>(
+    handoff.remote ? { ...DEFAULT_FILTERS, workplaces: ["remote"] } : DEFAULT_FILTERS,
+  );
   /** Matches dismissed on this page; the server leaves them out of later searches. */
   const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set());
+  const promptedForUser = useRef<string | null>(null);
 
   /**
-   * Runs for everyone. This page used to be a wall for anyone without
+   * Runs for every signed-in job seeker. This page used to be a wall for anyone without
    * Premium, which would have denied free users the platform matching their
    * tier includes. The server decides which sources to search and says so.
    */
-  const { data: result, isFetching, isError, error, refetch } = useQuery({
+  const { data: result, isFetching, isPlaceholderData, isError, error, refetch } = useQuery({
     queryKey: ["resume-matcher", "run", user?.id ?? "", ...searchKey(active)],
     queryFn: async ({ signal }) => {
       const data = await runResumeMatch(active, signal);
@@ -108,8 +131,59 @@ const ResumeMatcher = () => {
     retry: false,
     refetchOnReconnect: false,
   });
+
+  // Web matching returns free platform results rather than throwing an
+  // entitlement error. Open the same plan cards as other premium actions,
+  // once per visit, and leave those free results available after dismissal.
+  useEffect(() => {
+    if (!isAuthenticated || isAuthLoading || !user?.id) return;
+    if (location.state?.continueWithFreeMatches) {
+      // Remember this choice even when a later search replaces the URL state.
+      promptedForUser.current = user.id;
+      return;
+    }
+    if (
+      isFetching || isPlaceholderData || isError ||
+      !result?.hasProfile || result.scope !== "platform" || result.webBlockedReason !== "PREMIUM_REQUIRED" ||
+      promptedForUser.current === user.id
+    ) return;
+
+    promptedForUser.current = user.id;
+    showUpgrade({
+      code: "PREMIUM_REQUIRED",
+      metric: "matcher.web",
+      tier: "free",
+      message: "Matches from across the web are part of Premium.",
+    });
+  }, [isAuthenticated, isAuthLoading, user?.id, isFetching, isPlaceholderData, isError, result, location.state, showUpgrade]);
+  /**
+   * The jobs come first, ranked by keywords, and their AI scores follow from
+   * a second request, re-ranked. The page used to wait for the AI (about 7s
+   * of a search) before showing anything.
+   */
+  const scoringPending = !!result?.matches.some((m) => m.scoringMode === "pending");
+  useEffect(() => {
+    if (!scoringPending || isFetching || isPlaceholderData || !user?.id) return;
+    const key = ["resume-matcher", "run", user.id, ...searchKey(active)];
+    const controller = new AbortController();
+    scoreResumeMatch(active, controller.signal).then(
+      (scored) => queryClient.setQueryData(key, scored),
+      () => {
+        if (controller.signal.aborted) return;
+        // Without them the keyword scores stand, and the page says so.
+        queryClient.setQueryData<MatchRunResult>(key, (old) =>
+          old && {
+            ...old,
+            matches: old.matches.map((m) => (m.scoringMode === "pending" ? { ...m, scoringMode: "heuristic" } : m)),
+          },
+        );
+      },
+    );
+    return () => controller.abort();
+  }, [scoringPending, isFetching, isPlaceholderData, user?.id, active, queryClient]);
+
   // AI scoring failed for the search, not just for one job it missed: one
-  // keyword-scored card used to turn the whole page into "Keyword matcher".
+  // keyword-scored card used to put the whole page under the notice below.
   const hasHeuristicScores =
     !!result?.matches.length && result.matches.every((match) => match.scoringMode === "heuristic");
 
@@ -164,7 +238,7 @@ const ResumeMatcher = () => {
     e.preventDefault();
     if (isAuthLoading || isFetching) return;
     if (!isAuthenticated) {
-      openAuth({ redirectTo: "/resume-matcher" });
+      signInHere();
       return;
     }
     const next: MatchSearch = {
@@ -184,17 +258,30 @@ const ResumeMatcher = () => {
       refetchType: "none",
     });
     setActive(next);
+    // The address names the search, so a reload or a shared link repeats it.
+    const remoteOnly = filters.workplaces.length === 1 && filters.workplaces[0] === "remote";
+    setSearchParams(handoffParams(next, remoteOnly), { replace: true });
   };
+
+  if (!isAuthLoading && !isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <ResumeMatcherLanding onGetMatches={signInHere} />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">
       <Header />
-      <main className="max-w-5xl mx-auto px-4 py-6 pt-24">
+      <div className="pt-16">
+        <JobsTabs />
+      </div>
+      {/* Wide enough for one column of cards beside the job details drawer. */}
+      <main className="max-w-6xl mx-auto px-4 py-6">
         {/* Title */}
         <div className="mb-6">
-          <div className="inline-flex items-center gap-2 rounded-full bg-coral/10 text-coral px-3 py-1 text-xs font-medium mb-3">
-            <Sparkles className="h-3.5 w-3.5" /> {hasHeuristicScores ? "Keyword matcher" : "AI matcher"}
-          </div>
           <h1 className="text-2xl font-bold text-foreground">Jobs matched to your resume</h1>
           <p className="text-muted-foreground mt-1">
             Roles ranked against your profile — jobs posted here, and from across the web with
@@ -240,11 +327,6 @@ const ResumeMatcher = () => {
 
             {isAuthLoading ? (
               <Centered><Loader2 className="h-4 w-4 animate-spin" /> Loading…</Centered>
-            ) : !isAuthenticated ? (
-              <Centered>
-                Sign in to match jobs to your profile.
-                <Button variant="coral" onClick={() => openAuth({ redirectTo: "/resume-matcher" })}>Sign in</Button>
-              </Centered>
             ) : isError ? (
               <Centered>
                 <span className="text-destructive">{(error as Error)?.message || "Something went wrong."}</span>
@@ -288,6 +370,11 @@ const ResumeMatcher = () => {
                         Also searched ads in {result.localLanguage}: “{result.localQuery}”
                       </p>
                     )}
+                    {scoringPending && (
+                      <p role="status" className="mb-3 flex items-center gap-2 text-sm text-muted-foreground">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Ranking these against your resume…
+                      </p>
+                    )}
                     <MatchFilterBar filters={filters} onChange={setFilters} shown={filtered.length} total={visible.length} />
                     {filtered.length === 0 ? (
                       <div role="status" className="py-12 text-center text-sm text-muted-foreground max-w-md mx-auto">
@@ -327,9 +414,10 @@ function Centered({ children }: { children: React.ReactNode }) {
  * Says why these are only platform jobs.
  *
  * Shown above the results rather than instead of them: free users still get
- * real matches, and the link goes to the Premium page.
+ * real matches, and the button opens the plans.
  */
 function WebScopeNotice({ reason }: { reason: "PREMIUM_REQUIRED" | "ALLOWANCE_EXHAUSTED" }) {
+  const showUpgrade = useUpgradePrompt((s) => s.show);
   return (
     <div className="mb-5 flex items-start gap-3 rounded-2xl border border-border bg-card p-4">
       <div className="h-9 w-9 shrink-0 rounded-xl bg-coral/10 text-coral flex items-center justify-center">
@@ -345,9 +433,15 @@ function WebScopeNotice({ reason }: { reason: "PREMIUM_REQUIRED" | "ALLOWANCE_EX
           ) : (
             <>
               Matches from across the web are part of Premium.{" "}
-              <Link to="/premium" className="font-medium text-coral hover:underline">
+              <button
+                type="button"
+                onClick={() =>
+                  showUpgrade({ metric: "matcher.web", message: "Matches from across the web are part of Premium." })
+                }
+                className="font-medium text-coral hover:underline"
+              >
                 See Premium
-              </Link>
+              </button>
             </>
           )}
         </p>
@@ -426,6 +520,7 @@ function MatchList({
 }) {
   const [assist, setAssist] = useState<{ job: MatchedJob; mode: "cover" | "tailor" } | null>(null);
   const [research, setResearch] = useState<MatchedJob | null>(null);
+  const queryClient = useQueryClient();
   const showUpgrade = useUpgradePrompt((s) => s.show);
   const { data: entitlements } = useQuery({
     queryKey: ["entitlements"],
@@ -446,56 +541,7 @@ function MatchList({
   };
   const locked = (metric: SeekerMetric) => refusalFor(entitlements, metric) !== null;
 
-  return (
-    <>
-      <div className={`grid grid-cols-1 lg:grid-cols-2 gap-4 ${loading ? "opacity-60 pointer-events-none" : ""}`}>
-        {matches.map((m) => (
-          <MatchCard
-            key={m.id}
-            m={m}
-            onCover={gated("assist.cover_letter", () => setAssist({ job: m, mode: "cover" }))}
-            onTailor={gated("assist.tailor", () => setAssist({ job: m, mode: "tailor" }))}
-            onResearch={gated("research.company", () => setResearch(m))}
-            onNotInterested={() => onNotInterested(m)}
-            locked={{
-              cover: locked("assist.cover_letter"),
-              tailor: locked("assist.tailor"),
-              research: locked("research.company"),
-            }}
-          />
-        ))}
-      </div>
-
-      <AssistDialog assist={assist} onClose={() => setAssist(null)} />
-      <ResearchDialog job={research} onClose={() => setResearch(null)} />
-    </>
-  );
-}
-
-function MatchCard({
-  m,
-  onCover,
-  onTailor,
-  onResearch,
-  onNotInterested,
-  locked,
-}: {
-  m: MatchedJob;
-  onCover: () => void;
-  onTailor: () => void;
-  onResearch: () => void;
-  onNotInterested: () => void;
-  /** Which tools the plan doesn't cover right now; shown with a lock. */
-  locked?: { cover: boolean; tailor: boolean; research: boolean };
-}) {
-  const queryClient = useQueryClient();
-  const save = useMatchSave(m);
-  const posted = postedAgo(m.postedAt);
-  const details = [
-    m.employmentType && EMPLOYMENT_LABELS[m.employmentType],
-    m.workplace && WORKPLACE_LABELS[m.workplace],
-  ].filter(Boolean);
-  const trackExternal = () => {
+  const trackExternal = (m: MatchedJob) => {
     if (m.source === "platform" || !m.url) return;
     void createExternalApplication({
       sourceKey: `match:${m.id}`,
@@ -507,20 +553,146 @@ function MatchCard({
       toast.success("Saved to External tracker. Mark applied after you submit.");
     }).catch((error: Error) => toast.error(error.message));
   };
+
+  const actionsFor = (m: MatchedJob): MatchActions => ({
+    onCover: gated("assist.cover_letter", () => setAssist({ job: m, mode: "cover" })),
+    onTailor: gated("assist.tailor", () => setAssist({ job: m, mode: "tailor" })),
+    onResearch: gated("research.company", () => setResearch(m)),
+    onNotInterested: () => onNotInterested(m),
+    onTrack: () => trackExternal(m),
+    locked: {
+      cover: locked("assist.cover_letter"),
+      tailor: locked("assist.tailor"),
+      research: locked("research.company"),
+    },
+  });
+
+  /**
+   * The match shown in the job details drawer. On a wide screen the drawer
+   * sits beside the list, which narrows to one column; narrower, it is a sheet.
+   */
+  const wide = useWideLayout();
+  const [openId, setOpenId] = useState<string | null>(null);
+  const open = openId ? matches.find((m) => m.id === openId) : undefined;
+  const docked = wide && !!open;
+  const cards = useRef(new Map<string, HTMLElement>());
+
+  // A match that leaves the list (hidden, filtered out, or not in a new
+  // search) closes the drawer, and doesn't reopen it should it come back.
+  useEffect(() => {
+    if (openId && !open) setOpenId(null);
+  }, [openId, open]);
+
+  const openMatch = (id: string) => {
+    // Docking reflows two columns into one, which moves the card clicked.
+    const reflows = wide && !openId;
+    setOpenId(id);
+    if (reflows) requestAnimationFrame(() => cards.current.get(id)?.scrollIntoView({ block: "nearest" }));
+  };
+  const closeDrawer = () => {
+    const id = openId;
+    setOpenId(null);
+    // Back to the card it was opened from, wherever the wider list puts it.
+    if (id) {
+      requestAnimationFrame(() => cards.current.get(id)?.querySelector<HTMLElement>("[data-match-open]")?.focus());
+    }
+  };
+  const openActions = open ? actionsFor(open) : undefined;
+
   return (
-    <div className="rounded-2xl border border-border bg-card p-5 transition-all duration-200 hover:shadow-md">
+    <>
+      <div className={docked ? "grid grid-cols-2 items-start gap-5" : undefined}>
+        <div
+          className={`grid grid-cols-1 gap-4 ${docked ? "" : "lg:grid-cols-2"} ${loading ? "opacity-60 pointer-events-none" : ""}`}
+        >
+          {matches.map((m) => (
+            <MatchCard
+              key={m.id}
+              m={m}
+              actions={actionsFor(m)}
+              isOpen={m.id === openId}
+              onOpen={() => openMatch(m.id)}
+              cardRef={(el) => {
+                if (el) cards.current.set(m.id, el);
+                else cards.current.delete(m.id);
+              }}
+            />
+          ))}
+        </div>
+        {docked && open && openActions && (
+          <DockedMatchDrawer match={open} actions={openActions} onClose={closeDrawer} />
+        )}
+      </div>
+      {!wide && <MatchDrawerSheet match={open} actionsFor={actionsFor} onClose={closeDrawer} />}
+
+      <AssistDialog assist={assist} onClose={() => setAssist(null)} />
+      <ResearchDialog job={research} onClose={() => setResearch(null)} />
+    </>
+  );
+}
+
+function MatchCard({
+  m,
+  actions,
+  isOpen,
+  onOpen,
+  cardRef,
+}: {
+  m: MatchedJob;
+  actions: MatchActions;
+  /** Shown in the job details drawer now. */
+  isOpen: boolean;
+  onOpen: () => void;
+  cardRef: (el: HTMLDivElement | null) => void;
+}) {
+  const { onCover, onTailor, onResearch, onNotInterested, onTrack, locked } = actions;
+  const save = useMatchSave(m);
+  const posted = postedAgo(m.postedAt);
+  const details = [
+    m.employmentType && EMPLOYMENT_LABELS[m.employmentType],
+    m.workplace && WORKPLACE_LABELS[m.workplace],
+  ].filter(Boolean);
+
+  // The whole card opens the drawer. Its buttons and links do their own
+  // thing, and selecting text to copy it is not a click.
+  const openFromCard = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest("button, a") || window.getSelection()?.toString()) return;
+    onOpen();
+  };
+
+  return (
+    <div
+      ref={cardRef}
+      onClick={openFromCard}
+      className={`cursor-pointer rounded-2xl border bg-card p-5 transition-all duration-200 hover:shadow-md ${
+        isOpen ? "border-coral shadow-md ring-1 ring-coral/30" : "border-border"
+      }`}
+    >
       <div className="flex items-start gap-3">
-        <CompanyMark company={m.company} logoUrl={m.logoUrl} />
+        <CompanyLogo company={m.company} src={m.logoUrl} />
         <div className="flex-1 min-w-0">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <h3 className="font-semibold text-foreground truncate">{m.title}</h3>
+              <h3 className="font-semibold text-foreground">
+                {/* The keyboard's way in to what the card's click does. */}
+                <button
+                  type="button"
+                  data-match-open
+                  onClick={onOpen}
+                  aria-expanded={isOpen}
+                  className="block w-full truncate rounded-sm text-left hover:text-coral focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {m.title}
+                </button>
+              </h3>
               <p className="text-sm text-muted-foreground truncate">{m.company}</p>
             </div>
             <div className="flex flex-col items-end gap-1 shrink-0">
-              <span className="text-sm font-bold text-coral" aria-label={`${m.scoringMode === "heuristic" ? "Keyword match" : "Match"} score: ${m.matchScore}%`}>
-                {m.matchScore}%
-              </span>
+              {m.scoringMode === "pending" ? (
+                <MatchScorePending />
+              ) : (
+                <MatchScore score={m.matchScore} keyword={m.scoringMode === "heuristic"} />
+              )}
               {m.scoringMode === "heuristic" && <span className="text-[10px] text-muted-foreground">Keyword match</span>}
               <SourceBadge source={m.source} publishedOn={m.publishedOn} />
             </div>
@@ -583,7 +755,7 @@ function MatchCard({
           {m.url && (
             <a
               href={m.url}
-              onClick={trackExternal}
+              onClick={onTrack}
               target={m.url.startsWith("http") ? "_blank" : undefined}
               rel="noopener noreferrer"
               className="ml-1 text-sm font-medium text-foreground hover:text-coral transition-colors"
@@ -597,75 +769,6 @@ function MatchCard({
   );
 }
 
-/**
- * The employer's logo, or its first letter when there is none.
- *
- * Styled like the job board's logo tile. A logo that fails to load falls
- * back to the letter rather than leaving a broken-image icon.
- */
-function CompanyMark({ company, logoUrl }: { company: string; logoUrl?: string }) {
-  const [failedUrl, setFailedUrl] = useState<string | null>(null);
-  const showLogo = !!logoUrl && failedUrl !== logoUrl;
-  return (
-    <div className="w-12 h-12 rounded-lg bg-muted shadow-inner flex items-center justify-center overflow-hidden shrink-0 p-1.5 text-lg font-semibold text-muted-foreground">
-      {showLogo ? (
-        <img
-          src={logoUrl}
-          alt={`${company} logo`}
-          referrerPolicy="no-referrer"
-          loading="lazy"
-          onError={() => setFailedUrl(logoUrl)}
-          className="h-full w-full rounded-sm object-contain"
-        />
-      ) : (
-        <span aria-hidden="true">{company.charAt(0).toUpperCase()}</span>
-      )}
-    </div>
-  );
-}
-
-/* ----------------------------- Source badge ---------------------------- */
-
-const SOURCE_LABELS: Record<string, string> = {
-  platform: "Our platform",
-  adzuna: "Adzuna",
-  jsearch: "Web",
-  talent: "Talent.com",
-  greenhouse: "Employer",
-  lever: "Employer",
-  ashby: "Employer",
-};
-
-/**
- * Where the job is listed. Web results say which site they came from — "via
- * LinkedIn", "via Job Bank" — or "Employer" for the company's own careers
- * site, rather than a generic "Web".
- */
-function SourceBadge({
-  source,
-  publishedOn,
-}: {
-  source: string;
-  publishedOn?: { name: string; isEmployer: boolean };
-}) {
-  const label = publishedOn
-    ? publishedOn.isEmployer
-      ? "Employer"
-      : `via ${publishedOn.name}`
-    : SOURCE_LABELS[source] ?? "Web";
-  const isPlatform = source === "platform";
-  return (
-    <span
-      title={publishedOn && !publishedOn.isEmployer ? `Listed on ${publishedOn.name}` : undefined}
-      className={`shrink-0 max-w-[9rem] truncate px-2 py-0.5 rounded-full text-[10px] font-medium ${
-        isPlatform ? "bg-coral/10 text-coral" : "bg-muted text-muted-foreground"
-      }`}
-    >
-      {label}
-    </span>
-  );
-}
-
 /* ------------------------------ Assist dialog -------------------------- */
 
 function copyText(text: string) {
@@ -675,8 +778,16 @@ function copyText(text: string) {
   );
 }
 
+/** The server takes up to 8,000 characters of description (AssistDto); matches now carry the whole ad. */
+const ASSIST_DESCRIPTION_MAX = 8000;
+
 function jobContext(job: MatchedJob) {
-  return { title: job.title, company: job.company, location: job.location, description: job.description };
+  return {
+    title: job.title,
+    company: job.company,
+    location: job.location,
+    description: job.description?.slice(0, ASSIST_DESCRIPTION_MAX),
+  };
 }
 
 function AssistDialog({

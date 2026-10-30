@@ -1,6 +1,7 @@
 import {
   employmentTypeOf,
   formatPay,
+  htmlToText,
   isoDate,
   workplaceFromText,
   workplaceOf,
@@ -88,5 +89,28 @@ describe('dates', () => {
     expect(isoDate(1786646472936)).toBe(new Date(1786646472936).toISOString());
     expect(isoDate('not a date')).toBeUndefined();
     expect(isoDate(null)).toBeUndefined();
+  });
+});
+
+describe('ATS HTML as text', () => {
+  it("keeps Greenhouse's paragraphs, headings and bullets, decoding its escaped HTML", () => {
+    const content =
+      '&lt;p&gt;&lt;strong&gt;About the Role:&lt;/strong&gt;&lt;/p&gt;\n&lt;p&gt;We fix cars &amp;amp; trucks.&lt;/p&gt;' +
+      '&lt;ul&gt;&lt;li&gt;&lt;p&gt;Review repairs.&lt;/p&gt;&lt;/li&gt;&lt;li&gt;&lt;p&gt;Track schedules.&lt;/p&gt;&lt;/li&gt;&lt;/ul&gt;';
+    expect(htmlToText(content)).toBe('About the Role:\n\nWe fix cars & trucks.\n• Review repairs.\n• Track schedules.');
+  });
+
+  it('reads ordinary HTML and numeric entities', () => {
+    expect(htmlToText('<p>Pay&nbsp;range: $88,000&#8211;$100,000</p><p>Line<br>break</p>')).toBe(
+      'Pay range: $88,000–$100,000\n\nLine\nbreak',
+    );
+    // Greenhouse's editor puts attributes on its line breaks.
+    expect(htmlToText('<p>Wage: $18 per hour<br data-start="4150" data-end="4153">Benefits: dental</p>')).toBe(
+      'Wage: $18 per hour\nBenefits: dental',
+    );
+  });
+
+  it('drops scripts and styles', () => {
+    expect(htmlToText('<style>p{}</style><p>Hi</p><script>alert(1)</script>')).toBe('Hi');
   });
 });

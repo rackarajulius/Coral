@@ -40,12 +40,18 @@ export interface MatchedJob {
   location: string;
   source: "platform" | "adzuna" | "jsearch" | "talent" | "greenhouse" | "lever" | "ashby" | string;
   matchScore: number;
-  /** Optional for compatibility with older API responses. */
-  scoringMode?: "ai" | "heuristic";
+  /**
+   * `pending`: the AI's score is on its way (`scoreResumeMatch`), and
+   * `matchScore` is a keyword score meanwhile. Optional for older responses.
+   */
+  scoringMode?: "ai" | "heuristic" | "pending";
   reason?: string;
   url?: string;
   salary?: string;
+  /** The ad as plain text with line breaks, up to 10,000 characters. */
   description?: string;
+  /** `description` is only the start of the ad; the rest is on the listing. */
+  descriptionPartial?: boolean;
   /** The employer's logo, when there is a real one. */
   logoUrl?: string;
   /** Where the listing was published, when known; `isEmployer` for the company's own site. */
@@ -176,15 +182,23 @@ export interface MatchSearch {
   countryCode?: string;
 }
 
-export async function runResumeMatch(search?: MatchSearch, signal?: AbortSignal): Promise<MatchRunResult> {
+function searchBody(search?: MatchSearch): MatchSearch {
   const body: MatchSearch = {};
   if (search?.query) body.query = search.query;
   if (search?.location !== undefined) body.location = search.location;
   if (search?.countryCode) body.countryCode = search.countryCode;
+  return body;
+}
+
+/**
+ * The jobs, as soon as they are found. Their AI scores come after, from
+ * `scoreResumeMatch` with the same search: matches marked `pending` until then.
+ */
+export async function runResumeMatch(search?: MatchSearch, signal?: AbortSignal): Promise<MatchRunResult> {
   const res = await fetch(`${API_BASE_URL}/resume-matcher/run`, {
     method: "POST",
     headers: await authHeaders(),
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...searchBody(search), scoreLater: true }),
     signal,
   });
   if (!res.ok) {
@@ -193,6 +207,21 @@ export async function runResumeMatch(search?: MatchSearch, signal?: AbortSignal)
   }
   const json = await res.json();
   return json.data as MatchRunResult;
+}
+
+/** The same search with its AI scores, re-ranked by them. */
+export async function scoreResumeMatch(search?: MatchSearch, signal?: AbortSignal): Promise<MatchRunResult> {
+  const res = await fetch(`${API_BASE_URL}/resume-matcher/run/scores`, {
+    method: "POST",
+    headers: await authHeaders(),
+    body: JSON.stringify(searchBody(search)),
+    signal,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw errorFromBody(body, "Couldn't score these matches");
+  }
+  return (await res.json()).data as MatchRunResult;
 }
 
 /** Drafts a cover letter for a job using the seeker's stored profile (premium). */

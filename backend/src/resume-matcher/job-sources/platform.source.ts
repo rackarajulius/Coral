@@ -5,6 +5,12 @@ import { CandidateJob, JobSource, SearchInput, cityOf, employmentTypeOf, isoDate
 
 const CURRENCY: Record<string, string> = { USD: '$', CAD: 'C$', EUR: '€', GBP: '£' };
 
+/** "Requirements\n• …" for a list the employer filled in, or '' for an empty one. */
+function listSection(heading: string, items: string[]): string {
+  const lines = items.map((item) => item.trim()).filter(Boolean);
+  return lines.length ? `${heading}\n${lines.map((line) => `• ${line}`).join('\n')}` : '';
+}
+
 /** An uploaded logo's address, or undefined for blanks and legacy inline data. */
 function webImage(url: string | null | undefined): string | undefined {
   return url && /^https:\/\//.test(url.trim()) ? url.trim() : undefined;
@@ -63,6 +69,10 @@ export class PlatformJobSource implements JobSource {
         createdAt: true,
         salaryPeriod: true,
         description: true,
+        responsibilities: true,
+        requirements: true,
+        benefits: true,
+        skills: true,
         salaryMin: true,
         salaryMax: true,
         salaryCurrency: true,
@@ -82,7 +92,17 @@ export class PlatformJobSource implements JobSource {
       company: j.companyName?.trim() || j.postedBy?.employerProfile?.companyName?.trim() || 'Company',
       logoUrl: webImage(j.companyLogo) ?? webImage(j.postedBy?.employerProfile?.companyLogo),
       location: j.location?.trim() || (j.isRemote ? 'Remote' : ''),
-      description: j.description ?? '',
+      // Employers write requirements and the rest as lists beside the
+      // description. Without them the AI scored a job here on its blurb alone.
+      description: [
+        j.description?.trim(),
+        listSection('Responsibilities', j.responsibilities),
+        listSection('Requirements', j.requirements),
+        listSection('Skills', j.skills),
+        listSection('Benefits', j.benefits),
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
       url: j.slug ? `/jobs?job=${j.slug}` : '/jobs',
       salary: this.formatSalary(j.salaryMin, j.salaryMax, j.salaryCurrency),
       source: this.name,
