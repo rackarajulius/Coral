@@ -7,6 +7,7 @@ import ContactLinksSection from '@/components/jobSeeker/ContactLinksSection'
 import EducationSection from '@/components/jobSeeker/EducationSection'
 import ExperienceSection from '@/components/jobSeeker/ExperienceSection'
 import PortfolioSection from '@/components/jobSeeker/PortfolioSection'
+import ProjectsSection from '@/components/jobSeeker/ProjectsSection'
 import RecommendationsSection from '@/components/jobSeeker/RecommendationsSection'
 import ProfileFooter from '@/components/jobSeeker/ProfileFooter'
 import ProfileHero from '@/components/jobSeeker/ProfileHero'
@@ -49,6 +50,7 @@ const Profile = () => {
               <EducationSection/>
               <CertificationsSection/>
               <PortfolioSection />
+              <ProjectsSection />
               <RecommendationsSection />
               <ActivityFeed />
               <ProfileFooter />

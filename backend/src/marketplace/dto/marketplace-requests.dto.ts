@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { WorkSampleDto } from './marketplace.dto';
 
 export const REQUEST_REPORT_REASONS = ['spam', 'fraud', 'harassment', 'inappropriate', 'other'] as const;
@@ -30,6 +30,11 @@ export class MarketplaceRequestStateDto {
 export class MarketplaceMessageDto {
   @IsString() @MinLength(1) @MaxLength(5000) body: string;
   @IsUUID() idempotencyKey: string;
+}
+/** After both sides confirmed the work: the provider shows it or not; the client is named or not. */
+export class CompletedWorkSettingsDto {
+  @IsOptional() @IsBoolean() shown?: boolean;
+  @IsOptional() @IsBoolean() named?: boolean;
 }
 export class MarketplaceRequestReportDto {
   @IsIn(REQUEST_REPORT_REASONS) reason: string;

@@ -10,7 +10,8 @@ import { ListingKind } from './marketplace-policy';
 
 const EVENT_TYPES = ['listing_view', 'service_enquiry_submitted', 'project_response_submitted', 'marketplace_request_accepted',
   'marketplace_recipient_replied', 'marketplace_message_sent', 'marketplace_request_state_changed',
-  'marketplace_request_declined', 'marketplace_request_withdrawn', 'marketplace_request_blocked'] as const;
+  'marketplace_request_declined', 'marketplace_request_withdrawn', 'marketplace_request_blocked',
+  'marketplace_work_marked_done', 'marketplace_work_confirmed', 'marketplace_work_not_done'] as const;
 export interface MarketplaceActivityInput {
   type: string; entityType: string; entityId: string; actorId?: string | null; companyId?: string | null;
   requestId?: string | null; source?: string; postId?: string | null; sessionId?: string | null; dedupeKey: string;

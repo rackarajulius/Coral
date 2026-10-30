@@ -1,5 +1,6 @@
 import supabase from "@/lib/supabase";
 import { PROVIDER_CATEGORIES, type ProviderCategory } from "@/lib/api/providers";
+import type { PublicProject } from "@/lib/api/profileProjects";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001/api/v1";
 export const MARKETPLACE_CATEGORIES = PROVIDER_CATEGORIES;
@@ -43,9 +44,32 @@ interface MarketplaceRecordBase {
   publicConsent?: boolean;
   permissions?: MarketplacePermissions;
 }
+/** One piece of work done through Coral: a request both sides confirmed as finished. */
+export interface DoneWork {
+  id: string;
+  kind: MarketplaceKind;
+  /** The service; a client's project only when they agreed to be named. */
+  title: string | null;
+  /** Set while the service's page is public. */
+  serviceId: string | null;
+  /** "2026-10": when both had confirmed. */
+  month: string;
+  /** Only when the client agreed. */
+  client: string | null;
+}
+/** The newest few, and how many in all. */
+export interface DoneWorkSummary { total: number; items: DoneWork[] }
+
 export interface ServiceListing extends MarketplaceRecordBase {
   deliverables: string[];
-  workSamples: { label: string; url: string }[];
+  /** A YouTube or Vimeo sample carries a preview: its title and Coral's own copy of the thumbnail. */
+  workSamples: { label: string; url: string; preview?: { title: string | null; siteName: string; imageUrl: string | null } }[];
+  /** Up to 8 pictures and one video of the work; the first picture is the cover. */
+  mediaUrls: string[];
+  /** On its own page only: projects from the owner's profile done as this service. */
+  projects?: PublicProject[];
+  /** On its own page only: work done as this service, confirmed by both sides. */
+  doneWork?: DoneWorkSummary;
   availability: "available" | "limited" | "unavailable";
   pricingMode: "fixed" | "hourly" | "quote";
   currency: string;
@@ -76,6 +100,7 @@ export interface MarketplaceDraftPayload {
   publicConsent: boolean;
   deliverables?: string[];
   workSamples?: { label: string; url: string }[];
+  mediaUrls?: string[];
   availability?: ServiceListing["availability"];
   pricingMode?: ServiceListing["pricingMode"];
   amountMinor?: number | null;

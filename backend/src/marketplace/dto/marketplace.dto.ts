@@ -32,6 +32,8 @@ export class ListingFieldsDto {
 export class ServiceFieldsDto extends ListingFieldsDto {
   @IsOptional() @IsArray() @ArrayMaxSize(12) @IsString({ each: true }) @MaxLength(300, { each: true }) deliverables?: string[];
   @IsOptional() @IsArray() @ArrayMaxSize(8) @ValidateNested({ each: true }) @Type(() => WorkSampleDto) workSamples?: WorkSampleDto[];
+  /** Up to 8 pictures and one video, from POST /community/posts/media. */
+  @IsOptional() @IsArray() @ArrayMaxSize(9) @IsString({ each: true }) @MaxLength(2048, { each: true }) mediaUrls?: string[];
   @IsOptional() @IsIn(['available', 'limited', 'unavailable']) availability?: string;
   @IsOptional() @IsIn(['fixed', 'hourly', 'quote']) pricingMode?: string;
   @IsOptional() @IsInt() @Min(1) @Max(1000000000) amountMinor?: number | null;

@@ -1,5 +1,7 @@
 import supabase from "@/lib/supabase";
 import type { ProfileData } from "@/contexts/ProfileContext";
+import type { PublicProject } from "@/lib/api/profileProjects";
+import type { DoneWorkSummary } from "@/lib/api/marketplace";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001/api/v1";
 
@@ -64,7 +66,17 @@ interface BackendPublicProfile {
     issueDate: string;
     credentialUrl: string | null;
   }[];
-  portfolioItems: { id: string; title: string; description: string | null; link: string | null }[];
+  portfolioItems: {
+    id: string;
+    type: "project" | "video" | "document" | "design";
+    title: string;
+    description: string | null;
+    link: string | null;
+    /** Only a picture they uploaded here; never stands in for the link. */
+    imageUrl: string | null;
+  }[];
+  projects?: PublicProject[];
+  doneWork?: DoneWorkSummary;
   recommendations: {
     id: string;
     text: string;
@@ -144,12 +156,15 @@ function toProfileData(b: BackendPublicProfile): ProfileData {
     portfolioItems: b.portfolioItems.map((p, i) => ({
       id: i + 1,
       serverId: p.id,
-      type: "project" as const,
+      type: p.type ?? "project",
       title: p.title,
       description: p.description ?? "",
       thumbnail: "",
       link: p.link ?? undefined,
+      imageUrl: p.imageUrl ?? undefined,
     })),
+    projects: b.projects ?? [],
+    doneWork: b.doneWork,
     recommendations: b.recommendations.map((r, i) => ({
       id: i + 1,
       serverId: r.id,

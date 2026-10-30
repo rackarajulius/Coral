@@ -321,7 +321,7 @@ export class CommunityMediaService {
          * absolute URLs while these are storage paths, so an exact-match query
          * finds nothing and the sweep would then treat every file as an orphan.
          */
-        const [referenced, queued] = await Promise.all([
+        const [referenced, queued, listings, projects] = await Promise.all([
           this.prisma.post.findMany({
             where: { authorId: folder.name },
             select: { mediaUrls: true, documentUrl: true },
@@ -331,9 +331,21 @@ export class CommunityMediaService {
             where: { authorId: folder.name, status: { not: 'PUBLISHED' } },
             select: { payload: true },
           }),
+          // So are a service listing's pictures and video, uploaded here too.
+          this.prisma.serviceListing.findMany({
+            where: { ownerUserId: folder.name },
+            select: { mediaUrls: true },
+          }),
+          // And a profile project's.
+          this.prisma.profileProject.findMany({
+            where: { profile: { userId: folder.name } },
+            select: { mediaUrls: true },
+          }),
         ]);
         const inUse = new Set([
           ...referenced.flatMap((p) => (p.documentUrl ? [...p.mediaUrls, p.documentUrl] : p.mediaUrls)),
+          ...listings.flatMap((listing) => listing.mediaUrls),
+          ...projects.flatMap((project) => project.mediaUrls),
           ...queued.flatMap(({ payload }) => {
             const draft = (payload ?? {}) as { mediaUrls?: string[]; document?: { url?: string } };
             return [...(draft.mediaUrls ?? []), ...(draft.document?.url ? [draft.document.url] : [])];

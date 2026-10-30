@@ -24,13 +24,17 @@ export interface MarketplaceRequestSummary {
   listing: { kind: MarketplaceKind; id: string; title: string; url: string; available: boolean };
   viewerSide: "requester" | "recipient";
   unreadCount: number;
+  /** Who did the work: you, or them for you. Null when it was done as a company page, which is not recorded. */
+  workRole?: "provider" | "client" | null;
+  /** Work done through Coral: proposed by one side, confirmed by the other. */
+  work?: { proposedBySelf: boolean; proposedAt: string; confirmedAt: string | null; shown: boolean; clientNamed: boolean } | null;
 }
 export interface MarketplaceRequestDetail extends MarketplaceRequestSummary {
   body: string;
   workSamples: { label: string; url: string }[];
   acceptedAt?: string | null;
   firstRecipientReplyAt?: string | null;
-  permissions: { canAccept: boolean; canDecline: boolean; canWithdraw: boolean; canBlock: boolean; canSend: boolean; canReport: boolean };
+  permissions: { canAccept: boolean; canDecline: boolean; canWithdraw: boolean; canBlock: boolean; canSend: boolean; canReport: boolean; canMarkDone?: boolean; canUnmarkDone?: boolean };
 }
 export interface MarketplaceRequestMessage { id: string; requestId: string; senderId: string; body: string; createdAt: string }
 export interface MarketplaceRequestPage<T> { data: T[]; meta: { page: number; limit: number; total: number; totalPages: number } }
@@ -92,6 +96,18 @@ export async function markMarketplaceRequestRead(id: string, owner: MarketplaceO
 }
 export async function reportMarketplaceRequest(id: string, payload: { reason: MarketplaceReportReason; details?: string }, owner: MarketplaceOwner): Promise<void> {
   await request(`/${encodeURIComponent(id)}/report`, { method: "POST", body: JSON.stringify(payload) }, owner);
+}
+/** "The work is done": proposes it, or confirms the other side's proposal. */
+export async function markMarketplaceWorkDone(id: string, owner: MarketplaceOwner): Promise<MarketplaceRequestDetail> {
+  return (await request<{ data: MarketplaceRequestDetail }>(`/${encodeURIComponent(id)}/work/done`, { method: "POST", body: "{}" }, owner)).data;
+}
+/** "Not yet": takes back a proposal, yours or theirs. */
+export async function markMarketplaceWorkNotDone(id: string, owner: MarketplaceOwner): Promise<MarketplaceRequestDetail> {
+  return (await request<{ data: MarketplaceRequestDetail }>(`/${encodeURIComponent(id)}/work/not-done`, { method: "POST", body: "{}" }, owner)).data;
+}
+/** After both confirmed: the provider shows it or not; the client is named or not. */
+export async function setMarketplaceWorkChoices(id: string, choices: { shown?: boolean; named?: boolean }, owner: MarketplaceOwner): Promise<MarketplaceRequestDetail> {
+  return (await request<{ data: MarketplaceRequestDetail }>(`/${encodeURIComponent(id)}/work`, { method: "PATCH", body: JSON.stringify(choices) }, owner)).data;
 }
 export const marketplaceRequestPath = (id: string, box: "incoming" | "outgoing" = "outgoing") => `/marketplace/inbox?${new URLSearchParams({ box, request: id })}`;
 export const marketplaceRequestStatusLabel = (status: MarketplaceRequestStatus) => ({ pending: "Awaiting a reply", accepted: "Conversation open", declined: "Declined", withdrawn: "Withdrawn", blocked: "Blocked" })[status] || status;

@@ -271,11 +271,12 @@ describe('A company never sees its own people looking', () => {
     const profile = (userId: string) => ({
       userId, discoverable: true, privacySettings: null, openToWork: true, skills: [], languages: [],
       user: { displayName: 'Someone', firstName: null, lastName: null, avatarUrl: null },
-      experiences: [], educations: [], certifications: [], portfolioItems: [], recommendations: [],
+      experiences: [], educations: [], certifications: [], portfolioItems: [], recommendations: [], projects: [],
     });
     const prisma = {
       jobSeekerProfile: { findUnique: jest.fn().mockImplementation(async ({ where }) => profile(where.userId)) },
       application: { findFirst: jest.fn().mockResolvedValue(null) },
+      completedWork: { count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]) },
     };
     const seekers = new JobSeekersService(
       collaborator(prisma), collaborator({}), collaborator({}), collaborator(companyContext(seat())),

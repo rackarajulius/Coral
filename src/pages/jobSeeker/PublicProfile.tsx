@@ -29,6 +29,10 @@ import { useProfile } from '@/contexts/ProfileContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { getWorkEligibilityOption } from '@/lib/workEligibility';
 import VideoModel from '@/components/jobSeeker/VideoModel';
+import { FeaturedWork } from '@/components/jobSeeker/FeaturedWork';
+import { ProjectList } from '@/components/jobSeeker/ProjectList';
+import { DoneWorkList } from '@/components/marketplace/DoneWorkList';
+import { listMyProjects, MY_PROJECTS_KEY } from '@/lib/api/profileProjects';
 import { ProfileAvatar, ProfileBanner } from '@/components/jobSeeker/ProfileVisuals';
 import Header from '@/components/Header';
 import { useAuthModal } from '@/contexts/AuthModalContext';
@@ -81,6 +85,14 @@ const PublicProfile = () => {
 
   const profile = isOwnPreview ? ownProfile : fetchedProfile;
   useDocumentTitle(profile?.name ?? null);
+  // Your own projects live behind their own endpoint; someone else's come with their profile.
+  const myProjects = useQuery({
+    queryKey: MY_PROJECTS_KEY,
+    queryFn: listMyProjects,
+    enabled: isOwnPreview && signedIn,
+    staleTime: 60_000,
+  });
+  const projects = (isOwnPreview ? myProjects.data : fetchedProfile?.projects) ?? [];
 
   /**
    * The account photo backs up the profile one only in your own preview.
@@ -325,6 +337,21 @@ const PublicProfile = () => {
           </section>
         )}
 
+        {/* Work done through Coral: both sides confirmed it was finished. */}
+        {!!profile.doneWork?.total && (
+          <section className="bg-card rounded-xl shadow-sm border border-border p-6">
+            <h2 className="text-lg font-semibold text-foreground mb-3">Done through Coral</h2>
+            <DoneWorkList work={profile.doneWork} />
+          </section>
+        )}
+
+        {profile.portfolioItems.length > 0 && (
+          <section className="bg-card rounded-xl shadow-sm border border-border p-6">
+            <h2 className="text-lg font-semibold text-foreground mb-4">Featured</h2>
+            <FeaturedWork items={profile.portfolioItems.map((item) => ({ ...item, key: item.serverId ?? item.id }))} />
+          </section>
+        )}
+
         {/* Experience */}
         {profile.experiences.length > 0 && (
           <section className="bg-card rounded-xl shadow-sm border border-border p-6">
@@ -374,6 +401,14 @@ const PublicProfile = () => {
                 </div>
               ))}
             </div>
+          </section>
+        )}
+
+        {/* Projects: what they made in those jobs, and outside them. */}
+        {projects.length > 0 && (
+          <section className="bg-card rounded-xl shadow-sm border border-border p-6">
+            <h2 className="text-lg font-semibold text-foreground mb-4">Projects</h2>
+            <ProjectList projects={projects} />
           </section>
         )}
 
@@ -505,36 +540,6 @@ const PublicProfile = () => {
                       </p>
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {/* Portfolio */}
-        {profile.portfolioItems.length > 0 && (
-          <section className="bg-card rounded-xl shadow-sm border border-border p-6">
-            <h2 className="text-lg font-semibold text-foreground mb-4">Portfolio</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {profile.portfolioItems.map((item) => (
-                <div
-                  key={item.id}
-                  className="p-4 rounded-lg border border-border hover:border-foreground/20 transition-colors"
-                >
-                  <p className="text-sm font-medium text-foreground">{item.title}</p>
-                  {item.description && (
-                    <p className="text-xs text-muted-foreground mt-0.5">{item.description}</p>
-                  )}
-                  {item.link && (
-                    <a
-                      href={item.link.startsWith('http') ? item.link : `https://${item.link}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-2 inline-flex items-center gap-1 text-xs text-link hover:underline"
-                    >
-                      Open <ExternalLink className="w-3 h-3" />
-                    </a>
-                  )}
                 </div>
               ))}
             </div>

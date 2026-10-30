@@ -159,6 +159,8 @@ model User {
   marketplaceReports MarketplaceReport[]
   marketplaceRequestsMade MarketplaceRequest[] @relation("MarketplaceRequester")
   marketplaceRequestsReceived MarketplaceRequest[] @relation("MarketplaceRecipient")
+  completedWorkDone     CompletedWork[] @relation("CompletedWorkProvider")
+  completedWorkReceived CompletedWork[] @relation("CompletedWorkClient")
   marketplaceMessages MarketplaceMessage[]
   marketplaceBlocksMade MarketplaceBlock[] @relation("MarketplaceBlocker")
   marketplaceBlocksReceived MarketplaceBlock[] @relation("MarketplaceBlocked")
@@ -689,11 +691,47 @@ model JobSeekerProfile {
   certifications  Certification[]
   portfolioItems  PortfolioItem[]
   recommendations Recommendation[]
+  projects        ProfileProject[]
 
   @@index([userId])
   @@index([createdAt])
   @@index([skillsNormalized], type: Gin)
   @@map("job_seeker_profiles")
+}
+
+/// A project on a job seeker's profile: what they made, when, with which
+/// skills, and where — during one of their jobs, or as one of their
+/// services. Self-described like the rest of the profile; what Coral checks
+/// is that the pictures and video were uploaded here, by them, and that a
+/// linked job or service is theirs.
+model ProfileProject {
+  id               String    @id @default(uuid())
+  profileId        String    @map("profile_id")
+  title            String    @db.VarChar(120)
+  description      String    @default("") @db.Text
+  /// Month precision, kept as the first of the month.
+  startDate        DateTime? @map("start_date") @db.Date
+  endDate          DateTime? @map("end_date") @db.Date
+  current          Boolean   @default(false)
+  skills           String[]  @default([])
+  projectUrl       String?   @map("project_url") @db.VarChar(2048)
+  /// Up to 8 pictures and one short video, uploaded by the owner through the
+  /// community media upload; the hourly clean-up keeps them while used.
+  mediaUrls        String[]  @default([]) @map("media_urls")
+  /// At most one of these two: the job it was done in, or the service it was
+  /// done as. Unlinked, not deleted, when the job or service goes.
+  experienceId     String?   @map("experience_id")
+  serviceListingId String?   @map("service_listing_id")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  profile        JobSeekerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  experience     Experience?      @relation(fields: [experienceId], references: [id], onDelete: SetNull)
+  serviceListing ServiceListing?  @relation(fields: [serviceListingId], references: [id], onDelete: SetNull)
+
+  @@index([profileId])
+  @@index([serviceListingId])
+  @@map("profile_projects")
 }
 
 // Work Experience
@@ -725,6 +763,7 @@ model Experience {
 
   profile         JobSeekerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
   workEmailVerifications WorkEmailVerification[]
+  projects        ProfileProject[]
 
   @@map("experiences")
 }
@@ -1888,6 +1927,10 @@ model ServiceListing {
   normalizedSkills String[] @default([]) @map("normalized_skills")
   deliverables String[] @default([])
   workSamples Json @default("[]") @map("work_samples")
+  /// Pictures (up to 8) and at most one short video of the work, uploaded by
+  /// the owner through the community media upload. The first picture is the
+  /// cover on /services.
+  mediaUrls String[] @default([]) @map("media_urls")
   availability String @default("available")
   workMode String @default("remote") @map("work_mode")
   country String @default("Canada")
@@ -1906,6 +1949,7 @@ model ServiceListing {
   announcements Post[]
   reports MarketplaceReport[]
   requests MarketplaceRequest[]
+  projects ProfileProject[]
   @@index([ownerUserId, createdAt])
   @@index([companyId, createdAt])
   @@index([status, category, createdAt])
@@ -2004,6 +2048,7 @@ model MarketplaceRequest {
   messages MarketplaceMessage[]
   reports MarketplaceRequestReport[]
   deliveries MarketplaceDelivery[]
+  completedWork CompletedWork?
   @@unique([requesterId, idempotencyKey])
   @@unique([requesterId, serviceListingId])
   @@unique([requesterId, projectBriefId])
@@ -2011,6 +2056,34 @@ model MarketplaceRequest {
   @@index([recipientId, createdAt])
   @@index([requesterId, recipientId])
   @@map("marketplace_requests")
+}
+
+/// Work done through Coral: a marketplace request both sides say was
+/// finished. One side marks it done and the other confirms; nothing shows
+/// until both have. Shown on the provider's profile and pages unless they
+/// turn it off; the client's name only if the client turns it on.
+model CompletedWork {
+  id              String    @id @default(uuid())
+  requestId       String    @unique @map("request_id")
+  /// Who did the work: the recipient of a service enquiry, the requester of a
+  /// project response. Always a person, never a company page.
+  providerId      String    @map("provider_id")
+  clientId        String    @map("client_id")
+  proposedById    String    @map("proposed_by_id")
+  proposedAt      DateTime  @default(now()) @map("proposed_at")
+  /// When the other side confirmed. Until then this is only a proposal.
+  confirmedAt     DateTime? @map("confirmed_at")
+  shownByProvider Boolean   @default(true) @map("shown_by_provider")
+  clientNamed     Boolean   @default(false) @map("client_named")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  request  MarketplaceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  provider User               @relation("CompletedWorkProvider", fields: [providerId], references: [id], onDelete: Cascade)
+  client   User               @relation("CompletedWorkClient", fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([providerId, confirmedAt])
+  @@map("completed_work")
 }
 
 model MarketplaceMessage {

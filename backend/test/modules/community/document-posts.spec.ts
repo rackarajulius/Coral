@@ -154,6 +154,8 @@ describe('The hourly clean-up', () => {
     const stale = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
     const prisma = {
       post: { findMany: jest.fn().mockResolvedValue([{ mediaUrls: [], documentUrl: documentUrl(WRITER, 4) }]) },
+      serviceListing: { findMany: jest.fn().mockResolvedValue([]) },
+      profileProject: { findMany: jest.fn().mockResolvedValue([]) },
       scheduledPost: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const { service, storage } = media(prisma);
@@ -175,6 +177,8 @@ describe('The hourly clean-up', () => {
     const queuedPicture = `${STORAGE}/posts/${WRITER}/55555555-5555-4555-8555-555555555555.png`;
     const prisma = {
       post: { findMany: jest.fn().mockResolvedValue([]) },
+      serviceListing: { findMany: jest.fn().mockResolvedValue([]) },
+      profileProject: { findMany: jest.fn().mockResolvedValue([]) },
       scheduledPost: {
         findMany: jest.fn().mockResolvedValue([
           { payload: { mediaUrls: [queuedPicture] } },

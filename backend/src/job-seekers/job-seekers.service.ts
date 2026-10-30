@@ -28,6 +28,9 @@ import {
 } from './dto/interview-prep.dto';
 import { UpdateJobSeekerProfileDto } from './dto/update-job-seeker-profile.dto';
 import { User } from '../common/types/user.types';
+import { publicFeaturedItems } from './featured-items';
+import { PROJECT_ORDER, PROJECT_SELECT, publicProjects } from './profile-projects';
+import { doneWorkFor } from '../marketplace/done-work';
 import { ProfileImpressionsService } from './profile-impressions.service';
 
 @Injectable()
@@ -68,6 +71,7 @@ export class JobSeekersService {
         certifications: { orderBy: { issueDate: 'desc' } },
         portfolioItems: { orderBy: { createdAt: 'desc' } },
         recommendations: { orderBy: { createdAt: 'desc' } },
+        projects: { select: PROJECT_SELECT, orderBy: PROJECT_ORDER },
       },
     });
     // 404 (not 403) on every denial so we don't leak whether a profile exists.
@@ -171,12 +175,9 @@ export class JobSeekersService {
         issueDate: c.issueDate,
         credentialUrl: c.credentialUrl,
       })),
-      portfolioItems: profile.portfolioItems.map((p) => ({
-        id: p.id,
-        title: p.title,
-        description: p.description,
-        link: p.projectUrl ?? p.videoUrl ?? p.imageUrl,
-      })),
+      portfolioItems: publicFeaturedItems(profile.portfolioItems, targetUserId),
+      projects: await publicProjects(this.prisma, profile.projects, targetUserId),
+      doneWork: await doneWorkFor(this.prisma, targetUserId),
       recommendations: profile.recommendations.map((r) => ({
         id: r.id,
         text: r.text,
