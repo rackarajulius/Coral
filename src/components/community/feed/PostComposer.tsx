@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BarChart3, Building2, CalendarPlus, ChevronRight, Clock, FileText, Globe, ImagePlus, Loader2, MessageCircle, Search, Video, X,
+  BarChart3, Building2, CalendarPlus, Check, ChevronDown, ChevronRight, Clock, FileText, Globe, ImagePlus, Loader2, MessageCircle, Search, Video, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
@@ -9,7 +9,11 @@ import { getMarketplaceCapabilities } from "@/lib/api/marketplace";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { createTide } from "@/lib/api/tides";
 import {
@@ -22,14 +26,16 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
 import {
-  COMMENT_POLICY_LABELS, createPost, getAnnouncementOptions, getCompanyVoice, getGifStatus, listSpaces, schedulePost, uploadPostDocument, uploadPostMedia,
-  type CommentPolicy, type MediaKind, type PostPurpose, type Space, type UploadedDocument,
+  COMMENT_POLICY_LABELS, createPost, discardCommunityVideo, getAnnouncementOptions, getCommunityVideo, getCompanyVoice, getGifStatus,
+  getVideoUploadSettings, listSpaces, schedulePost, startVideoUpload, uploadPostDocument, uploadPostMedia,
+  type CommentPolicy, type CommunityVideo, type MediaKind, type PostPurpose, type Space, type UploadedDocument,
 } from "@/lib/api/community";
 import { GifPicker } from "./GifPicker";
 import { MentionField } from "./MentionField";
 import { defaultScheduleTime, formatWhen, localZone, scheduleProblem, toLocalInput, SCHEDULE_MAX_MS, SCHEDULE_MIN_MS } from "./schedule";
 import { toStored, type Mention } from "@/lib/mentions";
 import { postPurposeLabels } from "./CommunityLinkedCard";
+import { personName } from "@/lib/personName";
 
 const MAX_LENGTH = 5000;
 /** Four attachments. Past that a post is an album, and reads like one. */
@@ -41,6 +47,33 @@ const MAX_MEDIA = 4;
  * upload so nobody waits out a 30MB transfer to be told no.
  */
 const MAX_VIDEO_SECONDS = 60;
+/**
+ * A long video, sent straight to Mux in resumable pieces. LinkedIn's ceiling;
+ * ten minutes of phone video is well under it.
+ */
+const MAX_LONG_VIDEO_BYTES = 5 * 1024 ** 3;
+
+/** 600 → "10:00". */
+function clock(seconds: number): string {
+  const whole = Math.round(seconds);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+/**
+ * A long video in the draft: sent from this browser to Mux, then prepared
+ * there for streaming. Only a "ready" one can be posted, and it is posted on
+ * its own.
+ */
+interface LongVideo {
+  /** Ours, once the server has given an upload address. */
+  id: string | null;
+  name: string;
+  phase: "uploading" | "processing" | "ready" | "failed";
+  /** Percent sent. */
+  progress: number;
+  video?: CommunityVideo;
+  error?: string;
+}
 
 /** Enough to post and to label the picker — the rest is fetched on demand. */
 interface PickedSpace {
@@ -128,6 +161,8 @@ export function PostComposer({
   open: controlledOpen,
   onOpenChange,
   showPrompt = true,
+  startPurpose,
+  startAsCompany,
 }: {
   spaceId: string | null;
   /** Shown in the picker straight away, before any list has loaded. */
@@ -137,6 +172,13 @@ export function PostComposer({
   onOpenChange?: (open: boolean) => void;
   /** False drops the prompt bar; the dialog then opens only through `open`. */
   showPrompt?: boolean;
+  /** What the post starts as; General when not given. */
+  startPurpose?: PostPurpose;
+  /**
+   * Starts in the company's name — the employer dashboard's "Post as …".
+   * Falls back to yourself when this person can't post as a company.
+   */
+  startAsCompany?: boolean;
 }) {
   const { user } = useAuth();
   const { openAuth } = useAuthModal();
@@ -161,7 +203,7 @@ export function PostComposer({
     );
   }
 
-  const name = user.displayName?.trim() || "You";
+  const name = personName(user) || "You";
 
   return (
     <>
@@ -182,7 +224,14 @@ export function PostComposer({
       )}
 
       {open && (
-        <ComposerDialog key={user.id} spaceId={spaceId} spaceName={spaceName} onClose={() => setOpen(false)} />
+        <ComposerDialog
+          key={user.id}
+          spaceId={spaceId}
+          spaceName={spaceName}
+          startPurpose={startPurpose}
+          startAsCompany={startAsCompany}
+          onClose={() => setOpen(false)}
+        />
       )}
     </>
   );
@@ -193,10 +242,14 @@ export function PostComposer({
 function ComposerDialog({
   spaceId,
   spaceName,
+  startPurpose,
+  startAsCompany,
   onClose,
 }: {
   spaceId: string | null;
   spaceName?: string;
+  startPurpose?: PostPurpose;
+  startAsCompany?: boolean;
   onClose: () => void;
 }) {
   const { user } = useAuth();
@@ -216,9 +269,28 @@ function ComposerDialog({
   const [attachedDoc, setAttachedDoc] = useState<UploadedDocument | null>(null);
   const [docTitle, setDocTitle] = useState("");
   const [uploading, setUploading] = useState(false);
+  /**
+   * Long videos, when Mux is set up: up to ten minutes, in any format a phone
+   * records. Otherwise the old rule holds — a minute of MP4 or WebM, kept in
+   * our own storage.
+   */
+  const videoSettings = useQuery({
+    queryKey: ["community-video-settings"],
+    queryFn: getVideoUploadSettings,
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
+  const streaming = videoSettings.data?.enabled === true;
+  const maxVideoSeconds = streaming ? videoSettings.data!.maxSeconds : MAX_VIDEO_SECONDS;
+  const [longVideo, setLongVideo] = useState<LongVideo | null>(null);
+  const upchunkRef = useRef<{ abort: () => void } | null>(null);
+  // For the clean-up when the composer closes, which sees no fresh state.
+  const longVideoRef = useRef<LongVideo | null>(null);
+  longVideoRef.current = longVideo;
+  const postedRef = useRef(false);
   const [poll, setPoll] = useState<string[] | null>(null);
   const [gifOpen, setGifOpen] = useState(false);
-  const [purpose, setPurpose] = useState<PostPurpose>("general");
+  const [purpose, setPurpose] = useState<PostPurpose>(startPurpose ?? "general");
   // Who may comment. Changeable later from the post's menu, as on LinkedIn.
   const [commentPolicy, setCommentPolicy] = useState<CommentPolicy>("ANYONE");
   const [selectedReference, setSelectedReference] = useState("");
@@ -236,7 +308,12 @@ function ComposerDialog({
     staleTime: 10 * 60_000,
     retry: false,
   });
-  const [asCompany, setAsCompany] = useState(false);
+  const [asCompany, setAsCompany] = useState(!!startAsCompany);
+  // Asked to start as the company by someone who can't post as one (or no
+  // longer can): start as yourself, rather than a choice that can't be posted.
+  useEffect(() => {
+    if (asCompany && !selectedCompanyId && companyVoice.isFetched && !companyVoice.data) setAsCompany(false);
+  }, [asCompany, selectedCompanyId, companyVoice.isFetched, companyVoice.data]);
   const capabilities = useQuery({
     queryKey: ["marketplace-capabilities", user?.id],
     queryFn: ({ signal }) => getMarketplaceCapabilities(user!, signal),
@@ -251,6 +328,16 @@ function ComposerDialog({
   const speakingAs = usesListingIdentity && publishingCompanyId
     ? capabilities.data?.companies.find((company) => company.id === publishingCompanyId) || null
     : publishingAsCompany ? companyVoice.data : null;
+  /**
+   * Who the "Post as" menu offers besides you. A listing post can be any
+   * company whose listings you manage; anything else, the one company whose
+   * page you run. Logos come with the company voice, so only that one has one.
+   */
+  const listingVoices = usesListingIdentity && !!capabilities.data?.companies.length;
+  const logoFor = (companyId: string) => (companyVoice.data?.id === companyId ? companyVoice.data.logoUrl : null);
+  const voices = listingVoices
+    ? capabilities.data!.companies.map((company) => ({ ...company, logoUrl: logoFor(company.id) }))
+    : companyVoice.data ? [companyVoice.data] : [];
   const options = useQuery({
     queryKey: ["community-announcement-options", user?.id, publishingAsCompany, publishingCompanyId],
     queryFn: ({ signal }) => getAnnouncementOptions(publishingAsCompany, user?.supabaseId, signal, publishingCompanyId),
@@ -263,6 +350,31 @@ function ComposerDialog({
   const reference = referenceOptions.find((record) => `${record.type}:${record.id}` === selectedReference);
   const referenceReady = (!structured || !!reference) && (!selectedReference || !!reference) && (!structured || listingsEnabled)
     && (!publishingAsCompany || !!speakingAs) && (!usesListingIdentity || !capabilities.isError);
+
+  // Opportunities need listings switched on. A post started on that tab
+  // becomes an ordinary one, rather than a choice that can't be published.
+  useEffect(() => {
+    if (structured && !capabilities.isPending && !listingsEnabled) setPurpose("general");
+  }, [structured, capabilities.isPending, listingsEnabled]);
+
+  /**
+   * A linked service is how a client gets from a Showcase post to the person
+   * behind it, so someone with exactly one has it linked from the start. Once
+   * for each identity, so that choosing not to link it sticks. A service
+   * published in another tab while writing is picked up here too.
+   */
+  const offeredService = useRef<string | null>(null);
+  useEffect(() => {
+    if (purpose !== "showcase") {
+      offeredService.current = null;
+      return;
+    }
+    const services = options.data?.services;
+    const identity = publishingCompanyId ?? "self";
+    if (!services?.length || offeredService.current === identity) return;
+    offeredService.current = identity;
+    if (services.length === 1) setSelectedReference(`${services[0].type}:${services[0].id}`);
+  }, [purpose, options.data, publishingCompanyId]);
 
   /**
    * A tide is composed here rather than on its own page.
@@ -302,7 +414,7 @@ function ComposerDialog({
   const postInput = () => ({
     spaceId: target?.id,
     content: toStored(content.trim(), mentions),
-    mediaUrls: media.map((m) => m.url),
+    mediaUrls: longVideo?.phase === "ready" && longVideo.video?.url ? [longVideo.video.url] : media.map((m) => m.url),
     postType: "TEXT" as const,
     purpose,
     ...(reference ? { reference: { type: reference.type, id: reference.id } } : {}),
@@ -313,18 +425,21 @@ function ComposerDialog({
   });
 
   /**
-   * Later, for a company page, as on LinkedIn. Personal posts, tides (which
+   * Later, as yourself or as a company page, as on LinkedIn. Tides (which
    * have their own time) and listing announcements (which must go out while
    * the listing is open) are posted now.
    */
-  const canSchedule = !tide && publishingAsCompany && !structured && !reference;
+  const canSchedule = !tide && !structured && !reference;
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleAt, setScheduleAt] = useState("");
   const schedule = useMutation({
     mutationFn: () => schedulePost({ ...postInput(), publishAt: new Date(scheduleAt).toISOString() }, user?.supabaseId),
     onSuccess: (item) => {
+      postedRef.current = true;
       toast.success(`Scheduled for ${formatWhen(item.publishAt)}`, {
-        description: "It's in the Scheduled list on the company's community page.",
+        description: item.companyId
+          ? "It's in the Scheduled list on the company's community page."
+          : "It's under Scheduled in the community menu.",
       });
       void queryClient.invalidateQueries({ queryKey: ["scheduled-posts"] });
       setScheduleOpen(false);
@@ -349,6 +464,7 @@ function ComposerDialog({
       await createPost(postInput(), user?.supabaseId);
     },
     onSuccess: () => {
+      postedRef.current = true;
       rememberAudience(user?.id, target);
       void queryClient.invalidateQueries({ queryKey: ["community-posts"] });
       void queryClient.invalidateQueries({ queryKey: ["tides"] });
@@ -361,6 +477,108 @@ function ComposerDialog({
     },
     onError: (e) => toast.error((e as Error).message),
   });
+
+  /**
+   * Where the long video got to, asked of the server — which asks Mux — every
+   * few seconds while it is being prepared.
+   */
+  const videoProgress = useQuery({
+    queryKey: ["community-video", longVideo?.id],
+    queryFn: () => getCommunityVideo(longVideo!.id!),
+    enabled: !!longVideo?.id && longVideo.phase === "processing",
+    refetchInterval: 2500,
+    retry: false,
+    gcTime: 0,
+  });
+  useEffect(() => {
+    const v = videoProgress.data;
+    if (!v) return;
+    setLongVideo((cur) => {
+      if (!cur || cur.id !== v.id || cur.phase !== "processing") return cur;
+      if (v.status === "ready") return { ...cur, phase: "ready", video: v };
+      if (v.status === "failed") return { ...cur, phase: "failed", error: v.failureReason ?? "That video couldn't be prepared." };
+      return cur;
+    });
+  }, [videoProgress.data]);
+
+  // Leaving mid-upload loses it, so the browser asks first.
+  const sendingVideo = longVideo?.phase === "uploading";
+  useEffect(() => {
+    if (!sendingVideo) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [sendingVideo]);
+
+  // A video that was never posted is stopped and deleted when the draft goes.
+  useEffect(() => () => {
+    const draft = longVideoRef.current;
+    if (postedRef.current || !draft) return;
+    upchunkRef.current?.abort();
+    if (draft.id) void discardCommunityVideo(draft.id).catch(() => undefined);
+  }, []);
+
+  const removeLongVideo = () => {
+    upchunkRef.current?.abort();
+    upchunkRef.current = null;
+    const id = longVideo?.id;
+    setLongVideo(null);
+    if (id) void discardCommunityVideo(id).catch(() => undefined);
+  };
+
+  /**
+   * A long video goes from this browser straight to Mux, in 5MB pieces that
+   * are retried and resume after the connection drops — never through our
+   * servers, which could not take a file this size.
+   */
+  const pickLongVideo = async (file: File | undefined) => {
+    if (videoRef.current) videoRef.current.value = "";
+    if (!file) return;
+    if (media.length > 0) {
+      toast.error("A video is posted on its own. Remove the pictures first.");
+      return;
+    }
+    if (file.size > MAX_LONG_VIDEO_BYTES) {
+      toast.error("That video is over 5GB. Export a smaller copy and try again.");
+      return;
+    }
+    // Checked here when the browser can read the file, and again by the
+    // server once Mux has measured it — an iPhone .mov often can't be read here.
+    const seconds = await videoDuration(file);
+    if (seconds !== null && seconds > maxVideoSeconds + 1) {
+      toast.error(`That video is ${clock(seconds)} long. Videos can be up to ${clock(maxVideoSeconds)}.`);
+      return;
+    }
+
+    setLongVideo({ id: null, name: file.name, phase: "uploading", progress: 0 });
+    try {
+      const { id, uploadUrl } = await startVideoUpload();
+      // Taken out while the address was being fetched: nothing to send.
+      if (!longVideoRef.current) {
+        void discardCommunityVideo(id).catch(() => undefined);
+        return;
+      }
+      setLongVideo((cur) => (cur ? { ...cur, id } : cur));
+      const { createUpload } = await import("@mux/upchunk");
+      const upload = createUpload({ endpoint: uploadUrl, file, chunkSize: 5120 });
+      upchunkRef.current = upload;
+      const mine = (cur: LongVideo | null) => !!cur && cur.id === id;
+      upload.on("progress", (e) => setLongVideo((cur) => (mine(cur) ? { ...cur!, progress: Number(e.detail) || 0 } : cur)));
+      upload.on("success", () => {
+        upchunkRef.current = null;
+        setLongVideo((cur) => (mine(cur) ? { ...cur!, phase: "processing", progress: 100 } : cur));
+      });
+      upload.on("error", () => {
+        upchunkRef.current = null;
+        setLongVideo((cur) => (mine(cur)
+          ? { ...cur!, phase: "failed", error: "The upload stopped. Check your connection and pick the video again." }
+          : cur));
+        void discardCommunityVideo(id).catch(() => undefined);
+      });
+    } catch (e) {
+      setLongVideo((cur) => (cur ? { ...cur, phase: "failed", error: (e as Error).message } : cur));
+    }
+  };
 
   const pickMedia = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -414,14 +632,19 @@ function ComposerDialog({
     }
   };
 
-  const name = user?.displayName?.trim() || "You";
+  const name = personName(user) || "You";
   // A poll needs two real choices, so the button waits for them rather than
   // letting the server refuse a post someone thought they had finished.
   const pollReady = !poll || poll.filter((o) => o.trim()).length >= 2;
   // A document can be the whole post, under its title.
   const docReady = !attachedDoc || !!docTitle.trim();
-  const canPost = (!!content.trim() || !!attachedDoc) && docReady && pollReady && referenceReady && !uploading && !post.isPending;
-  const dirty = !!content.trim() || media.length > 0 || !!poll || !!attachedDoc;
+  // Words, pictures, a video or a document can each be the whole post — the
+  // server takes any one of them.
+  // A long video has to be ready before the post can go out with it.
+  const videoReady = !longVideo || longVideo.phase === "ready";
+  const canPost = (!!content.trim() || media.length > 0 || !!attachedDoc || longVideo?.phase === "ready")
+    && docReady && pollReady && referenceReady && videoReady && !uploading && !post.isPending;
+  const dirty = !!content.trim() || media.length > 0 || !!poll || !!attachedDoc || !!longVideo;
 
   return (
     <Dialog
@@ -458,9 +681,7 @@ function ComposerDialog({
               {speakingAs ? (
                 // Not the person's avatar: the post will not carry their face,
                 // and the composer should look like what gets published.
-                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10">
-                  <Building2 className="h-4 w-4 text-primary" aria-hidden="true" />
-                </span>
+                <CompanyMark logoUrl={logoFor(speakingAs.id)} className="h-9 w-9" />
               ) : (
                 <Avatar className="h-9 w-9">
                   <AvatarImage src={user?.avatarUrl ?? ""} alt="" />
@@ -476,29 +697,19 @@ function ComposerDialog({
 
             <div className="min-w-0 flex-1 pb-2">
               <div className="flex items-center gap-1 text-sm">
-                {usesListingIdentity && capabilities.data?.companies.length ? (
-                  <div className="min-w-0 max-w-[65%]">
-                    <label htmlFor="post-publishing-company" className="sr-only">Publishing identity</label>
-                    <select id="post-publishing-company" value={publishingCompanyId || ""} onChange={(event) => {
-                      setSelectedCompanyId(event.target.value); setAsCompany(!!event.target.value); setSelectedReference("");
-                    }} className="w-full rounded-lg border border-border bg-background px-2 py-1 text-sm">
-                      <option value="">{name}</option>
-                      {capabilities.data.companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
-                    </select>
-                  </div>
-                ) : companyVoice.data ? (
-                  <button
-                    type="button"
-                    onClick={() => { setAsCompany((v) => !v); setSelectedCompanyId(""); setSelectedReference(""); }}
-                    className="rounded-full border border-border px-2 py-0.5 font-medium hover:bg-muted"
-                    title={
-                      asCompany
-                        ? "Posting as the company. Click to post as yourself."
-                        : `Posting as yourself. Click to post as ${companyVoice.data.name}.`
-                    }
-                  >
-                    {speakingAs ? speakingAs.name : name}
-                  </button>
+                {voices.length > 0 ? (
+                  <PostAsMenu
+                    person={{ name, avatarUrl: user?.avatarUrl ?? null }}
+                    companies={voices}
+                    chosenId={speakingAs?.id ?? null}
+                    onChoose={(companyId) => {
+                      // A listing post names its company; otherwise the one
+                      // company you speak for is implied, as the server reads it.
+                      setSelectedCompanyId(listingVoices && companyId ? companyId : "");
+                      setAsCompany(!!companyId);
+                      setSelectedReference("");
+                    }}
+                  />
                 ) : (
                   <span className="font-medium">{name}</span>
                 )}
@@ -553,16 +764,16 @@ function ComposerDialog({
                     if (!["service_announcement", "opportunity", "showcase"].includes(next) && selectedCompanyId && selectedCompanyId !== companyVoice.data?.id) setAsCompany(false);
                     setPurpose(next); setSelectedReference("");
                   }} className="w-full rounded-lg border border-border bg-background px-2 py-2 text-sm">
-                    {(["general", "question", "showcase", ...(listingsEnabled ? ["service_announcement", "opportunity"] : [])] as PostPurpose[]).map((value) => <option key={value} value={value}>{postPurposeLabels[value]}</option>)}
+                    {(["general", "question", "showcase", ...(listingsEnabled || structured ? ["service_announcement", "opportunity"] : [])] as PostPurpose[]).map((value) => <option key={value} value={value}>{postPurposeLabels[value]}</option>)}
                   </select>
                   {listingsEnabled && (structured || purpose === "showcase") && (
                     <>
                       <label className="block text-xs font-medium" htmlFor="post-reference">{purpose === "opportunity" ? "Your open project brief or live job" : "Your published service"}{!structured && " (optional)"}</label>
                       <select id="post-reference" value={selectedReference} onChange={(event) => setSelectedReference(event.target.value)} disabled={options.isPending || options.isError} className="w-full rounded-lg border border-border bg-background px-2 py-2 text-sm disabled:opacity-50">
-                        <option value="">{options.isPending ? "Loading your listings…" : "Choose a listing"}</option>
+                        <option value="">{options.isPending ? "Loading your listings…" : purpose === "showcase" ? "Don't link a service" : "Choose a listing"}</option>
                         {referenceOptions.map((record) => <option key={`${record.type}:${record.id}`} value={`${record.type}:${record.id}`}>{record.title}{record.type === "job" ? " · Job" : record.type === "project" ? " · Project" : ""}</option>)}
                       </select>
-                      {options.isError ? <p className="text-xs text-destructive">{(options.error as Error).message} <button type="button" onClick={() => void options.refetch()} className="underline">Try again</button></p> : !options.isPending && referenceOptions.length === 0 ? <p className="text-xs text-muted-foreground">No published listings are available for this identity. <Link to="/marketplace/manage" className="text-primary underline">Manage listings</Link>{!!capabilities.data?.companies.length && !publishingAsCompany && " or choose your company above for company opportunities."}</p> : <p className="text-xs text-muted-foreground">The card follows the current listing. Its link becomes unavailable when the listing closes or is withdrawn.</p>}
+                      {options.isError ? <p className="text-xs text-destructive">{(options.error as Error).message} <button type="button" onClick={() => void options.refetch()} className="underline">Try again</button></p> : !options.isPending && purpose === "showcase" && !reference ? <ShowcaseReach hasServices={referenceOptions.length > 0} /> : !options.isPending && referenceOptions.length === 0 ? <p className="text-xs text-muted-foreground">No published listings are available for this identity. <Link to="/marketplace/manage" className="text-primary underline">Manage listings</Link>{!!capabilities.data?.companies.length && !publishingAsCompany && " or choose your company above for company opportunities."}</p> : <p className="text-xs text-muted-foreground">The card follows the current listing. Its link becomes unavailable when the listing closes or is withdrawn.</p>}
                     </>
                   )}
                 </div>
@@ -615,6 +826,10 @@ function ComposerDialog({
                     </div>
                   ))}
                 </div>
+              )}
+
+              {longVideo && (
+                <LongVideoCard draft={longVideo} onRemove={removeLongVideo} />
               )}
 
               {attachedDoc && (
@@ -725,9 +940,10 @@ function ComposerDialog({
                 <input
                   ref={videoRef}
                   type="file"
-                  accept="video/mp4,video/webm"
+                  // With streaming, whatever a phone records: Mux converts it.
+                  accept={streaming ? "video/mp4,video/webm,video/quicktime,.mov,.m4v" : "video/mp4,video/webm"}
                   className="hidden"
-                  onChange={(e) => void pickMedia(e.target.files)}
+                  onChange={(e) => (streaming ? void pickLongVideo(e.target.files?.[0]) : void pickMedia(e.target.files))}
                 />
                 <input
                   ref={docRef}
@@ -741,21 +957,22 @@ function ComposerDialog({
                   icon={ImagePlus}
                   label="Photo"
                   busy={uploading}
-                  disabled={uploading || media.length >= MAX_MEDIA || !!poll || !!attachedDoc}
+                  disabled={uploading || media.length >= MAX_MEDIA || !!poll || !!attachedDoc || !!longVideo}
                   onClick={() => photoRef.current?.click()}
                 />
                 <MediaButton
                   icon={Video}
                   label="Video"
                   busy={uploading}
-                  disabled={uploading || media.length >= MAX_MEDIA || !!poll || !!attachedDoc}
+                  // A streamed video goes alone, as on LinkedIn.
+                  disabled={uploading || media.length >= MAX_MEDIA || !!poll || !!attachedDoc || !!longVideo || !!tide || (streaming && media.length > 0)}
                   onClick={() => videoRef.current?.click()}
                 />
                 <MediaButton
                   icon={FileText}
                   label="Document"
                   busy={uploading}
-                  disabled={uploading || media.length > 0 || !!poll || !!tide || !!attachedDoc}
+                  disabled={uploading || media.length > 0 || !!poll || !!tide || !!attachedDoc || !!longVideo}
                   onClick={() => docRef.current?.click()}
                 />
 
@@ -768,7 +985,7 @@ function ComposerDialog({
                     icon={GifIcon}
                     label="GIF"
                     busy={false}
-                    disabled={uploading || media.length >= MAX_MEDIA || !!poll || !!attachedDoc}
+                    disabled={uploading || media.length >= MAX_MEDIA || !!poll || !!attachedDoc || !!longVideo}
                     onClick={() => setGifOpen(true)}
                   />
                 )}
@@ -776,7 +993,7 @@ function ComposerDialog({
                   icon={BarChart3}
                   label="Poll"
                   busy={false}
-                  disabled={media.length > 0 || !!tide || !!attachedDoc}
+                  disabled={media.length > 0 || !!tide || !!attachedDoc || !!longVideo}
                   onClick={() => setPoll(poll ? null : ["", ""])}
                 />
                 {/* A tide replaces the body rather than adding to it: the card
@@ -786,7 +1003,7 @@ function ComposerDialog({
                   icon={CalendarPlus}
                   label="Tide"
                   busy={false}
-                  disabled={media.length > 0 || !!poll || !!attachedDoc}
+                  disabled={media.length > 0 || !!poll || !!attachedDoc || !!longVideo}
                   onClick={() => {
                     if (!tide && selectedCompanyId && selectedCompanyId !== companyVoice.data?.id) setAsCompany(false);
                     setSelectedCompanyId(""); setTide(tide ? null : emptyTide()); setPurpose("general"); setSelectedReference("");
@@ -802,7 +1019,9 @@ function ComposerDialog({
                   QuickTime, which the server rejects, and finding that out
                   after a 30MB upload is the worst place to learn it. */}
               <p className="mt-1.5 text-[11px] text-muted-foreground">
-                MP4 or WebM, up to {MAX_VIDEO_SECONDS}s. iPhone videos need exporting as MP4. Documents: a PDF, up to 15MB.
+                {streaming
+                  ? `Videos up to ${maxVideoSeconds / 60} minutes, straight from your phone or camera. Documents: a PDF, up to 15MB.`
+                  : `MP4 or WebM, up to ${MAX_VIDEO_SECONDS}s. iPhone videos need exporting as MP4. Documents: a PDF, up to 15MB.`}
               </p>
             </div>
           </div>
@@ -810,7 +1029,11 @@ function ComposerDialog({
 
         <footer className="flex items-center justify-between gap-3 border-t border-border px-4 py-3">
           <span className="text-xs text-muted-foreground">
-            {tide && !tideReady(tide)
+            {longVideo && longVideo.phase !== "ready"
+              ? longVideo.phase === "failed"
+                ? "Remove the video to post without it"
+                : "You can post once the video is ready"
+              : tide && !tideReady(tide)
               ? "A tide needs a name and a start"
               : !tide && content.length > MAX_LENGTH - 500
                 ? `${MAX_LENGTH - content.length} left`
@@ -855,7 +1078,9 @@ function ComposerDialog({
                     </p>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    It goes out as {speakingAs?.name ?? "the company"}, under your name. Owners and admins can change or cancel it until then.
+                    {publishingAsCompany
+                      ? `It goes out as ${speakingAs?.name ?? "the company"}, under your name. Owners and admins can change or cancel it until then.`
+                      : "It goes out under your name. Only you see it until then, under Scheduled in the community menu."}
                   </p>
                   <Button
                     size="sm"
@@ -891,7 +1116,175 @@ function ComposerDialog({
   );
 }
 
+/**
+ * A long video in the draft: how far the upload is, then its still and
+ * length once Mux has it ready — or why it can't be posted.
+ */
+function LongVideoCard({ draft, onRemove }: { draft: LongVideo; onRemove: () => void }) {
+  const ready = draft.phase === "ready" ? draft.video : undefined;
+  return (
+    <div className="mt-3 overflow-hidden rounded-xl border border-border">
+      {ready?.posterUrl && (
+        <div className="relative bg-black">
+          <img src={ready.posterUrl} alt="" className="mx-auto block max-h-64 w-full object-contain" />
+          {ready.durationSeconds !== null && (
+            <span className="absolute bottom-2 right-2 rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white">
+              {clock(ready.durationSeconds)}
+            </span>
+          )}
+        </div>
+      )}
+      <div className="flex items-start gap-3 p-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+          <Video className="h-5 w-5" aria-hidden="true" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium">{draft.name}</p>
+          {draft.phase === "uploading" && (
+            <>
+              <Progress value={draft.progress} className="mt-1.5 h-1.5" aria-label="Upload progress" />
+              <p className="mt-1 text-xs tabular-nums text-muted-foreground">
+                {draft.id ? `Uploading… ${Math.floor(draft.progress)}%` : "Starting the upload…"} Keep this window open.
+              </p>
+            </>
+          )}
+          {draft.phase === "processing" && (
+            <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              Preparing it for streaming. This usually takes under a minute.
+            </p>
+          )}
+          {draft.phase === "ready" && (
+            <p className="mt-1 text-xs text-muted-foreground">Ready. It plays at the quality each viewer's connection can take.</p>
+          )}
+          {draft.phase === "failed" && (
+            <p className="mt-1 text-xs text-destructive" role="alert">{draft.error}</p>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label={draft.phase === "uploading" ? "Cancel the upload" : "Remove video"}
+          className="rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <X className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Who the post goes out as: you, or a company whose page you run — LinkedIn's
+ * "Post as" choice, with each one's picture so the choice looks like the post.
+ */
+function PostAsMenu({
+  person,
+  companies,
+  chosenId,
+  onChoose,
+}: {
+  person: { name: string; avatarUrl: string | null };
+  companies: { id: string; name: string; logoUrl: string | null }[];
+  /** Null is yourself. */
+  chosenId: string | null;
+  onChoose: (companyId: string | null) => void;
+}) {
+  const chosen = companies.find((company) => company.id === chosenId) ?? null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Post as: ${chosen?.name ?? person.name}`}
+          className="inline-flex min-w-0 max-w-[60%] items-center gap-1 rounded-full border border-border px-2 py-0.5 font-medium hover:bg-muted"
+        >
+          <span className="truncate">{chosen?.name ?? person.name}</span>
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-64">
+        <DropdownMenuLabel className="text-xs font-medium text-muted-foreground">Post as</DropdownMenuLabel>
+        <PostAsItem chosen={!chosen} title={person.name} note="Yourself" onSelect={() => onChoose(null)}>
+          <Avatar className="h-8 w-8">
+            <AvatarImage src={person.avatarUrl ?? ""} alt="" />
+            <AvatarFallback className="bg-primary/10 text-xs text-primary">{initials(person.name)}</AvatarFallback>
+          </Avatar>
+        </PostAsItem>
+        {companies.map((company) => (
+          <PostAsItem
+            key={company.id}
+            chosen={chosen?.id === company.id}
+            title={company.name}
+            note="Company page"
+            onSelect={() => onChoose(company.id)}
+          >
+            <CompanyMark logoUrl={company.logoUrl} className="h-8 w-8" />
+          </PostAsItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function PostAsItem({
+  chosen,
+  title,
+  note,
+  onSelect,
+  children,
+}: {
+  chosen: boolean;
+  title: string;
+  note: string;
+  onSelect: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <DropdownMenuItem onSelect={onSelect} className="gap-2.5 py-2">
+      {children}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium">{title}</span>
+        <span className="block text-xs text-muted-foreground">{note}</span>
+      </span>
+      {chosen && <Check className="h-4 w-4 shrink-0 text-primary" aria-label="Chosen" />}
+    </DropdownMenuItem>
+  );
+}
+
+/** A company's logo, or a building where it has none. Square-ish, as logos are. */
+function CompanyMark({ logoUrl, className }: { logoUrl: string | null; className?: string }) {
+  return logoUrl ? (
+    <img src={logoUrl} alt="" className={cn("shrink-0 rounded-md border border-border bg-card object-contain", className)} />
+  ) : (
+    <span className={cn("flex shrink-0 items-center justify-center rounded-md bg-primary/10", className)}>
+      <Building2 className="h-4 w-4 text-primary" aria-hidden="true" />
+    </span>
+  );
+}
+
 /** Lucide has no GIF glyph, so the word does the work. */
+/**
+ * Said before posting: a client acts on a Showcase post through a service.
+ * The link opens a new tab so that what has been written here isn't lost.
+ */
+function ShowcaseReach({ hasServices }: { hasServices: boolean }) {
+  return (
+    <p className="text-xs text-muted-foreground">
+      {hasServices ? (
+        "Link a service so clients can reach you from this post."
+      ) : (
+        <>
+          Clients can't reach you from this post until you publish a service.{" "}
+          <Link to="/marketplace/manage?kind=service" target="_blank" className="text-primary underline">
+            Publish a service
+          </Link>
+        </>
+      )}
+    </p>
+  );
+}
+
 function GifIcon({ className }: { className?: string }) {
   return (
     <span className={cn("text-[10px] font-bold leading-none tracking-tight", className)}>GIF</span>

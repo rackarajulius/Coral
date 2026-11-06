@@ -6,12 +6,13 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import FollowButton from '@/components/company/FollowButton';
 import { mockCompany } from '@/data/companies/profile/mockCompany';
-import { EmployerCompany, getSimilarCompanies } from '@/lib/api/employerCompany';
+import { EmployerCompany, companyPageHref, getSimilarCompanies } from '@/lib/api/employerCompany';
 
 const CARD_WIDTH = 265; // card width (245) + gap (20)
 
 interface DisplayCard {
   id?: string;
+  slug?: string | null;
   name: string;
   industry: string;
   desc: string;
@@ -38,7 +39,7 @@ const CompanySimilar = ({ company }: CompanySimilarProps) => {
 
   // Real company → its industry peers; mock preview → sample companies.
   const cards: DisplayCard[] = company
-    ? similar.map((c) => ({ id: c.id, name: c.name, industry: c.industry, desc: c.description, jobs: c.openJobs, cover: c.cover }))
+    ? similar.map((c) => ({ id: c.id, slug: c.slug, name: c.name, industry: c.industry, desc: c.description, jobs: c.openJobs, cover: c.cover }))
     : mockCompany.similarCompanies.map((c) => ({ name: c.name, industry: c.industry, desc: c.desc, jobs: c.jobs, cover: c.cover }));
 
   const updateFades = useCallback(() => {
@@ -124,7 +125,7 @@ const CompanySimilar = ({ company }: CompanySimilarProps) => {
                     <Button
                       size="sm"
                       className="rounded-full h-8 bg-orange-500 hover:bg-orange-600 text-white"
-                      onClick={() => navigate(c.id ? `/company-profile/${c.id}` : '/company-profile')}
+                      onClick={() => navigate(c.id ? companyPageHref({ id: c.id, slug: c.slug }) : '/company-profile')}
                     >
                       View
                     </Button>

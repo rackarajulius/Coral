@@ -4,6 +4,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
+import { profilesShownFor } from '../company/company-page';
 import { NotificationsService } from '../notifications/notifications.service';
 import { User } from '../common/types/user.types';
 import { ReviewModerationService } from './review-moderation.service';
@@ -488,11 +489,9 @@ export class ReviewsService {
     return out;
   }
 
+  /** Each employer's company, by its page's name. */
   private async companyNames(ids: string[]): Promise<Map<string, string>> {
-    const profiles = await this.prisma.employerProfile.findMany({
-      where: { userId: { in: [...new Set(ids)] } },
-      select: { userId: true, companyName: true },
-    });
-    return new Map(profiles.map((p) => [p.userId, p.companyName?.trim() || 'An employer']));
+    const pages = await profilesShownFor(this.prisma, ids, { companyName: true });
+    return new Map([...pages].map(([userId, p]) => [userId, p.companyName?.trim() || 'An employer']));
   }
 }

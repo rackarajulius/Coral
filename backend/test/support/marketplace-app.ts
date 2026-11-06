@@ -6,6 +6,7 @@ import { AuthService } from '../../src/auth/auth.service';
 import { configureApp } from '../../src/bootstrap/configure-app';
 import { FreelancersController } from '../../src/freelancers/freelancers.controller';
 import { FreelancersService } from '../../src/freelancers/freelancers.service';
+import { CitiesService } from '../../src/locations/cities.service';
 import { GigsController } from '../../src/gigs/gigs.controller';
 import { GigsService } from '../../src/gigs/gigs.service';
 import { MarketplaceController, ServicesController } from '../../src/marketplace/marketplace.controller';
@@ -22,7 +23,7 @@ import { CommunityMediaService } from '../../src/community/media.service';
 export async function createMarketplaceApp(prisma: PrismaClient) {
   @Module({
     controllers: [MarketplaceController, ServicesController, MarketplaceModerationController, GigsController, FreelancersController, ModerationController],
-    providers: [MarketplaceService, MarketplaceModerationService, GigsService, FreelancersService, ModerationService,
+    providers: [MarketplaceService, MarketplaceModerationService, GigsService, FreelancersService, CitiesService, ModerationService,
       { provide: CommunityMediaService, useValue: { deleteForUrls: async () => undefined } },
       { provide: PrismaService, useValue: prisma }, { provide: ConfigService, useValue: new ConfigService({ API_PREFIX: 'api/v1' }) },
       { provide: SupabaseService, useValue: { verifyTokenCached: async (token: string) => {

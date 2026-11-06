@@ -33,6 +33,7 @@ import { FeaturedWork } from '@/components/jobSeeker/FeaturedWork';
 import { ProjectList } from '@/components/jobSeeker/ProjectList';
 import { DoneWorkList } from '@/components/marketplace/DoneWorkList';
 import { listMyProjects, MY_PROJECTS_KEY } from '@/lib/api/profileProjects';
+import { ProviderServices } from '@/components/providers/ProviderServices';
 import { ProfileAvatar, ProfileBanner } from '@/components/jobSeeker/ProfileVisuals';
 import Header from '@/components/Header';
 import { useAuthModal } from '@/contexts/AuthModalContext';
@@ -85,6 +86,8 @@ const PublicProfile = () => {
 
   const profile = isOwnPreview ? ownProfile : fetchedProfile;
   useDocumentTitle(profile?.name ?? null);
+  /** Whose services to show: the route's id is the user id. */
+  const ownerId = isOwnPreview ? user?.id : id;
   // Your own projects live behind their own endpoint; someone else's come with their profile.
   const myProjects = useQuery({
     queryKey: MY_PROJECTS_KEY,
@@ -336,6 +339,10 @@ const PublicProfile = () => {
             )}
           </section>
         )}
+
+        {/* As LinkedIn orders it: what they offer, then their work, straight
+            after who they are. Services show only when they have some. */}
+        {ownerId && <ProviderServices ownerId={ownerId} name={profile.name} hideWhenEmpty profileLink className="rounded-xl shadow-sm" />}
 
         {/* Work done through Coral: both sides confirmed it was finished. */}
         {!!profile.doneWork?.total && (

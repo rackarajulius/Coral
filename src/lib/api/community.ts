@@ -1,4 +1,6 @@
 import supabase from "@/lib/supabase";
+import { personName } from "@/lib/personName";
+import { fitImage, IMAGE_SIZES } from "@/lib/imageResize";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001/api/v1";
 
@@ -220,7 +222,7 @@ export interface CommunityPost {
    * The author is still present — the byline names the company, and says
    * quietly who wrote it.
    */
-  company: { id: string; name: string; profiles?: { id: string }[] } | null;
+  company: PostCompany | null;
   /**
    * The post this one passes on, embedded. One level deep, always: a reshare
    * of a reshare points at whatever was originally written.
@@ -233,6 +235,14 @@ export interface CommunityPost {
    */
   tideId: string | null;
   authorIdentity: AuthorIdentity;
+  /**
+   * Whether you follow the post's company page, and its follower count —
+   * sent with the post, so a feed doesn't ask about each company afterwards.
+   * Null when the company has no page to follow, or on a personal post.
+   */
+  companyFollow?: PersonFollowStatus | null;
+  /** The same for the author of a personal post. Null on a company's. */
+  authorFollow?: PersonFollowStatus | null;
   /** Present only on POLL posts. */
   poll: PostPoll | null;
   /**
@@ -288,12 +298,13 @@ interface Paged<T> {
 }
 
 /** A display name that never renders as "null null" for a half-filled profile. */
+/**
+ * What the community calls someone: the one rule (`personName`), first and
+ * last name, then display name. The same order the server uses in the
+ * notifications it sends, so a byline and the bell agree.
+ */
 export function authorName(author: PostAuthor): string {
-  return (
-    author.displayName?.trim() ||
-    [author.firstName, author.lastName].filter(Boolean).join(" ").trim() ||
-    "Member"
-  );
+  return personName(author) || "Member";
 }
 
 /* ---------------------------------- posts --------------------------------- */
@@ -301,10 +312,11 @@ export function authorName(author: PostAuthor): string {
 export type FeedFilter = "saved" | "liked" | "mine" | "my-spaces" | "following";
 
 /**
- * What posts are for, grouped the way the community's nav is: talk, work
- * being shown, and things on offer. Every post belongs to exactly one.
+ * The two sides of the community, as its nav groups posts: Showcase is people
+ * offering (work and services), Opportunities is people asking (open projects
+ * and live jobs). General posts and questions are on Home with everything else.
  */
-export type FeedSection = "discussion" | "showcase" | "opportunity";
+export type FeedSection = "showcase" | "opportunity";
 
 export const listPosts = (
   params: {
@@ -345,6 +357,16 @@ export const getPost = (id: string) =>
   );
 
 /** The quoted post inside a reshare. */
+/** The company a post speaks for. */
+export interface PostCompany {
+  id: string;
+  name: string;
+  /** Its page, when it has a public one: `/community/companies/:id`. */
+  profiles?: { id: string }[];
+  /** Its logo, from that page; null when there is none to show. */
+  logoUrl?: string | null;
+}
+
 export interface ResharedPost {
   purpose?: PostPurpose;
   linkedRecord?: CommunityLinkedRecord | null;
@@ -365,7 +387,7 @@ export interface ResharedPost {
   removedAt: string | null;
   authorId: string;
   author: PostAuthor;
-  company: { id: string; name: string } | null;
+  company: PostCompany | null;
   space: { id: string; slug: string; name: string } | null;
 }
 
@@ -420,9 +442,16 @@ export const setCommentPolicy = (id: string, commentPolicy: CommentPolicy) =>
  * badge that already says where they work.
  */
 export const getCompanyVoice = () =>
-  req<{ data: { company: { id: string; name: string } | null } }>("/posts/company-voice").then(
+  req<{ data: { company: CompanyVoice | null } }>("/posts/company-voice").then(
     (r) => r.data.company,
   );
+
+/** A company this person may post as, with its page's logo (a web address, or null). */
+export interface CompanyVoice {
+  id: string;
+  name: string;
+  logoUrl: string | null;
+}
 
 /** Server filters against the caller's current identity and company seat. */
 export const getAnnouncementOptions = (asCompany = false, expectedSupabaseId?: string, signal?: AbortSignal, companyId?: string) =>
@@ -497,10 +526,14 @@ export const suggestMentions = (q: string, signal?: AbortSignal) =>
 
 export type ScheduledPostStatus = "SCHEDULED" | "PUBLISHING" | "PUBLISHED" | "FAILED";
 
-/** A company post waiting for its time. Only the page's owners and admins see these. */
+/**
+ * A post waiting for its time. A company's is seen by the page's owners and
+ * admins; a personal one (no company) by its author alone.
+ */
 export interface ScheduledPost {
   id: string;
-  companyId: string;
+  /** Null for a post in the author's own name. */
+  companyId: string | null;
   publishAt: string;
   status: ScheduledPostStatus;
   /** Why it did not go out, when it did not. */
@@ -517,7 +550,7 @@ export interface ScheduledPost {
   commentPolicy: CommentPolicy;
 }
 
-/** Everything `createPost` takes, as a company, plus when. Between 10 minutes and 90 days ahead. */
+/** Everything `createPost` takes, plus when. Between 10 minutes and 90 days ahead. */
 export const schedulePost = (input: Parameters<typeof createPost>[0] & { publishAt: string }, expectedSupabaseId?: string) =>
   req<{ data: ScheduledPost }>("/scheduled-posts", { method: "POST", body: JSON.stringify(input) }, expectedSupabaseId)
     .then((r) => r.data);
@@ -525,6 +558,13 @@ export const schedulePost = (input: Parameters<typeof createPost>[0] & { publish
 /** A company page's queue. Refused for anyone who does not run the page. */
 export const listScheduledPosts = (companyId: string) =>
   req<{ data: ScheduledPost[] }>(`/scheduled-posts/company/${companyId}`).then((r) => r.data);
+
+/** Your own queue: posts in your name, coming or not published. */
+export const listMyScheduledPosts = () =>
+  req<{ data: ScheduledPost[] }>("/scheduled-posts/mine").then((r) => r.data);
+
+/** The cache key of your own queue; every scheduled-posts key starts the same way. */
+export const MY_SCHEDULED_POSTS_KEY = (userId: string | undefined) => ["scheduled-posts", "mine", userId] as const;
 
 /** A new time (which also retries a failed one), new words, or both. */
 export const updateScheduledPost = (id: string, input: { publishAt?: string; content?: string }) =>
@@ -667,7 +707,8 @@ export async function uploadPostMedia(
 ): Promise<{ url: string; path: string; kind: MediaKind }> {
   const { data: { session } } = await supabase.auth.getSession();
   const body = new FormData();
-  body.append("file", file);
+  // Pictures at the size a feed shows them; videos and GIFs as they are.
+  body.append("file", await fitImage(file, IMAGE_SIZES.post));
 
   const res = await fetch(`${API_BASE_URL}/community/posts/media`, {
     method: "POST",
@@ -718,6 +759,7 @@ export async function uploadPostDocument(file: File): Promise<UploadedDocument> 
  * cache-busted URLs do not confuse it.
  */
 export function isVideoUrl(url: string): boolean {
+  if (isStreamUrl(url)) return true;
   try {
     const path = new URL(url).pathname.toLowerCase();
     return path.endsWith(".mp4") || path.endsWith(".webm");
@@ -725,6 +767,54 @@ export function isVideoUrl(url: string): boolean {
     return false;
   }
 }
+
+/* ------------------------------- long videos ------------------------------ */
+
+/**
+ * A streamed video (Mux): how a post names a long video. Exactly this shape,
+ * which the server also insists on before a post may carry one.
+ */
+const STREAM_URL = /^https:\/\/stream\.mux\.com\/([A-Za-z0-9]{1,128})\.m3u8$/;
+
+export const isStreamUrl = (url: string): boolean => STREAM_URL.test(url);
+
+/** A still of a streamed video, a second in — or null for any other URL. */
+export function streamPosterUrl(url: string, width = 960): string | null {
+  const id = STREAM_URL.exec(url)?.[1];
+  return id ? `https://image.mux.com/${id}/thumbnail.webp?width=${width}&time=1` : null;
+}
+
+/** Whether long videos are switched on here, and how long one may be. */
+export interface VideoUploadSettings {
+  enabled: boolean;
+  maxSeconds: number;
+}
+
+export const getVideoUploadSettings = () =>
+  req<{ data: VideoUploadSettings }>("/videos/status").then((r) => r.data);
+
+/** A long video on its way to being postable, as the server reads it from Mux. */
+export interface CommunityVideo {
+  id: string;
+  status: "uploading" | "processing" | "ready" | "failed";
+  /** What the post names it by, once it streams. */
+  url: string | null;
+  posterUrl: string | null;
+  durationSeconds: number | null;
+  aspectRatio: string | null;
+  failureReason: string | null;
+}
+
+/** An upload address for one file: the browser sends the video there, not to us. */
+export const startVideoUpload = () =>
+  req<{ data: { id: string; uploadUrl: string } }>("/videos", { method: "POST" }).then((r) => r.data);
+
+export const getCommunityVideo = (id: string) =>
+  req<{ data: CommunityVideo }>(`/videos/${id}`).then((r) => r.data);
+
+/** Out of the draft, and deleted. Refused once a post shows it. */
+export const discardCommunityVideo = (id: string) =>
+  req<unknown>(`/videos/${id}`, { method: "DELETE" });
 
 /* -------------------------------- comments -------------------------------- */
 

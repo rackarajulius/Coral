@@ -202,7 +202,16 @@ describe('The "@" menu', () => {
     await suggestMentions(collaborator(store), WRITER, 'acme');
     const { where } = store.employerProfile.findMany.mock.calls[0][0];
     expect(where.AND[0]).toEqual({ visibility: { not: 'private' } });
-    expect(where.AND[1].OR).toEqual([
+    // A company's page, or a sole operator's own profile — never a member's
+    // copy of their company, which would offer one company twice — and never
+    // a page its company has deactivated.
+    expect(where.AND[1]).toEqual({
+      AND: [
+        { OR: [{ pageOf: { isNot: null } }, { companyId: null }] },
+        { NOT: { pageOf: { is: { deactivatedAt: { not: null } } } } },
+      ],
+    });
+    expect(where.AND[2].OR).toEqual([
       { visibility: 'public' },
       { followers: { some: { userId: WRITER } } },
       expect.objectContaining({ company: expect.anything() }),

@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { CompanyMemberStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService, PROFILE_BUCKET, COMPANY_BUCKET } from '../storage/storage.service';
 import {
@@ -9,6 +9,13 @@ import {
 } from './dto/employer-company.dto';
 import { computeVerificationStatus, raiseVerificationLevel } from './utils/email-domain.util';
 import { CompanyAuditService } from '../company/company-audit.service';
+import {
+  IS_LIVE_PAGE,
+  resolvePageRef,
+  companyPageId,
+  postersByPage,
+} from '../company/company-page';
+import { LIVE_JOB_STATUSES } from '../jobs/job-lifecycle.service';
 
 const PROFILE_INCLUDE = {
   user: {
@@ -30,8 +37,13 @@ export class EmployersService {
     private readonly audit: CompanyAuditService,
   ) {}
 
+  /**
+   * The company page this person edits and is shown under: their company's
+   * page, whoever on the team created it, or their own profile when they
+   * belong to no company.
+   */
   async getMyCompany(userId: string) {
-    return this.getOrCreateProfile(userId);
+    return this.getOrCreatePage(userId);
   }
 
   async uploadCompanyLogo(userId: string, file: Express.Multer.File) {
@@ -48,7 +60,7 @@ export class EmployersService {
     folder: 'logos' | 'banners',
     field: 'companyLogo' | 'companyBanner',
   ) {
-    const profile = await this.getOrCreateProfile(userId);
+    const profile = await this.getOrCreatePage(userId);
     const ext = file.mimetype.split('/')[1] || 'png';
     const path = `${folder}/${userId}-${Date.now()}.${ext}`;
 
@@ -76,6 +88,15 @@ export class EmployersService {
     if (existingProfile) {
       throw new BadRequestException('Employer company profile already exists');
     }
+    // A member's company already has its page. A profile made here would be
+    // a copy of it, listed as a second company.
+    const seat = await this.prisma.companyMember.findFirst({
+      where: { userId, status: { not: CompanyMemberStatus.PENDING } },
+      select: { id: true },
+    });
+    if (seat) {
+      throw new BadRequestException('Your company already has a page. Edit it instead.');
+    }
 
     return this.prisma.employerProfile.create({
       data: {
@@ -85,6 +106,7 @@ export class EmployersService {
         companyLogo: dto.companyLogo,
         companyWebsite: dto.companyWebsite,
         companySize: dto.companySize,
+        companyType: dto.companyType,
         industry: dto.industry,
         department: dto.department,
         isHiringManager: dto.isHiringManager ?? false,
@@ -134,7 +156,7 @@ export class EmployersService {
    * returned URL on the company record via {@link updateMyCompany}.
    */
   async uploadCompanyMedia(userId: string, file: Express.Multer.File): Promise<{ url: string }> {
-    await this.getOrCreateProfile(userId);
+    await this.getOrCreatePage(userId);
     const isVideo = file.mimetype.startsWith('video/');
     const bucket = isVideo ? PROFILE_BUCKET : COMPANY_BUCKET;
     const ext = file.mimetype.split('/')[1] || (isVideo ? 'mp4' : 'png');
@@ -144,17 +166,40 @@ export class EmployersService {
     return { url };
   }
 
-  async updateMyCompany(userId: string, dto: UpdateEmployerCompanyDto) {
+  /**
+   * Edits the company's page — the one everyone sees — whichever owner or
+   * admin is doing it. The website check reads the editor's own address: it
+   * is their email that either matches the domain or doesn't.
+   */
+  async updateMyCompany(actor: { id: string; email: string }, dto: UpdateEmployerCompanyDto) {
+    const userId = actor.id;
     // Which fields moved, not their values: a company profile can hold long
     // free text, and an audit row is a record of the change, not a copy of it.
     const changed = Object.keys(dto).filter((k) => (dto as Record<string, unknown>)[k] !== undefined);
-    const profile = await this.getOrCreateProfile(userId);
-    const { socialLinks, locations, coreValues, galleryPhotos, whyWorkHere, awards, deiStats, ...rest } = dto;
+    const profile = await this.getOrCreatePage(userId);
+    const {
+      socialLinks, locations, coreValues, galleryPhotos, whyWorkHere, awards, deiStats,
+      jobTitle, department, isHiringManager, isRecruiter, isAdmin,
+      ...rest
+    } = dto;
+
+    // Job title and the like describe the editor, not the company. On their
+    // own page they land on it as before; on a teammate's page they go to the
+    // editor's own row, never onto the person whose page it is.
+    const personal = Object.fromEntries(
+      Object.entries({ jobTitle, department, isHiringManager, isRecruiter, isAdmin })
+        .filter(([, v]) => v !== undefined),
+    );
+    const ownPage = profile.userId === userId;
+    if (!ownPage && Object.keys(personal).length > 0) {
+      await this.prisma.employerProfile.updateMany({ where: { userId }, data: personal });
+    }
 
     const updated = await this.prisma.employerProfile.update({
       where: { id: profile.id },
       data: {
         ...rest,
+        ...(ownPage ? personal : {}),
         ...(socialLinks !== undefined && {
           socialLinks: socialLinks as unknown as Prisma.InputJsonValue,
         }),
@@ -181,7 +226,7 @@ export class EmployersService {
         ...(dto.companyWebsite !== undefined && {
           verificationStatus: raiseVerificationLevel(
             profile.verificationStatus,
-            computeVerificationStatus(profile.user.email, dto.companyWebsite),
+            computeVerificationStatus(actor.email, dto.companyWebsite),
           ),
         }),
       },
@@ -199,9 +244,17 @@ export class EmployersService {
     return updated;
   }
 
+  /**
+   * A company's public page.
+   *
+   * Any profile id resolves to the page it stands for: a teammate's own row —
+   * where their jobs used to link — answers with their company's page, whose
+   * id the client then shows in the address bar.
+   */
   async getCompanyById(companyId: string) {
-    const company = await this.prisma.employerProfile.findUnique({
-      where: { id: companyId },
+    const pageId = (await resolvePageRef(this.prisma, companyId)) ?? companyId;
+    const record = await this.prisma.employerProfile.findUnique({
+      where: { id: pageId },
       include: {
         user: {
           select: {
@@ -211,33 +264,47 @@ export class EmployersService {
             avatarUrl: true,
           },
         },
+        // Only the domain: it is the company's only once proven.
+        company: { select: { domain: true } },
+        // Whether its company has taken the page down.
+        pageOf: { select: { deactivatedAt: true } },
       },
     });
-
-    if (!company || company.visibility === 'private') {
+    // A deactivated page is gone to visitors, as on LinkedIn, until an owner
+    // brings it back (company-status.service.ts).
+    if (!record || record.visibility === 'private' || record.pageOf?.deactivatedAt) {
       throw new NotFoundException('Company profile not found');
     }
+    const { company: organisation, pageOf: _pageOf, ...company } = record;
 
-    const [openJobsByUser, followerCount] = await Promise.all([
-      this.getOpenJobCounts([company.userId]),
+    const [openJobsByPage, followerCount] = await Promise.all([
+      this.openJobsByPage([company]),
       this.prisma.companyFollow.count({ where: { companyId: company.id } }),
     ]);
 
     return {
       ...company,
-      openJobs: openJobsByUser.get(company.userId) ?? 0,
+      openJobs: openJobsByPage.get(company.id) ?? 0,
       followerCount,
+      /** The domain the company has proven it owns, shown as such; null when unclaimed. */
+      verifiedDomain: organisation?.domain ?? null,
     };
   }
 
-  /** Follows a company on behalf of the given user. Idempotent. */
-  async followCompany(userId: string, companyId: string) {
+  /**
+   * Follows a company on behalf of the given user. Idempotent.
+   *
+   * Always the company's page, whichever of its members' profiles the button
+   * was pressed on, so a company has one set of followers.
+   */
+  async followCompany(userId: string, profileId: string) {
+    const companyId = (await resolvePageRef(this.prisma, profileId)) ?? profileId;
     const company = await this.prisma.employerProfile.findUnique({
       where: { id: companyId },
-      select: { id: true, userId: true, allowFollow: true, visibility: true },
+      select: { id: true, userId: true, allowFollow: true, visibility: true, pageOf: { select: { deactivatedAt: true } } },
     });
 
-    if (!company || company.visibility === 'private') {
+    if (!company || company.visibility === 'private' || company.pageOf?.deactivatedAt) {
       throw new NotFoundException('Company profile not found');
     }
     if (!company.allowFollow) {
@@ -257,13 +324,15 @@ export class EmployersService {
   }
 
   /** Unfollows a company. Idempotent — unfollowing when not following is a no-op. */
-  async unfollowCompany(userId: string, companyId: string) {
+  async unfollowCompany(userId: string, profileId: string) {
+    const companyId = (await resolvePageRef(this.prisma, profileId)) ?? profileId;
     await this.prisma.companyFollow.deleteMany({ where: { userId, companyId } });
     return this.getFollowStatus(userId, companyId);
   }
 
   /** Whether the user follows the company, plus the company's total follower count. */
-  async getFollowStatus(userId: string | null, companyId: string) {
+  async getFollowStatus(userId: string | null, profileId: string) {
+    const companyId = (await resolvePageRef(this.prisma, profileId)) ?? profileId;
     const [following, followerCount] = await Promise.all([
       userId
         ? this.prisma.companyFollow.findUnique({
@@ -278,7 +347,8 @@ export class EmployersService {
   }
 
   /** Public companies in the same industry as the given one (for the "Companies you might love" rail). */
-  async getSimilarCompanies(companyId: string, limit = 8) {
+  async getSimilarCompanies(profileId: string, limit = 8) {
+    const companyId = (await resolvePageRef(this.prisma, profileId)) ?? profileId;
     const target = await this.prisma.employerProfile.findUnique({
       where: { id: companyId },
       select: { id: true, industry: true, industries: true },
@@ -293,11 +363,14 @@ export class EmployersService {
       where: {
         visibility: 'public',
         id: { not: companyId },
-        ...(or.length ? { OR: or } : {}),
+        // Pages only: a member's copy of another company is not a company.
+        AND: [IS_LIVE_PAGE, ...(or.length ? [{ OR: or }] : [])],
       },
       select: {
         id: true,
+        slug: true,
         userId: true,
+        companyId: true,
         companyName: true,
         companyLogo: true,
         companyBanner: true,
@@ -312,10 +385,11 @@ export class EmployersService {
       take: Math.min(limit, 20),
     });
 
-    const openJobsByUser = await this.getOpenJobCounts(companies.map((c) => c.userId));
+    const openJobsByPage = await this.openJobsByPage(companies);
 
     return companies.map((c) => ({
       id: c.id,
+      slug: c.slug,
       name: c.companyName,
       // "Primary · Secondary" (e.g. "Fintech · Commerce") from the industry + first distinct sub-industry.
       industry: this.buildIndustryLabel(c.industry, c.industries),
@@ -323,7 +397,7 @@ export class EmployersService {
       description: c.companyDescription ?? c.overview ?? c.tagline ?? c.mission ?? '',
       cover: c.companyBanner ?? c.companyLogo ?? null,
       logo: c.companyLogo ?? null,
-      openJobs: openJobsByUser.get(c.userId) ?? 0,
+      openJobs: openJobsByPage.get(c.id) ?? 0,
     }));
   }
 
@@ -345,6 +419,8 @@ export class EmployersService {
 
     const where: Prisma.EmployerProfileWhereInput = {
       visibility: 'public',
+      // Pages only: a member's copy of their company is not another company.
+      AND: [IS_LIVE_PAGE],
       ...(query.query
         ? {
             OR: [
@@ -362,7 +438,9 @@ export class EmployersService {
         where,
         select: {
           id: true,
+          slug: true,
           userId: true,
+          companyId: true,
           companyName: true,
           companyLogo: true,
           companyDescription: true,
@@ -370,6 +448,7 @@ export class EmployersService {
           tagline: true,
           headquarters: true,
           companySize: true,
+          companyType: true,
           industry: true,
           industries: true,
           locations: true,
@@ -382,12 +461,12 @@ export class EmployersService {
       this.prisma.employerProfile.count({ where }),
     ]);
 
-    const openJobsByUser = await this.getOpenJobCounts(data.map((company) => company.userId));
+    const openJobsByPage = await this.openJobsByPage(data);
 
     return {
-      data: data.map((company) => ({
+      data: data.map(({ companyId: _companyId, ...company }) => ({
         ...company,
-        openJobs: openJobsByUser.get(company.userId) ?? 0,
+        openJobs: openJobsByPage.get(company.id) ?? 0,
       })),
       meta: {
         page,
@@ -398,6 +477,18 @@ export class EmployersService {
     };
   }
 
+  /**
+   * Open jobs per page, counting every member's postings — a company's jobs
+   * are its people's, not only the jobs of whoever created its page.
+   */
+  private async openJobsByPage(pages: Array<{ id: string; userId: string; companyId: string | null }>) {
+    const posters = await postersByPage(this.prisma, pages);
+    const counts = await this.getOpenJobCounts([...new Set([...posters.values()].flat())]);
+    return new Map(
+      [...posters].map(([pageId, ids]) => [pageId, ids.reduce((n, id) => n + (counts.get(id) ?? 0), 0)]),
+    );
+  }
+
   private async getOpenJobCounts(userIds: string[]) {
     if (userIds.length === 0) {
       return new Map<string, number>();
@@ -405,15 +496,62 @@ export class EmployersService {
 
     const counts = await this.prisma.job.groupBy({
       by: ['postedById'],
-      // Open jobs are stored as 'published' (the admin UI just labels it "Active").
-      where: { postedById: { in: userIds }, status: 'published' },
+      // Live jobs are 'active'. This used to count 'published', which no job
+      // has ever had, so every company showed 0 open jobs.
+      where: { postedById: { in: userIds }, status: { in: LIVE_JOB_STATUSES } },
       _count: { _all: true },
     });
 
     return new Map(counts.map((count) => [count.postedById, count._count._all]));
   }
 
-  private async getOrCreateProfile(userId: string) {
+  /**
+   * The page this person edits and is shown under.
+   *
+   * A member of a company gets the company's page, whoever created it. A
+   * company with no page yet (its page was deleted) adopts one; with nothing
+   * to adopt, this person's own profile becomes it. Only someone with no
+   * company falls back to a profile of their own, the sole-operator case —
+   * a member is never given a stray copy of their company.
+   */
+  private async getOrCreatePage(userId: string) {
+    // CompanyContextService's rule: the oldest membership that isn't a
+    // request, and only while it is active.
+    const seat = await this.prisma.companyMember.findFirst({
+      where: { userId, status: { not: CompanyMemberStatus.PENDING } },
+      orderBy: { createdAt: 'asc' },
+      select: { companyId: true, status: true, company: { select: { name: true } } },
+    });
+
+    if (seat?.status === CompanyMemberStatus.ACTIVE) {
+      let pageId = await companyPageId(this.prisma, seat.companyId);
+      if (!pageId) {
+        const own = await this.prisma.employerProfile.upsert({
+          where: { userId },
+          create: {
+            userId,
+            companyId: seat.companyId,
+            companyName: seat.company.name,
+            jobTitle: '',
+            companyBenefits: [],
+            companyLocations: [],
+          },
+          update: { companyId: seat.companyId },
+          select: { id: true },
+        });
+        await this.prisma.company.updateMany({
+          where: { id: seat.companyId, pageId: null },
+          data: { pageId: own.id },
+        });
+        pageId = (await companyPageId(this.prisma, seat.companyId)) ?? own.id;
+      }
+      const page = await this.prisma.employerProfile.findUnique({
+        where: { id: pageId },
+        include: PROFILE_INCLUDE,
+      });
+      if (page) return page;
+    }
+
     let profile = await this.prisma.employerProfile.findUnique({
       where: { userId },
       include: PROFILE_INCLUDE,

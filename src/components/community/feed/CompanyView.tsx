@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { AlertTriangle, BadgeCheck, Building2, ExternalLink, Loader2, MessagesSquare, Plus, UserCheck } from "lucide-react";
+import { AlertTriangle, BadgeCheck, Building2, ExternalLink, Globe, Loader2, MessagesSquare, Plus, UserCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -101,6 +101,12 @@ function CompanyHeader({ company }: { company: EmployerCompany }) {
                 <BadgeCheck className="h-5 w-5 shrink-0 text-coral" aria-label="Verified company" />
               )}
             </h1>
+            {company.verifiedDomain && (
+              <p className="flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400" title="The company proved it owns this domain">
+                <Globe className="h-3.5 w-3.5" aria-hidden="true" />
+                {company.verifiedDomain}
+              </p>
+            )}
             {(company.industry || location) && (
               <p className="text-sm text-muted-foreground">
                 {[company.industry, location].filter(Boolean).join(" · ")}

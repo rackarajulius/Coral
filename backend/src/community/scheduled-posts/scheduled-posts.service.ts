@@ -24,6 +24,8 @@ const MIN_LEAD_MS = 10 * 60_000;
 const MAX_LEAD_MS = 90 * 24 * 60 * 60_000;
 /** A page's queue, not a content farm's. */
 const MAX_QUEUED = 100;
+/** A person's own queue: a plan for the coming weeks, not a bot's backlog. */
+const MAX_QUEUED_PERSONAL = 25;
 /** Published per minute; anything over waits a minute, which a schedule allows. */
 const BATCH = 20;
 /** A run that took a post and never came back. */
@@ -34,19 +36,20 @@ const INTERRUPTED = 'Publishing was interrupted. Check the page for it before sc
 type Payload = Omit<CreatePostDto, 'publishAt'>;
 
 /**
- * Company posts written now and published at a set time.
+ * Posts written now and published at a set time: in a company page's name,
+ * or in the author's own.
  *
  * A scheduled post is not a post until its time comes: it lives in its own
  * table, so no feed, search, count or permalink can show something that has
  * not been published. When it is due, `publishDue` creates it with
  * `PostsService.create` — the same path as pressing Post, with every check
- * run again against how things stand then. Above all, whoever scheduled it
- * must still be an owner or admin of the company: someone who has left does
- * not keep speaking for it on a timer.
+ * run again against how things stand then. Above all, whoever scheduled a
+ * company post must still be an owner or admin of the company: someone who
+ * has left does not keep speaking for it on a timer.
  *
- * Any of the page's owners and admins can see the queue, change a time or
- * the words, and cancel; the post still goes out under the name of whoever
- * wrote it.
+ * Any of the page's owners and admins can see a company's queue, change a
+ * time or the words, and cancel; the post still goes out under the name of
+ * whoever wrote it. A personal post is its author's alone to see and change.
  */
 @Injectable()
 export class ScheduledPostsService {
@@ -61,29 +64,39 @@ export class ScheduledPostsService {
 
   async schedule(userId: string, dto: SchedulePostDto) {
     const { publishAt, ...post } = dto;
-    if (!post.asCompany) {
-      throw new BadRequestException("Only posts in a company page's name can be scheduled.");
-    }
     if (post.reference) {
       throw new BadRequestException('Announcements of listings go out when you post them, while the listing is open.');
     }
     const at = this.when(publishAt);
     const { companyId } = await this.posts.checkDraft(userId, post);
-    if (!companyId) throw new ForbiddenException('Only an owner or admin of a company can post in its name.');
-
-    const queued = await this.prisma.scheduledPost.count({
-      where: { companyId, status: ScheduledPostStatus.SCHEDULED },
-    });
-    if (queued >= MAX_QUEUED) {
-      throw new BadRequestException(`A page can have up to ${MAX_QUEUED} posts scheduled at once.`);
+    // checkDraft refuses a company post from someone who can't speak for it;
+    // this is the same refusal, kept so that a company post never becomes a
+    // personal one because of a gap there.
+    if (post.asCompany && !companyId) {
+      throw new ForbiddenException('Only an owner or admin of a company can post in its name.');
     }
 
+    const queued = await this.prisma.scheduledPost.count({
+      where: companyId
+        ? { companyId, status: ScheduledPostStatus.SCHEDULED }
+        : { authorId: userId, companyId: null, status: ScheduledPostStatus.SCHEDULED },
+    });
+    const limit = companyId ? MAX_QUEUED : MAX_QUEUED_PERSONAL;
+    if (queued >= limit) {
+      throw new BadRequestException(companyId
+        ? `A page can have up to ${limit} posts scheduled at once.`
+        : `You can have up to ${limit} posts of your own scheduled at once.`);
+    }
+
+    // Kept as it will be created: in the company's name, or plainly the
+    // author's, with no company choice left in it to misread later.
+    const { asCompany: _asCompany, companyId: _companyId, ...own } = post;
     const created = await this.prisma.scheduledPost.create({
       data: {
         companyId,
         authorId: userId,
         publishAt: at,
-        payload: { ...post, asCompany: true, companyId } as unknown as Prisma.InputJsonValue,
+        payload: (companyId ? { ...own, asCompany: true, companyId } : own) as unknown as Prisma.InputJsonValue,
       },
       include: this.include(),
     });
@@ -96,6 +109,20 @@ export class ScheduledPostsService {
     const items = await this.prisma.scheduledPost.findMany({
       where: {
         companyId,
+        status: { in: [ScheduledPostStatus.SCHEDULED, ScheduledPostStatus.PUBLISHING, ScheduledPostStatus.FAILED] },
+      },
+      orderBy: { publishAt: 'asc' },
+      include: this.include(),
+    });
+    return items.map((item) => this.shape(item));
+  }
+
+  /** Your own queue: posts in your name that are coming, or could not go out. */
+  async listMine(userId: string) {
+    const items = await this.prisma.scheduledPost.findMany({
+      where: {
+        authorId: userId,
+        companyId: null,
         status: { in: [ScheduledPostStatus.SCHEDULED, ScheduledPostStatus.PUBLISHING, ScheduledPostStatus.FAILED] },
       },
       orderBy: { publishAt: 'asc' },
@@ -178,7 +205,7 @@ export class ScheduledPostsService {
     }
   }
 
-  private async publishOne(item: { id: string; companyId: string; authorId: string; payload: Prisma.JsonValue }) {
+  private async publishOne(item: { id: string; companyId: string | null; authorId: string; payload: Prisma.JsonValue }) {
     const taken = await this.prisma.scheduledPost.updateMany({
       where: { id: item.id, status: ScheduledPostStatus.SCHEDULED },
       data: { status: ScheduledPostStatus.PUBLISHING },
@@ -186,8 +213,12 @@ export class ScheduledPostsService {
     if (taken.count === 0) return;
 
     try {
-      const payload = item.payload as unknown as Payload;
-      const result = await this.posts.create(item.authorId, { ...payload, asCompany: true, companyId: item.companyId });
+      const { asCompany: _asCompany, companyId: _companyId, ...payload } = item.payload as unknown as Payload;
+      // The row's company decides the voice, never the stored payload.
+      const result = await this.posts.create(
+        item.authorId,
+        item.companyId ? { ...payload, asCompany: true, companyId: item.companyId } : payload,
+      );
       await this.prisma.scheduledPost.update({
         where: { id: item.id },
         data: { status: ScheduledPostStatus.PUBLISHED, postId: result.data.id, failureReason: null },
@@ -206,15 +237,23 @@ export class ScheduledPostsService {
   }
 
   /** Whoever scheduled it hears that it did not go out, and why. */
-  private async tellFailure(item: { companyId: string; authorId: string }, reason: string) {
-    const [company, page] = await Promise.all([
-      this.prisma.company.findUnique({ where: { id: item.companyId }, select: { name: true } }),
-      this.prisma.employerProfile.findFirst({
-        where: { companyId: item.companyId, visibility: { not: 'private' } },
-        orderBy: { createdAt: 'asc' },
-        select: { id: true },
-      }),
-    ]);
+  private async tellFailure(item: { companyId: string | null; authorId: string }, reason: string) {
+    if (!item.companyId) {
+      await this.notifications.create({
+        userId: item.authorId,
+        type: 'community',
+        title: "Your scheduled post wasn't published",
+        message: reason,
+        link: '/community?scheduled=1',
+      });
+      return;
+    }
+    const company = await this.prisma.company.findUnique({
+      where: { id: item.companyId },
+      select: { name: true, page: { select: { id: true, visibility: true } } },
+    });
+    // The company's page, unless it is private and so has nowhere to link.
+    const page = company?.page && company.page.visibility !== 'private' ? company.page : null;
     await this.notifications.create({
       userId: item.authorId,
       type: 'community',
@@ -242,12 +281,16 @@ export class ScheduledPostsService {
     }
   }
 
-  /** A scheduled post on a page this person runs; one they cannot see is "not found". */
+  /**
+   * A scheduled post this person may change: their own personal one, or one
+   * on a page they run. One they cannot see is "not found".
+   */
   private async owned(userId: string, id: string) {
     const item = await this.prisma.scheduledPost.findUnique({ where: { id } });
-    if (!item || !(await runsCompanyPage(this.prisma, userId, item.companyId))) {
-      throw new NotFoundException('Scheduled post not found');
-    }
+    const allowed = !!item && (item.companyId
+      ? await runsCompanyPage(this.prisma, userId, item.companyId)
+      : item.authorId === userId);
+    if (!item || !allowed) throw new NotFoundException('Scheduled post not found');
     return item;
   }
 

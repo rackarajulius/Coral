@@ -10,6 +10,8 @@ import { AuditLogsQueryDto } from './dto/audit-logs-query.dto';
 import { MetricSnapshotService } from './metric-snapshot.service';
 import { AuditLogService } from './audit-log.service';
 import { SeekerPremiumService } from '../seeker-billing/seeker-premium.service';
+import { profileShownFor } from '../company/company-page';
+import { describeDeparture, handOverCompanies, type DepartureOutcome } from '../company/company-departure';
 
 @Injectable()
 export class AdminService {
@@ -553,14 +555,21 @@ export class AdminService {
     return user.employerProfile?.companyName || user.displayName || user.email;
   }
 
-  /** Approve = mark the employer's profile verified and ensure the account is active. */
+  /**
+   * Approve = verify the company page this employer acts for, and make sure
+   * the account is active. The page, not their own row: verification is the
+   * company's, so approving one member clears the whole team.
+   */
   async approveEmployer(adminId: string, userId: string) {
     const before = await this.assertEmployer(userId);
     await this.prisma.user.update({ where: { id: userId }, data: { status: 'ACTIVE' } });
-    await this.prisma.employerProfile.updateMany({
-      where: { userId },
-      data: { verificationStatus: 'verified' },
-    });
+    const page = await profileShownFor(this.prisma, userId, { id: true });
+    if (page) {
+      await this.prisma.employerProfile.update({
+        where: { id: page.id },
+        data: { verificationStatus: 'verified' },
+      });
+    }
     this.logger.log(`Approved employer ${userId}`);
     await this.audit.record({
       adminId,
@@ -590,9 +599,9 @@ export class AdminService {
     });
   }
 
-  async deleteEmployer(adminId: string, userId: string) {
+  async deleteEmployer(adminId: string, userId: string): Promise<DepartureOutcome[]> {
     const before = await this.assertEmployer(userId);
-    await this.prisma.user.delete({ where: { id: userId } });
+    const companies = await this.deleteAccountKeepingCompanies(userId);
     this.logger.log(`Deleted employer ${userId}`);
     await this.audit.record({
       adminId,
@@ -600,9 +609,10 @@ export class AdminService {
       entityType: 'Employer',
       entityId: userId,
       entityName: this.employerLabel(before),
-      changeSummary: 'Employer account deleted',
+      changeSummary: ['Employer account deleted', describeDeparture(companies)].filter(Boolean).join('. '),
       before: { status: before.status, email: before.email },
     });
+    return companies;
   }
 
   // --- Job admin actions ---
@@ -715,9 +725,10 @@ export class AdminService {
     return this.premium.adminView(userId);
   }
 
-  async deleteJobseeker(adminId: string, userId: string) {
+  async deleteJobseeker(adminId: string, userId: string): Promise<DepartureOutcome[]> {
     const before = await this.assertJobseeker(userId);
-    await this.prisma.user.delete({ where: { id: userId } });
+    // One account can also act for a company, so a job seeker can hold a page.
+    const companies = await this.deleteAccountKeepingCompanies(userId);
     this.logger.log(`Deleted jobseeker ${userId}`);
     await this.audit.record({
       adminId,
@@ -725,9 +736,10 @@ export class AdminService {
       entityType: 'Jobseeker',
       entityId: userId,
       entityName: before.displayName || before.email,
-      changeSummary: 'Jobseeker account deleted',
+      changeSummary: ['Jobseeker account deleted', describeDeparture(companies)].filter(Boolean).join('. '),
       before: { status: before.status, email: before.email },
     });
+    return companies;
   }
 
   // --- Application admin actions ---
@@ -1140,4 +1152,20 @@ export class AdminService {
     }
     return trend;
   }
+
+  /**
+   * Deletes an account without taking its companies with it: a teammate takes
+   * over the page, ownership and the person's jobs, or — with nobody else on
+   * the team — the company is deactivated (company/company-departure.ts).
+   * One transaction, so a failure leaves the account and its companies as
+   * they were.
+   */
+  private async deleteAccountKeepingCompanies(userId: string): Promise<DepartureOutcome[]> {
+    return this.prisma.$transaction(async (tx) => {
+      const companies = await handOverCompanies(tx, userId);
+      await tx.user.delete({ where: { id: userId } });
+      return companies;
+    }, { timeout: 30_000 });
+  }
+
 }

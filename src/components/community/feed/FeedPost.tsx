@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BarChart3, Bookmark, Building2, EyeOff, FileText, Flag, Link2, Loader2,MessageCircle,MoreHorizontal,Pencil, Repeat2,
+  ArrowUpRight, BarChart3, Bookmark, Building2, EyeOff, FileText, Flag, Link2, Loader2,MessageCircle,MoreHorizontal,Pencil, Play, Repeat2,
   Share2, ThumbsUp, Trash2, UserRoundCheck, UserRoundPlus,
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
@@ -21,7 +21,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
 import { useFollowCompany } from "@/hooks/useFollowCompany";
-import { getCompanyById } from "@/lib/api/employerCompany";
+import { getCompanyById, type FollowStatus } from "@/lib/api/employerCompany";
 import { ReportDialog } from "./ReportDialog";
 import { PollCard } from "./PollCard";
 import { PostText } from "./PostText";
@@ -48,6 +48,7 @@ import {
   initials,
   isVideoUrl,
   likePost,
+  streamPosterUrl,
   postUrl,
   resharePost,
   timeAgo,
@@ -85,7 +86,8 @@ export function FeedPost({
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [showComments, setShowComments] = useState(defaultShowComments);
-  const avatarUrl = post.company ? null : post.author.avatarUrl;
+  // A company post wears the company's logo, not its author's face.
+  const avatarUrl = post.company ? post.company.logoUrl ?? null : post.author.avatarUrl;
   const [readyAvatarUrl, setReadyAvatarUrl] = useState<string | null>(null);
   const avatarReady = !avatarUrl || readyAvatarUrl === avatarUrl;
 
@@ -260,17 +262,13 @@ export function FeedPost({
           // speaking, and the avatar is the first thing that says so.
           companyProfileId ? (
             <CompanyHoverCard anchorRef={headerRef} profileId={companyProfileId} name={post.company.name}>
-              <Link
-                to={companyPath(companyProfileId)}
-                aria-label={post.company.name}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10"
-              >
-                <Building2 className="h-5 w-5 text-primary" aria-hidden="true" />
+              <Link to={companyPath(companyProfileId)} aria-label={post.company.name} className="shrink-0 rounded-full">
+                <CompanyAvatar logoUrl={avatarUrl} onSettled={() => setReadyAvatarUrl(avatarUrl)} />
               </Link>
             </CompanyHoverCard>
           ) : (
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10">
-              <Building2 className="h-5 w-5 text-primary" aria-hidden="true" />
+            <span className="shrink-0 rounded-full">
+              <CompanyAvatar logoUrl={avatarUrl} onSettled={() => setReadyAvatarUrl(avatarUrl)} />
             </span>
           )
         ) : (
@@ -322,12 +320,12 @@ export function FeedPost({
                 {/* Following needs the company's page; without one there is
                     nothing to follow. */}
                 {user && !mine && post.company.profiles?.[0]?.id && (
-                  <CompanyFollowButton profileId={post.company.profiles[0].id} />
+                  <CompanyFollowButton profileId={post.company.profiles[0].id} initial={post.companyFollow} />
                 )}
               </div>
               {/* Where a person's post has their title, a company's has how
                   many follow it. */}
-              {companyProfileId && <CompanyFollowerCount profileId={companyProfileId} />}
+              {companyProfileId && <CompanyFollowerCount profileId={companyProfileId} initial={post.companyFollow} />}
             </>
           ) : (
             <>
@@ -341,7 +339,7 @@ export function FeedPost({
                     <p className="truncate text-sm font-medium">{authorName(post.author)}</p>
                   )}
                 </PersonHoverCard>
-                {user && !mine && <PersonFollowButton authorId={post.authorId} />}
+                {user && !mine && <PersonFollowButton authorId={post.authorId} initial={post.authorFollow} />}
               </div>
               <IdentityLine identity={post.authorIdentity} />
             </>
@@ -498,6 +496,18 @@ export function FeedPost({
         <p className="mt-2 text-xs font-medium text-muted-foreground">{postPurposeLabels[post.purpose]}</p>
       )}
       <CommunityLinkedCard record={post.linkedRecord} unavailable={post.linkedRecordUnavailable} postId={post.id} />
+      {/* No service on the post, so the way to hire them is their provider
+          profile. Not for a company's post: that profile is the writer's own. */}
+      {post.purpose === "showcase" && !post.linkedRecord && !post.company && post.authorIdentity?.profileUrl?.startsWith("/providers/") && (
+        <Link
+          to={post.authorIdentity.profileUrl}
+          state={{ from: "community", personId: post.authorId }}
+          className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+        >
+          See services
+          <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
+        </Link>
+      )}
 
       {/* Shown only when there is no media of the author's own — a card about
           someone else's page should not outrank the picture they chose. */}
@@ -890,9 +900,7 @@ function ResharedCard({ original }: { original: ResharedPost }) {
       <Link to={`/community/posts/${original.id}`} className="block transition-colors hover:text-primary">
       <div className="flex items-center gap-2">
         {original.company ? (
-          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10">
-            <Building2 className="h-3 w-3 text-primary" aria-hidden="true" />
-          </span>
+          <CompanyAvatar logoUrl={original.company.logoUrl ?? null} small />
         ) : (
           <Avatar className="h-6 w-6">
             <AvatarImage src={original.author.avatarUrl ?? ""} alt="" />
@@ -911,6 +919,16 @@ function ResharedCard({ original }: { original: ResharedPost }) {
         </p>
       )}
       {original.documentUrl && <DocumentLine title={original.documentTitle} pages={original.documentPages} />}
+
+      {/* A reshared long video shows its still; the post itself plays it. */}
+      {original.mediaUrls.length > 0 && streamPosterUrl(original.mediaUrls[0]) && (
+        <div className="relative mt-2 overflow-hidden rounded-lg bg-muted/40">
+          <img src={streamPosterUrl(original.mediaUrls[0])!} alt="" loading="lazy" className="block h-auto max-h-[37.5rem] w-full object-contain" />
+          <span className="absolute inset-0 flex items-center justify-center">
+            <Play className="h-10 w-10 fill-white text-white drop-shadow" aria-hidden="true" />
+          </span>
+        </div>
+      )}
 
       {original.mediaUrls.length > 0 && !isVideoUrl(original.mediaUrls[0]) && (
         // Whole, like a picture in the feed itself: a diagram cropped to a
@@ -944,20 +962,23 @@ function ResharedCard({ original }: { original: ResharedPost }) {
  * the number at once. Both are cached per company, shared with the company's
  * hover card, so a feed full of its posts asks once.
  */
-function CompanyFollowerCount({ profileId }: { profileId: string }) {
+function CompanyFollowerCount({ profileId, initial }: { profileId: string; initial?: FollowStatus | null }) {
+  // Only asked for when the post came without its company's count.
   const company = useQuery({
     queryKey: ["company-profile", profileId],
     queryFn: () => getCompanyById(profileId),
     staleTime: 5 * 60_000,
     retry: false,
+    enabled: !initial,
   });
   const { followerCount } = useFollowCompany({
     companyId: profileId,
-    initialFollowerCount: company.data?.followerCount ?? 0,
+    initialFollowerCount: initial?.followerCount ?? company.data?.followerCount ?? 0,
+    initialStatus: initial,
   });
   // Nothing until there is a real number: a "0 followers" that becomes 1,234
   // a moment later reads as a glitch.
-  if (!company.data) return null;
+  if (!initial && !company.data) return null;
   return (
     <p className="text-xs text-muted-foreground">
       {followerCount.toLocaleString()} {followerCount === 1 ? "follower" : "followers"}
@@ -965,8 +986,8 @@ function CompanyFollowerCount({ profileId }: { profileId: string }) {
   );
 }
 
-function CompanyFollowButton({ profileId }: { profileId: string }) {
-  const { isFollowing, isPending, toggle } = useFollowCompany({ companyId: profileId });
+function CompanyFollowButton({ profileId, initial }: { profileId: string; initial?: FollowStatus | null }) {
+  const { isFollowing, isPending, toggle } = useFollowCompany({ companyId: profileId, initialStatus: initial });
   return <FollowPill following={isFollowing} disabled={isPending} onClick={toggle} />;
 }
 
@@ -975,8 +996,8 @@ function CompanyFollowButton({ profileId }: { profileId: string }) {
  * counted. Shares its cache entry with the person's hover card, so every
  * Follow for the same person, on any of their posts, moves together.
  */
-function PersonFollowButton({ authorId }: { authorId: string }) {
-  const { isFollowing, isPending, toggle } = usePersonFollow(authorId);
+function PersonFollowButton({ authorId, initial }: { authorId: string; initial?: FollowStatus | null }) {
+  const { isFollowing, isPending, toggle } = usePersonFollow(authorId, true, initial);
   return <FollowPill following={isFollowing} disabled={isPending} onClick={toggle} />;
 }
 
@@ -1014,3 +1035,29 @@ const actionPill =
   "inline-flex h-8 items-center gap-1.5 rounded-full border border-border bg-card px-3 text-xs font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60";
 
 export default FeedPost;
+
+/**
+ * A company's round avatar: its logo when there is one, else a building.
+ * The logo sits on the card colour and is never cropped — logos are drawn
+ * to be seen whole. `onSettled` fires once it has loaded or failed, so the
+ * post can reveal with its picture in place.
+ */
+function CompanyAvatar({ logoUrl, small = false, onSettled }: { logoUrl: string | null; small?: boolean; onSettled?: () => void }) {
+  return (
+    <Avatar className={small ? "h-6 w-6" : "h-10 w-10"}>
+      {logoUrl && (
+        <AvatarImage
+          src={logoUrl}
+          alt=""
+          className="bg-background object-contain p-0.5"
+          onLoadingStatusChange={(status) => {
+            if (status === "loaded" || status === "error") onSettled?.();
+          }}
+        />
+      )}
+      <AvatarFallback className="bg-primary/10 text-primary">
+        <Building2 className={small ? "h-3 w-3" : "h-5 w-5"} aria-hidden="true" />
+      </AvatarFallback>
+    </Avatar>
+  );
+}

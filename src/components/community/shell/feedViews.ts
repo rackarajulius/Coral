@@ -1,4 +1,5 @@
-import type { FeedFilter, FeedSection } from "@/lib/api/community";
+import type { FeedFilter, FeedSection, PostPurpose } from "@/lib/api/community";
+import type { CommunityView } from "./viewingAs";
 
 /**
  * Which slice of the feed `/community` is showing, from `?view=`.
@@ -9,7 +10,7 @@ import type { FeedFilter, FeedSection } from "@/lib/api/community";
  */
 export type FeedViewId = FeedFilter | FeedSection;
 
-const SECTIONS: FeedSection[] = ["discussion", "showcase", "opportunity"];
+const SECTIONS: FeedSection[] = ["showcase", "opportunity"];
 const PERSONAL: FeedFilter[] = ["following", "my-spaces", "saved", "liked", "mine"];
 
 export const VIEW_COPY: Record<FeedViewId | "all", { title: string; blurb: string }> = {
@@ -18,9 +19,8 @@ export const VIEW_COPY: Record<FeedViewId | "all", { title: string; blurb: strin
     title: "Home",
     blurb: "A community where companies find talent, talent finds work, and professionals connect with clients.",
   },
-  discussion: { title: "Discussions", blurb: "Conversations and questions from across the community." },
-  showcase: { title: "Showcase", blurb: "Work people have made and chosen to show." },
-  opportunity: { title: "Opportunities", blurb: "Open projects, live jobs and services on offer." },
+  showcase: { title: "Showcase", blurb: "Work and services from professionals you can hire." },
+  opportunity: { title: "Opportunities", blurb: "Open projects and live jobs from people looking for help." },
   following: { title: "Following", blurb: "Posts from the people and companies you follow." },
   "my-spaces": { title: "My spaces", blurb: "Posts from the spaces you have joined." },
   saved: { title: "Saved", blurb: "Posts you bookmarked." },
@@ -41,6 +41,18 @@ export const isPersonalView = (view: FeedViewId | null): view is FeedFilter =>
 
 export const isSectionView = (view: FeedViewId | null): view is FeedSection =>
   !!view && (SECTIONS as string[]).includes(view);
+
+/**
+ * What a new post starts as on a section's tab: what the person's own side puts
+ * out, not what the tab shows. Each side only sees the other's tab, so a
+ * freelancer reading Opportunities posts their work to Showcase, and a client
+ * reading Showcase posts what they need to Opportunities. General everywhere else.
+ */
+export function startingPurpose(view: FeedViewId | null, side: CommunityView | null): PostPurpose | undefined {
+  if (!isSectionView(view)) return undefined;
+  if (!side) return view;
+  return side === "freelancer" ? "showcase" : "opportunity";
+}
 
 export const viewHref = (view: FeedViewId | null) =>
   view ? `/community?view=${view}` : "/community";

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, SpaceKind } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { seatPage, shownProfile } from '../../company/company-page';
 import { SpacesService } from './spaces.service';
 import {
   ActivityRow,
@@ -226,13 +227,15 @@ export class SpaceSuggestionsService {
       select: {
         jobSeekerProfile: { select: { skills: true, currentTitle: true, industry: true } },
         employerProfile: { select: { industry: true } },
+        // Their company's industry, from its page.
+        ...seatPage({ industry: true }),
       },
     });
     const seeker = user?.jobSeekerProfile;
     return {
       skills: seeker?.skills ?? [],
       title: seeker?.currentTitle ?? null,
-      industry: seeker?.industry ?? user?.employerProfile?.industry ?? null,
+      industry: seeker?.industry ?? shownProfile(user)?.industry ?? null,
     };
   }
 }

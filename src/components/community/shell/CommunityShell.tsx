@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation, useSearchParams } from "react-router-dom";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { claimCommunityTab } from "@/lib/communityTab";
 import { CommunityTopBar } from "./CommunityTopBar";
 import { CommunityNav } from "./CommunityNav";
+import { useAuth } from "@/contexts/AuthContext";
+import { MyScheduledPostsDialog } from "@/components/community/feed/ScheduledQueue";
 
 /**
  * The community as a place of its own.
@@ -16,7 +18,17 @@ import { CommunityNav } from "./CommunityNav";
  */
 export function CommunityShell() {
   const location = useLocation();
+  const { user } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
+  // Your scheduled posts open over whatever page you are on, from the nav's
+  // "Scheduled" row or a notification's link: one dialog, named in the address.
+  const [params, setParams] = useSearchParams();
+  const showScheduled = !!user && params.get("scheduled") === "1";
+  const closeScheduled = () => {
+    const next = new URLSearchParams(params);
+    next.delete("scheduled");
+    setParams(next, { replace: true });
+  };
 
   useEffect(() => {
     claimCommunityTab();
@@ -47,6 +59,8 @@ export function CommunityShell() {
           <Outlet />
         </div>
       </div>
+
+      {showScheduled && <MyScheduledPostsDialog open onOpenChange={(open) => !open && closeScheduled()} />}
 
       {/* Below lg the nav is a drawer from the bar's menu button. */}
       <Sheet open={menuOpen} onOpenChange={setMenuOpen}>

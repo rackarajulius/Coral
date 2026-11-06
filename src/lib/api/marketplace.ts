@@ -1,9 +1,8 @@
 import supabase from "@/lib/supabase";
-import { PROVIDER_CATEGORIES, type ProviderCategory } from "@/lib/api/providers";
+import type { ProviderCategory } from "@/lib/api/providers";
 import type { PublicProject } from "@/lib/api/profileProjects";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001/api/v1";
-export const MARKETPLACE_CATEGORIES = PROVIDER_CATEGORIES;
 export const MARKETPLACE_CURRENCIES: Record<string, number> = { CAD: 2, USD: 2, EUR: 2, GBP: 2, JPY: 0, KWD: 3 };
 export type MarketplaceKind = "service" | "project";
 export type WorkMode = "remote" | "hybrid" | "onsite";
@@ -151,9 +150,11 @@ export async function getMarketplaceCapabilities(owner?: MarketplaceOwner, signa
 const endpoint = (kind: MarketplaceKind) => kind === "service" ? "/services" : "/gigs";
 export async function getMarketplaceDirectory(kind: MarketplaceKind, filters: {
   q?: string; category?: ProviderCategory; skill?: string; workMode?: WorkMode; country?: string; city?: string; availability?: ServiceListing['availability']; page?: number;
+  /** One professional's own listings (not what they publish for a company). */
+  ownerId?: string;
 }, signal?: AbortSignal): Promise<MarketplacePage> {
   const params = new URLSearchParams({ page: String(filters.page || 1), limit: "12" });
-  for (const field of ["q", "category", "skill", "workMode", "country", "city", "availability"] as const) if (filters[field]) params.set(field, filters[field]);
+  for (const field of ["q", "category", "skill", "workMode", "country", "city", "availability", "ownerId"] as const) if (filters[field]) params.set(field, filters[field]);
   return request<MarketplacePage>(`${endpoint(kind)}?${params}`, { signal });
 }
 export async function getMarketplaceRecord(kind: MarketplaceKind, id: string, signal?: AbortSignal): Promise<MarketplaceRecord> {

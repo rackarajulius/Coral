@@ -1,4 +1,5 @@
 import supabase from "@/lib/supabase";
+import { fitImage, IMAGE_SIZES } from "@/lib/imageResize";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001/api/v1";
 
@@ -51,12 +52,16 @@ export interface CompanyWhyCard {
 
 export interface EmployerCompany {
   id: string;
+  /** The page's own address, /company/<slug>; null until it has one. */
+  slug?: string | null;
   userId: string;
   companyId: string | null;
   companyName: string;
   companyLogo: string | null;
   companyWebsite: string | null;
   companySize: string | null;
+  /** Organization type, a key from lib/companyFacts; null on older pages. */
+  companyType?: string | null;
   industry: string | null;
   jobTitle: string;
   department: string | null;
@@ -94,6 +99,8 @@ export interface EmployerCompany {
   showJobs: boolean;
   allowFollow: boolean;
   verificationStatus: "unverified" | "verified";
+  /** The domain the company proved it owns, on its public page; null when unclaimed. */
+  verifiedDomain?: string | null;
   openJobs?: number;
   followerCount?: number;
   createdAt: string;
@@ -201,7 +208,8 @@ export async function listCompanies(params: ListCompaniesParams = {}): Promise<L
 
 export async function uploadCompanyLogo(file: File): Promise<EmployerCompany> {
   const formData = new FormData();
-  formData.append("file", file);
+  // Shown on every post the company makes: a few KB, not a few MB.
+  formData.append("file", await fitImage(file, IMAGE_SIZES.avatar));
 
   const res = await fetch(`${API_BASE_URL}/employers/me/company/logo`, {
     method: "POST",
@@ -219,7 +227,7 @@ export async function uploadCompanyLogo(file: File): Promise<EmployerCompany> {
 
 export async function uploadCompanyBanner(file: File): Promise<EmployerCompany> {
   const formData = new FormData();
-  formData.append("file", file);
+  formData.append("file", await fitImage(file, IMAGE_SIZES.banner));
 
   const res = await fetch(`${API_BASE_URL}/employers/me/company/banner`, {
     method: "POST",
@@ -242,7 +250,8 @@ export async function uploadCompanyBanner(file: File): Promise<EmployerCompany> 
  */
 export async function uploadCompanyMedia(file: File): Promise<string> {
   const formData = new FormData();
-  formData.append("file", file);
+  // Gallery pictures; a culture video passes through untouched.
+  formData.append("file", await fitImage(file, IMAGE_SIZES.post));
 
   const res = await fetch(`${API_BASE_URL}/employers/me/company/media`, {
     method: "POST",
@@ -260,12 +269,19 @@ export async function uploadCompanyMedia(file: File): Promise<string> {
 
 export interface SimilarCompany {
   id: string;
+  /** The page's own address, /company/<slug>. */
+  slug?: string | null;
   name: string;
   industry: string;
   description: string;
   cover: string | null;
   logo: string | null;
   openJobs: number;
+}
+
+/** Where a company page lives: its own address, else its id. */
+export function companyPageHref(page: { id: string; slug?: string | null }): string {
+  return page.slug ? `/company/${page.slug}` : `/company-profile/${page.id}`;
 }
 
 /** Public companies in the same industry as the given one. */

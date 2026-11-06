@@ -5,6 +5,7 @@ import { resolveTeamTab, teamTabs } from "@/components/employer-dashboard/team/t
 import TeamPeople from "@/components/employer-dashboard/team/TeamPeople";
 import TeamRoles from "@/components/employer-dashboard/team/TeamRoles";
 import JoinLinkCard from "@/components/employer-dashboard/team/JoinLinkCard";
+import CompanyDomainCard from "@/components/employer-dashboard/team/CompanyDomainCard";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { getTeam } from "@/lib/api/companyTeam";
 
@@ -50,7 +51,13 @@ export default function TeamPage() {
     <TeamShell tabs={tabs} companyName={team.data?.companyName}>
       {tab === "people" && <TeamPeople />}
       {tab === "roles" && <TeamRoles />}
-      {tab === "access" && <JoinLinkCard />}
+      {/* The domain first: it decides who the invite link lets straight in. */}
+      {tab === "access" && (
+        <div className="space-y-5">
+          <CompanyDomainCard />
+          <JoinLinkCard />
+        </div>
+      )}
     </TeamShell>
   );
 }

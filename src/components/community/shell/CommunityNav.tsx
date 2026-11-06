@@ -1,8 +1,8 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  Bookmark, Briefcase, BriefcaseBusiness, CalendarDays, ChevronDown, Compass, FolderKanban, Heart, Home,
-  Inbox, Layers, Loader2, MessagesSquare, Plus, ShieldCheck, Sparkles, Store, User as UserIcon, UserCheck, UsersRound,
+  Bookmark, Briefcase, BriefcaseBusiness, CalendarClock, CalendarDays, ChevronDown, Compass, FolderKanban, Heart, Home,
+  Layers, Loader2, Plus, Presentation, ShieldCheck, Store, User as UserIcon, UserCheck, UsersRound,
 } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -11,8 +11,12 @@ import { BRAND_NAME } from "@/lib/brand";
 import { useAuth } from "@/contexts/AuthContext";
 import { listReports, listSpaces, type Space } from "@/lib/api/community";
 import { NewSpaceDialog } from "@/components/community/feed/NewSpaceDialog";
+import { useMyScheduledPosts } from "@/components/community/feed/ScheduledQueue";
 import { useSpaceMembership } from "@/components/community/feed/useSpaceMembership";
+import { useViewingAs } from "@/hooks/useViewingAs";
 import { parseView, viewHref, type FeedViewId } from "./feedViews";
+import { VIEW_ROWS, VIEW_SECTIONS } from "./viewRows";
+import { activeLink } from "./viewingAs";
 
 /** How many of your spaces the nav lists before "Show more". */
 const RAIL_LIMIT = 30;
@@ -29,15 +33,29 @@ const RAIL_LIMIT = 30;
  * Spaces lists the ones *you* joined, never all of them. The full list grows
  * with the platform; yours grows with your choices, which is the only version
  * of it that keeps fitting on a screen. The rest are found through Explore.
+ *
+ * The marketplace rows follow who you are here as, chosen in the profile menu:
+ * a freelancer sees their work, a client their hiring. A visitor is neither
+ * yet, and sees all of it.
  */
 export function CommunityNav() {
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
+  const { view } = useViewingAs();
   const navigate = useNavigate();
   const { pathname, search } = useLocation();
   const [newSpaceOpen, setNewSpaceOpen] = useState(false);
 
-  const view = parseView(new URLSearchParams(search).get("view"));
-  const feedActive = (v: FeedViewId | null) => pathname === "/community" && view === v;
+  const feed = parseView(new URLSearchParams(search).get("view"));
+  // Shown only while there is something in it: an empty "Scheduled" is a row
+  // that leads nowhere. Opens over the page you are on (CommunityShell).
+  const scheduled = useMyScheduledPosts();
+  const scheduledCount = scheduled.data?.length ?? 0;
+  const scheduledHref = (() => {
+    const next = new URLSearchParams(search);
+    next.set("scheduled", "1");
+    return `${pathname}?${next}`;
+  })();
+  const feedActive = (v: FeedViewId | null) => pathname === "/community" && feed === v;
   const under = (prefix: string) => pathname === prefix || pathname.startsWith(`${prefix}/`);
   const activeSlug = pathname.startsWith("/community/spaces/")
     ? decodeURIComponent(pathname.slice("/community/spaces/".length))
@@ -92,7 +110,7 @@ export function CommunityNav() {
   });
 
   const { ref: scrollRef, maskClass } = useScrollEdges<HTMLElement>();
-  const offersServices = !user || user.role === "JOB_SEEKER" || user.role === "FREELANCER";
+  const lit = view ? activeLink(VIEW_ROWS[view].map((row) => row.to), pathname, search) : null;
 
   return (
     <nav
@@ -107,9 +125,15 @@ export function CommunityNav() {
         <Row icon={Home} label="Home" to="/community" active={feedActive(null)} />
         {/* Signed in only: following is something you have done. */}
         {user && <Row icon={UserCheck} label="Following" to={viewHref("following")} active={feedActive("following")} />}
-        <Row icon={MessagesSquare} label="Discussions" to={viewHref("discussion")} active={feedActive("discussion")} />
-        <Row icon={Sparkles} label="Showcase" to={viewHref("showcase")} active={feedActive("showcase")} />
-        <Row icon={BriefcaseBusiness} label="Opportunities" to={viewHref("opportunity")} active={feedActive("opportunity")} />
+        {/* Each side sees what it came for: people for a client, work for a
+            freelancer. A visitor is neither yet, and sees both. Held back until
+            the account is known, so a reload doesn't flash the other tab. */}
+        {!authLoading && view !== "freelancer" && (
+          <Row icon={Presentation} label="Showcase" to={viewHref("showcase")} active={feedActive("showcase")} />
+        )}
+        {!authLoading && view !== "client" && (
+          <Row icon={BriefcaseBusiness} label="Opportunities" to={viewHref("opportunity")} active={feedActive("opportunity")} />
+        )}
         <Row icon={Compass} label="Explore" to="/community/search" active={under("/community/search")} />
         <Row icon={CalendarDays} label="Tides" to="/community/tides" active={under("/community/tides")} />
         {/* Only for signed-in people: starting one makes you its moderator,
@@ -117,18 +141,26 @@ export function CommunityNav() {
         {user && <Row icon={Plus} label="Start a space" onClick={() => setNewSpaceOpen(true)} />}
       </div>
 
-      <Section id="marketplace" title="Marketplace">
-        <Row icon={UsersRound} label="Professionals" to="/providers" active={under("/providers")} />
-        <Row icon={Store} label="Services" to="/services" active={under("/services")} />
-        <Row icon={FolderKanban} label="Project work" to="/projects" active={under("/projects")} />
-        {offersServices && <Row icon={UserIcon} label="Offer services" to="/provider" active={under("/provider")} />}
-        {user && (
-          <>
-            <Row icon={Store} label="My listings" to="/marketplace/manage" active={under("/marketplace/manage")} />
-            <Row icon={Inbox} label="Marketplace inbox" to="/marketplace/inbox" active={under("/marketplace/inbox")} />
-          </>
-        )}
-      </Section>
+      {/* Each side's own section, keyed so that switching opens it as that
+          side's: what you folded on one isn't folded on the other. Nothing
+          until the account is known, so a reload doesn't flash the wrong rows. */}
+      {view ? (
+        <Section key={view} id={`view-${view}`} title={VIEW_SECTIONS[view]}>
+          {view === "freelancer" && (
+            <Row icon={FolderKanban} label="Project work" to="/projects" active={under("/projects")} />
+          )}
+          {VIEW_ROWS[view].map(({ to, label, icon }) => (
+            <Row key={to} icon={icon} label={label} to={to} active={lit === to} />
+          ))}
+        </Section>
+      ) : !authLoading && (
+        <Section id="marketplace" title="Marketplace">
+          <Row icon={UsersRound} label="Professionals" to="/providers" active={under("/providers")} />
+          <Row icon={Store} label="Services" to="/services" active={under("/services")} />
+          <Row icon={FolderKanban} label="Project work" to="/projects" active={under("/projects")} />
+          <Row icon={UserIcon} label="Offer services" to="/provider" active={under("/provider")} />
+        </Section>
+      )}
 
       {/* Signed-out visitors can read everything and own none of it, so the
           personal rows are absent rather than present and empty. */}
@@ -138,29 +170,22 @@ export function CommunityNav() {
           <Row icon={Bookmark} label="Saved" to={viewHref("saved")} active={feedActive("saved")} />
           <Row icon={Heart} label="Liked" to={viewHref("liked")} active={feedActive("liked")} />
           <Row icon={UserIcon} label="Your posts" to={viewHref("mine")} active={feedActive("mine")} />
+          {scheduledCount > 0 && (
+            <Row
+              icon={CalendarClock}
+              label={`Scheduled (${scheduledCount})`}
+              to={scheduledHref}
+              active={new URLSearchParams(search).get("scheduled") === "1"}
+            />
+          )}
           {canModerate.data && (
             <Row icon={ShieldCheck} label="Moderation" to="/community/moderation" active={under("/community/moderation")} />
           )}
         </Section>
       )}
 
-      <Section
-        id="spaces"
-        title={showPopular ? "Popular spaces" : "Your spaces"}
-        action={
-          user && (
-            <button
-              type="button"
-              onClick={() => setNewSpaceOpen(true)}
-              aria-label="Start a space"
-              title="Start a space"
-              className="rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <Plus className="h-4 w-4" />
-            </button>
-          )
-        }
-      >
+      {/* No "+" here: "Start a space" is already a row of its own above. */}
+      <Section id="spaces" title={showPopular ? "Popular spaces" : "Your spaces"}>
         {spacesLoading && (
           <div className="space-y-1.5 px-2">
             {[0, 1, 2].map((i) => <Skeleton key={i} className="h-6 rounded" />)}

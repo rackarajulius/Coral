@@ -28,11 +28,14 @@ import { ScheduledPostsController } from './scheduled-posts/scheduled-posts.cont
 import { ScheduledPostsService } from './scheduled-posts/scheduled-posts.service';
 import { PostStatsController } from './post-stats/post-stats.controller';
 import { PostStatsService } from './post-stats/post-stats.service';
+import { CommunityVideosController } from './videos/community-videos.controller';
+import { CommunityVideosService } from './videos/community-videos.service';
+import { MuxClient } from './videos/mux.client';
 
 @Module({
   imports: [StorageModule, NotificationsModule, MarketplaceModule],
-  controllers: [PostsController, CommentsController, FeedController, SpacesController, ModerationController, PollsController, TidesController, PeopleController, MentionsController, ScheduledPostsController, PostStatsController],
-  providers: [PostsService, CommentsService, FeedService, SpacesService, SpaceSuggestionsService, CommunityIdentityService, ModerationService, CommunityMediaService, PollsService, GifsService, LinkPreviewService, TidesService, PeopleFollowService, ScheduledPostsService, PostStatsService],
+  controllers: [PostsController, CommentsController, FeedController, SpacesController, ModerationController, PollsController, TidesController, PeopleController, MentionsController, ScheduledPostsController, PostStatsController, CommunityVideosController],
+  providers: [PostsService, CommentsService, FeedService, SpacesService, SpaceSuggestionsService, CommunityIdentityService, ModerationService, CommunityMediaService, PollsService, GifsService, LinkPreviewService, TidesService, PeopleFollowService, ScheduledPostsService, PostStatsService, CommunityVideosService, MuxClient],
   exports: [PostsService, CommentsService, FeedService],
 })
 export class CommunityModule {}

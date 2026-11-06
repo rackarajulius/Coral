@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { User } from '../common/types/user.types';
+import { seatPage, shownProfile } from '../company/company-page';
 import { AiService } from '../services/ai/ai.service';
 import { SeekerEntitlementsService } from '../seeker-entitlements/seeker-entitlements.service';
 import {
@@ -483,7 +484,13 @@ export class InterviewCoachService {
         responsibilities: true,
         requirements: true,
         skills: true,
-        postedBy: { select: { employerProfile: { select: { companyName: true } } } },
+        postedBy: {
+          select: {
+            employerProfile: { select: { companyName: true } },
+            // The poster's company page, which the job is shown under.
+            ...seatPage({ companyName: true }),
+          },
+        },
         applications: {
           where: { applicantId: user.id, status: { not: 'withdrawn' } },
           select: { id: true },
@@ -494,7 +501,7 @@ export class InterviewCoachService {
     if (!job || job.applications.length === 0) return null;
     return {
       ...job,
-      company: job.companyName || job.postedBy.employerProfile?.companyName || null,
+      company: job.companyName || shownProfile(job.postedBy)?.companyName || null,
     };
   }
 

@@ -1,8 +1,12 @@
+import { PrismaService } from '../../../src/prisma/prisma.service';
+import { FreelancersService } from '../../../src/freelancers/freelancers.service';
+import { CitiesService } from '../../../src/locations/cities.service';
 import { featuredLink, ownFeaturedPicture, publicFeaturedItems } from '../../../src/job-seekers/featured-items';
 import { PROFILE_BUCKET } from '../../../src/storage/storage.service';
 
 /**
- * Featured items as visitors see them on the profile.
+ * Featured items as visitors see them: on the profile, and with the
+ * person's services on their provider page.
  */
 
 const OWNER = '11111111-1111-4111-8111-111111111111';
@@ -58,5 +62,60 @@ describe('What a visitor sees of a Featured item', () => {
 
   it('an unknown kind reads as a project', () => {
     expect(publicFeaturedItems([item({ mediaType: 'podcast' })], OWNER)[0].type).toBe('project');
+  });
+});
+
+describe('Featured work on the provider page', () => {
+  const cities = new CitiesService();
+
+  function provider() {
+    return {
+      id: '10000000-0000-4000-8000-000000000001', userId: OWNER,
+      providerEnabled: true, publicPreviewEnabled: true, category: 'design',
+      headline: 'Product designer', title: 'Designer',
+      summary: 'I design accessible interfaces and practical products for growing companies.',
+      skills: ['Product design'], expertise: [], hourlyRate: null, currency: 'CAD', country: 'Canada', city: 'Toronto',
+      timezone: null, availableForRemote: true, availability: 'available', hoursPerWeek: null,
+      portfolioUrl: 'https://example.com/work', githubUrl: null, linkedinUrl: null, workPreferences: [],
+      createdAt: new Date(), updatedAt: new Date(),
+      user: { id: OWNER, displayName: null, firstName: 'Pro', lastName: 'Member', avatarUrl: null },
+    };
+  }
+
+  function harness(seeker: unknown) {
+    const prisma = {
+      user: { findUnique: jest.fn().mockResolvedValue({ role: 'JOB_SEEKER', status: 'ACTIVE' }) },
+      freelancerProfile: { findFirst: jest.fn().mockResolvedValue(provider()), findUnique: jest.fn().mockResolvedValue(provider()) },
+      jobSeekerProfile: { findUnique: jest.fn().mockResolvedValue(seeker) },
+      completedWork: { count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]) },
+    };
+    return { prisma, service: new FreelancersService(prisma as unknown as PrismaService, cities) };
+  }
+
+  it('shows their Featured items, and links to the full profile when strangers can open it', async () => {
+    const { service, prisma } = harness({ discoverable: true, privacySettings: {}, portfolioItems: [item()], projects: [] });
+    const result = await service.getPublicProfile(OWNER);
+    expect(result.featured).toEqual([expect.objectContaining({ title: 'Checkout redesign', imageUrl: picture(OWNER) })]);
+    expect(result.fullProfile).toBe(true);
+    expect(prisma.jobSeekerProfile.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: OWNER },
+      // Only what the page shows: never the résumé, contact details or preferences.
+      select: { discoverable: true, privacySettings: true, portfolioItems: expect.objectContaining({ take: 12 }), projects: expect.objectContaining({ take: 12 }) },
+    }));
+  });
+
+  it('shows the work but no link to a profile recruiters cannot find', async () => {
+    const { service } = harness({ discoverable: false, privacySettings: {}, portfolioItems: [item()], projects: [] });
+    await expect(service.getPublicProfile(OWNER)).resolves.toMatchObject({ fullProfile: false, featured: [expect.anything()] });
+  });
+
+  it('shows nothing from a profile they have hidden', async () => {
+    const { service } = harness({ discoverable: true, privacySettings: { profileVisible: false }, portfolioItems: [item()], projects: [] });
+    await expect(service.getPublicProfile(OWNER)).resolves.toMatchObject({ featured: [], projects: [], fullProfile: false });
+  });
+
+  it('the owner preview shows the same', async () => {
+    const { service } = harness({ discoverable: true, privacySettings: {}, portfolioItems: [item()], projects: [] });
+    await expect(service.getMyProfile(OWNER)).resolves.toMatchObject({ featured: [expect.objectContaining({ id: 'item-1' })], fullProfile: true });
   });
 });

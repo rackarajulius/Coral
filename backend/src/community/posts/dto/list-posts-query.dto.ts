@@ -21,13 +21,13 @@ export class ListPostsQueryDto {
   filter?: 'saved' | 'liked' | 'mine' | 'my-spaces' | 'following';
 
   /**
-   * What the posts are for, as the community's sections group them: talk
-   * (general posts and questions), work people are showing, or things on
-   * offer (open projects, live jobs, services). Absent means all of them.
+   * Which side of the community to show: people offering (their work and
+   * services) or people asking (open projects and live jobs). Absent means
+   * every post.
    */
   @IsOptional()
-  @IsIn(['discussion', 'showcase', 'opportunity'])
-  section?: 'discussion' | 'showcase' | 'opportunity';
+  @IsIn(['showcase', 'opportunity'])
+  section?: 'showcase' | 'opportunity';
 
   /** 'new' (default) or 'top'. */
   @IsOptional()

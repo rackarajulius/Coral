@@ -21,7 +21,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { activateJobseeker, suspendJobseeker, banJobseeker, deleteJobseeker } from "@/lib/api/adminJobseekers";
+import { activateJobseeker, suspendJobseeker, banJobseeker, deleteJobseeker, deleteJobseekerAccount } from "@/lib/api/adminJobseekers";
+import { departureNote } from "@/lib/api/accountDeletion";
 import supabase from "@/lib/supabase";
 import { useJobseekersMetrics, useJobseekersList, useJobseekerActions } from "@/hooks/admin/useAdminJobseekers";
 
@@ -122,8 +123,8 @@ export default function Jobseekers() {
 
   const handleDelete = async (js: Jobseeker) => {
     try {
-      await deleteJobseeker(js.id);
-      toast.success(`${js.name} deleted`);
+      const companies = await deleteJobseekerAccount(js.id);
+      toast.success(`${js.name} deleted`, { description: departureNote(companies) });
       invalidateJobseekers();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to delete");

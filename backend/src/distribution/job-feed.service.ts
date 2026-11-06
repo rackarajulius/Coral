@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { postingStatements } from '../jobs/posting-statements';
+import { seatPage, shownProfile } from '../company/company-page';
 
 /** Aggregators reject enormous feeds; this is the usual ceiling per pull. */
 const MAX_FEED_ITEMS = 5000;
@@ -24,8 +25,15 @@ interface FeedJob {
   createdAt: Date;
   applicationDeadline: Date | null;
   companyName: string | null;
-  postedBy: { employerProfile: { companyName: string | null; companyWebsite: string | null } | null } | null;
+  postedBy: {
+    employerProfile: FeedEmployer | null;
+    /** The poster's company page, which the job is shown under (seatPage). */
+    companyMemberships?: Array<{ company: { page: FeedEmployer | null } | null }>;
+  } | null;
 }
+
+type FeedEmployer = { companyName: string | null; companyWebsite: string | null };
+const FEED_EMPLOYER = { companyName: true, companyWebsite: true } as const;
 
 /**
  * The description as it goes out, with the posting's own statements after it
@@ -89,7 +97,8 @@ export class JobFeedService {
         companyName: true,
         postedBy: {
           select: {
-            employerProfile: { select: { companyName: true, companyWebsite: true } },
+            employerProfile: { select: FEED_EMPLOYER },
+            ...seatPage(FEED_EMPLOYER),
           },
         },
       },
@@ -187,13 +196,13 @@ export class JobFeedService {
         salaryCurrency: true, salaryPeriod: true, publishedAt: true, createdAt: true,
         applicationDeadline: true, companyName: true, existingVacancy: true, usesAi: true,
         postedBy: {
-          select: { employerProfile: { select: { companyName: true, companyWebsite: true } } },
+          select: { employerProfile: { select: FEED_EMPLOYER }, ...seatPage(FEED_EMPLOYER) },
         },
       },
     })) as FeedJob | null;
     if (!job) return null;
 
-    const website = job.postedBy?.employerProfile?.companyWebsite ?? undefined;
+    const website = shownProfile(job.postedBy)?.companyWebsite ?? undefined;
 
     const payload: Record<string, unknown> = {
       '@context': 'https://schema.org/',
@@ -265,7 +274,7 @@ export class JobFeedService {
    */
   private companyName(job: FeedJob): string {
     return (
-      job.postedBy?.employerProfile?.companyName?.trim() ||
+      shownProfile(job.postedBy)?.companyName?.trim() ||
       job.companyName?.trim() ||
       'Confidential'
     );

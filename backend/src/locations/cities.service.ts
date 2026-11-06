@@ -239,6 +239,24 @@ export class CitiesService {
     return undefined;
   }
 
+  /** The province or state of a country that a text names: "Quebec", "ON". Undefined when it names none. */
+  readRegion(text: string, countryCode: string): Extract<PlaceReading, { kind: 'region' }> | undefined {
+    const region = this.regionNamed(text, countryCode);
+    if (!region) return undefined;
+    return {
+      kind: 'region',
+      region: region.name,
+      ...(region.code ? { regionCode: region.code } : {}),
+      countryCode,
+      country: this.load().countries.get(countryCode) ?? countryCode,
+    };
+  }
+
+  /** "CA" → "Canada". Undefined for a code it doesn't know. */
+  countryName(countryCode: string | null | undefined): string | undefined {
+    return countryCode ? this.load().countries.get(countryCode.toUpperCase()) : undefined;
+  }
+
   /** "UG" → "UGX". Undefined for a code it doesn't know. */
   currencyOf(countryCode: string | null | undefined): string | undefined {
     return countryCode ? this.load().currencies.get(countryCode.toUpperCase()) : undefined;

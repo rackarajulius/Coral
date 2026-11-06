@@ -10,6 +10,7 @@ import { Prisma } from '@prisma/client';
 import { StripeClient } from '../billing/stripe.client';
 import { User } from '../common/types/user.types';
 import { PrismaService } from '../prisma/prisma.service';
+import { handOverCompanies } from '../company/company-departure';
 import { CalendarService } from '../integrations/calendar.service';
 import {
   COMMUNITY_BUCKET,
@@ -249,6 +250,10 @@ export class AccountClosureService {
     await tx.scorecard.updateMany({ where: { reviewerId: userId }, data: { reviewerId: null, reviewerName: 'Closed account' } });
     await tx.offer.updateMany({ where: { createdById: userId }, data: { createdById: null } });
     await tx.emailTemplate.updateMany({ where: { createdById: userId }, data: { createdById: null } });
+    // Their companies stay whole: a teammate takes over the page, ownership
+    // and their jobs, or the company is deactivated if nobody else is left.
+    // Without this, closing the account deleted the company's page with it.
+    await handOverCompanies(tx, userId);
     // deleteMany keeps the repair attempt idempotent. All declared User FKs
     // already cascade or set null, including profiles, applications and posts.
     const removed = await tx.user.deleteMany({ where: { id: userId, supabaseId, role: 'JOB_SEEKER' } });

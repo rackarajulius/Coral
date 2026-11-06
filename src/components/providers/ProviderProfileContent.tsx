@@ -1,10 +1,18 @@
-import { ExternalLink, Globe, MapPin } from "lucide-react";
+import { ExternalLink, Globe, MapPin, UserRound } from "lucide-react";
+import { Link } from "react-router-dom";
+import { FeaturedWork } from "@/components/jobSeeker/FeaturedWork";
+import { ProjectList } from "@/components/jobSeeker/ProjectList";
+import { DoneWorkList } from "@/components/marketplace/DoneWorkList";
 import { ProfileAvatar } from "@/components/jobSeeker/ProfileVisuals";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CategoryLabel } from "@/components/WorkCategory";
+import { ProviderFollow, ProviderPosts } from "@/components/providers/ProviderCommunity";
+import { ProviderReplies } from "@/components/providers/ProviderReplies";
+import { SaveProfessionalButton } from "@/components/providers/SaveProfessionalButton";
+import { ProviderServices } from "@/components/providers/ProviderServices";
 import {
   PROVIDER_WORK_PREFERENCES,
-  providerCategoryLabel,
   providerName,
   safeProviderLink,
   type PublicProviderProfile,
@@ -25,6 +33,7 @@ export default function ProviderProfileContent({ profile }: { profile: PublicPro
     { label: "GitHub work", url: safeProviderLink(profile.githubUrl) },
     { label: "LinkedIn profile", url: safeProviderLink(profile.linkedinUrl) },
   ].filter((link) => link.url);
+  const featured = profile.featured ?? [];
   const location = [profile.city, profile.country].filter(Boolean).join(", ");
 
   return (
@@ -40,11 +49,17 @@ export default function ProviderProfileContent({ profile }: { profile: PublicPro
               {profile.headline && <p className="mt-1 max-w-2xl text-base text-muted-foreground">{profile.headline}</p>}
               {profile.title && <p className="mt-1 text-sm text-muted-foreground">{profile.title}</p>}
             </div>
-            <Badge variant="secondary">{providerCategoryLabel(profile.category)}</Badge>
+            <Badge variant="secondary"><CategoryLabel value={profile.category} /></Badge>
           </div>
-          <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm text-muted-foreground">
-            {location && <span className="inline-flex items-center gap-1.5"><MapPin className="h-4 w-4" aria-hidden="true" />{location}</span>}
-            {profile.availableForRemote && <span className="inline-flex items-center gap-1.5"><Globe className="h-4 w-4" aria-hidden="true" />Open to remote work</span>}
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-muted-foreground">
+              {location && <span className="inline-flex items-center gap-1.5"><MapPin className="h-4 w-4" aria-hidden="true" />{location}</span>}
+              {profile.availableForRemote && <span className="inline-flex items-center gap-1.5"><Globe className="h-4 w-4" aria-hidden="true" />Open to remote work</span>}
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <ProviderFollow userId={profile.userId} />
+              <SaveProfessionalButton professionalId={profile.userId} name={name} />
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -53,6 +68,50 @@ export default function ProviderProfileContent({ profile }: { profile: PublicPro
         <CardHeader><CardTitle className="text-lg">About my work</CardTitle></CardHeader>
         <CardContent><p className="whitespace-pre-wrap break-words text-sm leading-7 text-muted-foreground">{profile.summary || "An introduction hasn't been added yet."}</p></CardContent>
       </Card>
+
+      {/* Straight after who they are: their services are how anyone gets in
+          touch, each with a request of its own. */}
+      <ProviderServices ownerId={profile.userId} name={name} />
+      {/* Beside the services: what happens after you send one a request. */}
+      <ProviderReplies userId={profile.userId} />
+      {/* And what came of them: work both sides confirmed was done. */}
+      {!!profile.doneWork?.total && (
+        <Card className="rounded-2xl">
+          <CardHeader><CardTitle className="text-lg">Done through Coral</CardTitle></CardHeader>
+          <CardContent><DoneWorkList work={profile.doneWork} /></CardContent>
+        </Card>
+      )}
+
+      {/* Then the work itself: the Featured items from their profile, and
+          where else it lives. */}
+      <Card className="rounded-2xl">
+        <CardHeader><CardTitle className="text-lg">Explore my work</CardTitle></CardHeader>
+        <CardContent className="space-y-4">
+          {featured.length > 0 && <FeaturedWork items={featured.map((item) => ({ ...item, key: item.id }))} />}
+          {links.length > 0 || profile.fullProfile ? <div className="flex flex-wrap gap-3">
+            {links.map((link) => (
+              <a key={link.label} href={link.url!} target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                {link.label}<ExternalLink className="h-3.5 w-3.5" aria-hidden="true" /><span className="sr-only"> (opens in a new tab)</span>
+              </a>
+            ))}
+            {/* Their experience and education live on the profile itself. */}
+            {profile.fullProfile && (
+              <Link to={`/profile/${profile.userId}`}
+                className="inline-flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <UserRound className="h-3.5 w-3.5" aria-hidden="true" />Full profile
+              </Link>
+            )}
+          </div> : featured.length === 0 && <p className="text-sm text-muted-foreground">Work links haven't been added yet.</p>}
+        </CardContent>
+      </Card>
+
+      {!!profile.projects?.length && (
+        <Card className="rounded-2xl">
+          <CardHeader><CardTitle className="text-lg">Projects</CardTitle></CardHeader>
+          <CardContent><ProjectList projects={profile.projects} /></CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-5 md:grid-cols-2">
         <Card className="rounded-2xl">
@@ -74,17 +133,7 @@ export default function ProviderProfileContent({ profile }: { profile: PublicPro
         </Card>
       </div>
 
-      <Card className="rounded-2xl">
-        <CardHeader><CardTitle className="text-lg">Explore my work</CardTitle></CardHeader>
-        <CardContent>
-          {links.length ? <div className="flex flex-wrap gap-3">{links.map((link) => (
-            <a key={link.label} href={link.url!} target="_blank" rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              {link.label}<ExternalLink className="h-3.5 w-3.5" aria-hidden="true" /><span className="sr-only"> (opens in a new tab)</span>
-            </a>
-          ))}</div> : <p className="text-sm text-muted-foreground">Work links haven't been added yet.</p>}
-        </CardContent>
-      </Card>
+      <ProviderPosts userId={profile.userId} name={name} />
     </div>
   );
 }

@@ -1,9 +1,12 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
-import { CompanyMemberStatus, CompanyRole, UserStatus } from '@prisma/client';
+import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { CompanyMemberStatus, CompanyRole, Prisma, UserStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { User } from '../common/types/user.types';
 import { roleHasCapability } from '../company/capabilities';
+import { signInDomainOf } from '../company/company-domain.service';
 import { CompanyAuditService } from '../company/company-audit.service';
+import { companyPageId, profileShownFor } from '../company/company-page';
+import { checkSlug, slugFromName, type SlugCheck } from '../company/page-slug';
 import { personName } from '../common/person-name';
 
 /** Free/consumer mail hosts — never treated as a company identity. */
@@ -22,16 +25,6 @@ export function emailDomain(email?: string | null): string | null {
 export function workDomain(email?: string | null): string | null {
   const d = emailDomain(email);
   return d && !FREE_EMAIL_DOMAINS.has(d) ? d : null;
-}
-
-function hostOf(url?: string | null): string | null {
-  if (!url) return null;
-  try {
-    const withScheme = /^https?:\/\//i.test(url) ? url : `https://${url}`;
-    return new URL(withScheme).hostname.replace(/^www\./, '').toLowerCase();
-  } catch {
-    return null;
-  }
 }
 
 /** A company this person may already belong to, matched on email domain. */
@@ -64,18 +57,18 @@ export class OnboardingService {
   async state(user: User) {
     const seated = await this.prisma.companyMember.findFirst({
       where: { userId: user.id, status: CompanyMemberStatus.ACTIVE },
-      select: { id: true },
+      select: { id: true, role: true },
+      orderBy: { createdAt: 'asc' },
     });
-    const profile = await this.prisma.employerProfile.findUnique({
-      where: { userId: user.id },
-      select: {
-        companyName: true, companyWebsite: true, companySize: true, industry: true,
-        headquarters: true, companyLogo: true, companyDescription: true,
-        // Read back so the public-face step seeds from what's already there
-        // instead of blanking fields the employer filled in from the dashboard.
-        tagline: true, companyCulture: true, companyBenefits: true,
-        verificationStatus: true, companyId: true,
-      },
+    // The company's page, so a teammate sees their company's setup rather
+    // than an empty row of their own.
+    const profile = await profileShownFor(this.prisma, user.id, {
+      companyName: true, companyWebsite: true, companySize: true, companyType: true, industry: true,
+      headquarters: true, companyLogo: true, companyDescription: true,
+      // Read back so the public-face step seeds from what's already there
+      // instead of blanking fields the employer filled in from the dashboard.
+      tagline: true, companyCulture: true, companyBenefits: true,
+      verificationStatus: true, companyId: true, slug: true,
     });
 
     const filled = (v: unknown) => typeof v === 'string' && v.trim().length > 0;
@@ -108,6 +101,11 @@ export class OnboardingService {
        * may represent it; with one, it edits.
        */
       hasCompany: !!seated,
+      /**
+       * Whether this person may change the company's details and public
+       * face: an owner or admin, or someone about to create a company.
+       */
+      canEditCompany: !seated || roleHasCapability(seated.role, 'company:write'),
     };
   }
 
@@ -125,35 +123,42 @@ export class OnboardingService {
     const domain = workDomain(user.email);
     if (!domain) return { domain: null, matches: [] };
 
-    const owners = await this.prisma.user.findMany({
+    // The company that owns this domain comes first: it is the one a colleague
+    // here should join, and the only one they may not duplicate.
+    const owner = await this.domainOwner(domain);
+
+    // The companies people at this domain work in, shown by their pages. Only
+    // companies: a profile without one has nobody to approve a request, so it
+    // used to be offered here and then refused.
+    const seats = await this.prisma.companyMember.findMany({
       where: {
-        email: { endsWith: `@${domain}` },
-        id: { not: user.id },
-        employerProfile: { isNot: null },
+        status: CompanyMemberStatus.ACTIVE,
+        userId: { not: user.id },
+        user: { email: { endsWith: `@${domain}` } },
       },
-      select: {
-        id: true,
-        employerProfile: {
+      select: { companyId: true },
+      orderBy: { createdAt: 'asc' },
+      take: 50,
+    });
+    const companyIds = [...new Set(seats.map((s) => s.companyId))]
+      .filter((id) => id !== owner?.id)
+      .slice(0, 10);
+    const pageIds = (await Promise.all(companyIds.map((id) => companyPageId(this.prisma, id))))
+      .filter((id): id is string => !!id);
+    const pages = pageIds.length
+      ? await this.prisma.employerProfile.findMany({
+          where: { id: { in: pageIds } },
           select: {
             id: true, companyName: true, companyLogo: true, companyWebsite: true,
             industry: true, headquarters: true, companyId: true,
           },
-        },
-      },
-      take: 10,
-    });
+        })
+      : [];
+    const pageOrder = new Map(pageIds.map((id, i) => [id, i]));
+    pages.sort((a, b) => (pageOrder.get(a.id) ?? 0) - (pageOrder.get(b.id) ?? 0));
 
-    const seen = new Set<string>();
-    const matches = owners
-      .map((o) => o.employerProfile)
-      .filter((p): p is NonNullable<typeof p> => !!p?.companyName)
-      // Same company can have several profiles already; show each name once.
-      .filter((p) => {
-        const key = (p.companyId ?? p.companyName ?? '').toLowerCase();
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
+    const matches = [...(owner?.page ? [owner.page] : []), ...pages]
+      .filter((p) => !!p.companyName?.trim() && !!p.companyId)
       .map((p) => ({
         profileId: p.id,
         companyId: p.companyId,
@@ -183,6 +188,7 @@ export class OnboardingService {
       companyName: string;
       companyWebsite?: string;
       companySize?: string;
+      companyType?: string;
       industry?: string;
       headquarters?: string;
       isRecruiter?: boolean;
@@ -192,9 +198,11 @@ export class OnboardingService {
       firstName?: string;
       lastName?: string;
       authorizedRepresentative?: boolean;
+      pageSlug?: string;
     },
   ) {
     let companyId: string | null = null;
+    let slug: string | null = null;
     let joinPending = false;
     user = await this.saveName(user, dto);
 
@@ -229,31 +237,40 @@ export class OnboardingService {
       // Deliberately not linked to the company yet: the profile stays its own
       // until the membership is approved.
     } else {
-      const creating = !(await this.prisma.companyMember.findFirst({
+      await this.assertNotDuplicating(user);
+      const seat = await this.prisma.companyMember.findFirst({
         where: { userId: user.id, status: CompanyMemberStatus.ACTIVE },
-        select: { id: true },
-      }));
-      if (creating) this.assertMayCreate(user, dto);
-      companyId = await this.createCompanyFor(user, dto);
-      if (creating) {
-        const name = personName(user, 'Someone');
-        await this.audit.record({
-          companyId,
-          actor: { id: user.id, name },
-          category: 'COMPANY',
-          action: 'Created company page',
-          entityType: 'company',
-          entityId: companyId,
-          entityName: dto.companyName.trim(),
-          summary: `${name} created the company page and confirmed they are authorized to represent ${dto.companyName.trim()}.`,
-        });
+        select: { companyId: true, role: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (seat) {
+        await this.updateCompanyDetails(user, seat, dto);
+        return { ...(await this.state(user)), joinPending: false };
       }
+
+      this.assertMayCreate(user, dto);
+      // Settled before anything is created, so a taken address never leaves
+      // a company behind without its page.
+      slug = await this.addressForNewPage(user, dto);
+      companyId = await this.createCompanyFor(user, dto);
+      const name = personName(user, 'Someone');
+      await this.audit.record({
+        companyId,
+        actor: { id: user.id, name },
+        category: 'COMPANY',
+        action: 'Created company page',
+        entityType: 'company',
+        entityId: companyId,
+        entityName: dto.companyName.trim(),
+        summary: `${name} created the company page and confirmed they are authorized to represent ${dto.companyName.trim()}.`,
+      });
     }
 
     const data = {
       companyName: dto.companyName.trim(),
       companyWebsite: dto.companyWebsite?.trim() || null,
       companySize: dto.companySize?.trim() || null,
+      ...(dto.companyType !== undefined ? { companyType: dto.companyType || null } : {}),
       industry: dto.industry?.trim() || null,
       headquarters: dto.headquarters?.trim() || null,
       isRecruiter: dto.isRecruiter ?? false,
@@ -264,14 +281,126 @@ export class OnboardingService {
       ...(companyId ? { companyId } : {}),
     };
 
-    await this.prisma.employerProfile.upsert({
-      where: { userId: user.id },
-      // jobTitle is required on create but isn't asked for in this step.
-      create: { userId: user.id, jobTitle: '', ...data },
-      update: data,
-    });
+    // A new company's page is public from the start, as on LinkedIn. It used
+    // to keep the column default, "unlisted", until someone found Review &
+    // publish in the editor — out of /companies, and nothing said so.
+    const publish = companyId ? { visibility: 'public', ...(slug ? { slug } : {}) } : {};
+    const upsert = (page: typeof publish) =>
+      this.prisma.employerProfile.upsert({
+        where: { userId: user.id },
+        // jobTitle is required on create but isn't asked for in this step.
+        create: { userId: user.id, jobTitle: '', ...data, ...page },
+        update: { ...data, ...page },
+        select: { id: true },
+      });
+    let profile: { id: string };
+    try {
+      profile = await upsert(publish);
+    } catch (err) {
+      // Someone took the address between the check and now: fall back to
+      // one made from the name rather than leave the company without a page.
+      if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') || !slug) throw err;
+      const fallback = await slugFromName(this.prisma, dto.companyName);
+      profile = await upsert({ visibility: 'public', ...(fallback ? { slug: fallback } : {}) });
+    }
+
+    if (companyId) {
+      // The creator's profile is the new company's page. A person has one
+      // profile, so if it was the page of a company they have since left,
+      // that company adopts another member's profile (companyPageId).
+      await this.prisma.company.updateMany({
+        where: { pageId: profile.id, id: { not: companyId } },
+        data: { pageId: null },
+      });
+      await this.prisma.company.update({ where: { id: companyId }, data: { pageId: profile.id } });
+    }
 
     return { ...(await this.state({ ...user, status: user.status } as User)), joinPending };
+  }
+
+  /**
+   * The address a page being created gets: the one typed, if it can be used —
+   * refused with the reason when it can't, as LinkedIn refuses a taken URL —
+   * or, with none typed, one made from the company name.
+   */
+  private async addressForNewPage(user: User, dto: { companyName: string; pageSlug?: string }): Promise<string | null> {
+    const own = await this.prisma.employerProfile.findUnique({ where: { userId: user.id }, select: { id: true } });
+    if (dto.pageSlug !== undefined && dto.pageSlug.trim()) {
+      const check = await checkSlug(this.prisma, dto.pageSlug, own?.id);
+      if (!check.available) throw new BadRequestException(check.reason ?? 'That address cannot be used.');
+      return check.slug;
+    }
+    return slugFromName(this.prisma, dto.companyName, own?.id);
+  }
+
+  /**
+   * Whether an address can be this person's page's, for the field that shows
+   * it as they type: their company's page when they have one, else the page
+   * they are about to create.
+   */
+  async checkPageAddress(user: User, input: string): Promise<SlugCheck> {
+    const seat = await this.prisma.companyMember.findFirst({
+      where: { userId: user.id, status: CompanyMemberStatus.ACTIVE },
+      select: { companyId: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const pageId = seat
+      ? await companyPageId(this.prisma, seat.companyId)
+      : (await this.prisma.employerProfile.findUnique({ where: { userId: user.id }, select: { id: true } }))?.id ?? null;
+    return checkSlug(this.prisma, input, pageId);
+  }
+
+  /**
+   * The company step, for someone already in a company: its name and its
+   * page's details. Only a seat that may edit the company may save it. A
+   * Viewer could once rename the company by posting this step, and anyone's
+   * edits here used to land on a row of their own that nobody saw.
+   */
+  private async updateCompanyDetails(
+    user: User,
+    seat: { companyId: string; role: CompanyRole },
+    dto: {
+      companyName: string; companyWebsite?: string; companySize?: string; companyType?: string; industry?: string;
+      headquarters?: string; pageSlug?: string;
+    },
+  ) {
+    if (!roleHasCapability(seat.role, 'company:write')) {
+      throw new ForbiddenException("Only your company's owners and admins can change its details.");
+    }
+    const pageId = await companyPageId(this.prisma, seat.companyId);
+    // A new address replaces the old one, as on LinkedIn; links by id keep working.
+    let slug: string | undefined;
+    if (dto.pageSlug !== undefined) {
+      const check = await checkSlug(this.prisma, dto.pageSlug, pageId);
+      if (!check.available) throw new BadRequestException(check.reason ?? 'That address cannot be used.');
+      slug = check.slug;
+    }
+    const details = {
+      companyName: dto.companyName.trim(),
+      companyWebsite: dto.companyWebsite?.trim() || null,
+      companySize: dto.companySize?.trim() || null,
+      ...(dto.companyType !== undefined ? { companyType: dto.companyType || null } : {}),
+      industry: dto.industry?.trim() || null,
+      headquarters: dto.headquarters?.trim() || null,
+      ...(slug ? { slug } : {}),
+    };
+    await this.prisma.company.update({ where: { id: seat.companyId }, data: { name: details.companyName } });
+
+    if (pageId) {
+      await this.prisma.employerProfile.update({ where: { id: pageId }, data: details });
+      return;
+    }
+    // A company left with no page at all takes this person's profile as one.
+    const own = await this.prisma.employerProfile.upsert({
+      where: { userId: user.id },
+      create: { userId: user.id, jobTitle: '', ...details, companyId: seat.companyId },
+      update: { ...details, companyId: seat.companyId },
+      select: { id: true },
+    });
+    await this.prisma.company.updateMany({
+      where: { id: seat.companyId, pageId: null },
+      data: { pageId: own.id },
+    });
   }
 
   /**
@@ -298,7 +427,7 @@ export class OnboardingService {
    * proof — verification is what unlocks reaching candidates — but the team
    * and Coral can see who created the page and on what basis.
    */
-  private assertMayCreate(user: User, dto: { authorizedRepresentative?: boolean }): void {
+  private assertMayCreate(user: User, dto: { authorizedRepresentative?: boolean; companyType?: string }): void {
     if (!user.firstName?.trim() || !user.lastName?.trim()) {
       throw new BadRequestException(
         'Add your first and last name. A company page is created by a person, and your team will see who.',
@@ -309,49 +438,72 @@ export class OnboardingService {
         'Confirm that you are authorized to represent this organization before creating its page.',
       );
     }
+    // Asked for when a page is made, as on LinkedIn. Older pages may lack it.
+    if (!dto.companyType) {
+      throw new BadRequestException('Choose what kind of organization this is.');
+    }
+  }
+
+  /** The company that owns a domain, with its page for the match list. */
+  private async domainOwner(domain: string) {
+    const company = await this.prisma.company.findUnique({
+      where: { domain },
+      select: { id: true, name: true },
+    });
+    if (!company) return null;
+    const pageId = await companyPageId(this.prisma, company.id);
+    const page = pageId
+      ? await this.prisma.employerProfile.findUnique({
+          where: { id: pageId },
+          select: { id: true, companyName: true, companyLogo: true, companyWebsite: true, industry: true, headquarters: true, companyId: true },
+        })
+      : null;
+    return { id: company.id, name: company.name, page };
+  }
+
+  /**
+   * One company per domain, as on LinkedIn: someone whose email is at a
+   * domain a company already owns joins that company rather than starting a
+   * second one. Someone already in a company is editing it, not creating one.
+   */
+  private async assertNotDuplicating(user: User) {
+    const domain = workDomain(user.email);
+    if (!domain) return;
+    const owner = await this.domainOwner(domain);
+    if (!owner) return;
+    const seated = await this.prisma.companyMember.findFirst({
+      where: { userId: user.id, status: CompanyMemberStatus.ACTIVE }, select: { id: true },
+    });
+    if (seated) return;
+    throw new BadRequestException(
+      `Your email is at ${domain}, which belongs to ${owner.name} on Coral. Ask to join it instead of creating another company.`,
+    );
   }
 
   /**
    * Creates the company this employer owns.
    *
-   * The domain is claimed here so the next colleague to sign up matches it —
-   * but only a work domain, since every gmail.com address is not one company.
-   * A domain already claimed leaves this company without one rather than
-   * failing: a duplicate registration is a nuisance, a blocked signup is worse.
+   * It owns a domain from the start only when the creator has shown they hold
+   * one: a verified sign-in email at it. Never the website they typed —
+   * anyone can type airtel.co.ug. Without that, the company starts unclaimed
+   * and an owner can prove a domain later (CompanyDomainService).
    */
   private async createCompanyFor(
     user: User,
     dto: { companyName: string; companyWebsite?: string },
   ): Promise<string> {
-    // Re-running this step must not spawn a second company — it's an edit of
-    // the one they already belong to.
-    const existing = await this.prisma.companyMember.findFirst({
-      where: { userId: user.id, status: CompanyMemberStatus.ACTIVE },
-      select: { companyId: true, role: true },
-      orderBy: { createdAt: 'asc' },
-    });
-    if (existing) {
-      // Only a seat that may edit the company may rename it. This used to
-      // assume whoever re-ran onboarding owned the company, so any member —
-      // a Viewer included — could rename it by posting this step.
-      if (roleHasCapability(existing.role, 'company:write')) {
-        await this.prisma.company.update({
-          where: { id: existing.companyId },
-          data: { name: dto.companyName.trim() },
-        });
-      }
-      return existing.companyId;
-    }
-
-    const domain = hostOf(dto.companyWebsite) ?? workDomain(user.email);
+    // Only reached by someone with no active seat: re-running this step as a
+    // member is an edit (updateCompanyDetails), never a second company.
+    const domain = signInDomainOf(user);
     const taken = domain
       ? await this.prisma.company.findUnique({ where: { domain }, select: { id: true } })
       : null;
+    const owns = !!domain && !taken;
 
     const company = await this.prisma.company.create({
       data: {
         name: dto.companyName.trim(),
-        domain: taken ? null : domain,
+        ...(owns ? { domain, domainVerifiedAt: new Date(), domainVerifiedMethod: 'sign-in', domainVerifiedById: user.id } : {}),
         members: {
           create: {
             userId: user.id,

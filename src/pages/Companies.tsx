@@ -10,6 +10,7 @@ import DirectoryHeader from "@/components/companies/DirectoryHeader";
 import CompanyCard from "@/components/companies/CompanyCard";
 import Header from "@/components/Header";
 import { EmployerCompany, listCompanies } from "@/lib/api/employerCompany";
+import { companySizeFloor } from "@/lib/companyFacts";
 
 
 const ITEMS_PER_PAGE = 9;
@@ -41,13 +42,17 @@ function mapToCompany(c: EmployerCompany): Company {
   const hqLocation = c.locations?.find((l) => l.isHQ) ?? c.locations?.[0];
   const location = hqLocation ? `${hqLocation.city}, ${hqLocation.country}` : c.headquarters || "—";
 
-  const sizeNum = c.companySize ? parseInt(c.companySize.replace(/[^\d]/g, ""), 10) : NaN;
-  const type: Company["type"] = !Number.isNaN(sizeNum) && sizeNum >= 1000 ? "Enterprise" : "Startup";
+  // The band's smallest headcount. Stripping every non-digit used to read
+  // "501-1,000" as 5,011,000, so a 501-person company showed as Enterprise.
+  const sizeFloor = companySizeFloor(c.companySize);
+  const type: Company["type"] =
+    c.companyType === "NONPROFIT" ? "Non-profit" : sizeFloor !== null && sizeFloor >= 1000 ? "Enterprise" : "Startup";
 
   const openJobs = c.openJobs ?? 0;
 
   return {
     id: c.id,
+    slug: c.slug ?? null,
     name: c.companyName,
     logo: c.companyName.substring(0, 2).toUpperCase(),
     logoIcon: c.companyLogo || undefined,

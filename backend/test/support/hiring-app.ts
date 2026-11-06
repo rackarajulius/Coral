@@ -11,11 +11,13 @@ import { WebhooksService } from '../../src/integrations/webhooks.service';
 import { JobsController } from '../../src/jobs/jobs.controller';
 import { FreelancersController } from '../../src/freelancers/freelancers.controller';
 import { FreelancersService } from '../../src/freelancers/freelancers.service';
+import { CitiesService } from '../../src/locations/cities.service';
 import { JobsService } from '../../src/jobs/jobs.service';
 import { JobMatchService } from '../../src/jobs/job-match.service';
 import { JobFitService } from '../../src/jobs/job-fit.service';
 import { MatchScoreService } from '../../src/applications/match-score.service';
 import { CompanyResearchService } from '../../src/resume-matcher/company-research/company-research.service';
+import { SeekerEntitlementsService } from '../../src/seeker-entitlements/seeker-entitlements.service';
 import { AnalyticsEventsService } from '../../src/analytics/analytics-events.service';
 import { EmployerVerificationService } from '../../src/employers/employer-verification.service';
 import { InterviewService } from '../../src/employer-hiring/interview.service';
@@ -85,8 +87,8 @@ export async function createHiringApp(prisma: PrismaClient) {
       BillingService, BillingCheckoutService, BillingWebhookService, PlanPricingService, PaymentsService,
       { provide: StripeClient, useValue: { configured: true, post: delivery.stripePost, get: delivery.stripeGet } },
       { provide: SeekerBillingWebhookService, useValue: { claims: async () => false } },
-      JobsService, FreelancersService, MatchScoreService, EmployerVerificationService, InterviewService, AvailabilityService, CalendarService, AiScreenService, IntegrityService,
-      ...[JobMatchService, JobFitService, CompanyResearchService, CandidateSourcingService,
+      JobsService, FreelancersService, CitiesService, MatchScoreService, EmployerVerificationService, InterviewService, AvailabilityService, CalendarService, AiScreenService, IntegrityService,
+      ...[JobMatchService, JobFitService, CompanyResearchService, SeekerEntitlementsService, CandidateSourcingService,
         OutreachService, CopilotService, ShortlistService,
         ProfileImpressionsService].map((provide) => ({ provide, useValue: {} })),
       { provide: AiService, useValue: ai },

@@ -22,6 +22,7 @@ export interface MetricTrend {
 @Injectable()
 export class MetricSnapshotService implements OnModuleInit {
   private readonly logger = new Logger(MetricSnapshotService.name);
+  private captureInFlight: Promise<void> | undefined;
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -51,30 +52,21 @@ export class MetricSnapshotService implements OnModuleInit {
     const last30Days = new Date(now.getTime() - 30 * DAY_MS);
     const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 
-    const [
-      employersTotal,
-      employersActive,
-      employersSuspended,
-      employersVerified,
-      jobseekersTotal,
-      listingsActive,
-      applicationsTotal,
-      revenueMtd,
-    ] = await Promise.all([
-      this.prisma.user.count({ where: { role: 'EMPLOYER' } }),
-      this.prisma.user.count({
-        where: { role: 'EMPLOYER', postedJobs: { some: { publishedAt: { gte: last30Days } } } },
-      }),
-      this.prisma.user.count({ where: { role: 'EMPLOYER', status: 'SUSPENDED' } }),
-      this.prisma.employerProfile.count({ where: { verificationStatus: 'verified' } }),
-      this.prisma.user.count({ where: { role: 'JOB_SEEKER' } }),
-      this.prisma.job.count({ where: { status: 'published' } }),
-      this.prisma.application.count(),
-      this.prisma.paymentTransaction.aggregate({
-        _sum: { amount: true },
-        where: { status: 'PAID', paidAt: { gte: startOfMonth } },
-      }),
-    ]);
+    // Background reporting should occupy at most one connection at a time,
+    // leaving the rest of the small hosted pool available for requests.
+    const employersTotal = await this.prisma.user.count({ where: { role: 'EMPLOYER' } });
+    const employersActive = await this.prisma.user.count({
+      where: { role: 'EMPLOYER', postedJobs: { some: { publishedAt: { gte: last30Days } } } },
+    });
+    const employersSuspended = await this.prisma.user.count({ where: { role: 'EMPLOYER', status: 'SUSPENDED' } });
+    const employersVerified = await this.prisma.employerProfile.count({ where: { verificationStatus: 'verified' } });
+    const jobseekersTotal = await this.prisma.user.count({ where: { role: 'JOB_SEEKER' } });
+    const listingsActive = await this.prisma.job.count({ where: { status: 'published' } });
+    const applicationsTotal = await this.prisma.application.count();
+    const revenueMtd = await this.prisma.paymentTransaction.aggregate({
+      _sum: { amount: true },
+      where: { status: 'PAID', paidAt: { gte: startOfMonth } },
+    });
 
     return {
       'employers.total': employersTotal,
@@ -90,19 +82,28 @@ export class MetricSnapshotService implements OnModuleInit {
   }
 
   /** Upserts today's snapshot for every tracked metric (idempotent). */
-  async captureToday(): Promise<void> {
+  captureToday(): Promise<void> {
+    // Boot, cron and a manual capture can coincide in this process. Share the
+    // same work and error, then allow a later call to capture again or retry.
+    if (!this.captureInFlight) {
+      this.captureInFlight = this.capture().finally(() => {
+        this.captureInFlight = undefined;
+      });
+    }
+    return this.captureInFlight;
+  }
+
+  private async capture(): Promise<void> {
     const capturedOn = this.today();
     const metrics = await this.collectMetrics();
 
-    await Promise.all(
-      Object.entries(metrics).map(([key, value]) =>
-        this.prisma.metricSnapshot.upsert({
-          where: { key_capturedOn: { key, capturedOn } },
-          create: { key, value, capturedOn },
-          update: { value },
-        }),
-      ),
-    );
+    for (const [key, value] of Object.entries(metrics)) {
+      await this.prisma.metricSnapshot.upsert({
+        where: { key_capturedOn: { key, capturedOn } },
+        create: { key, value, capturedOn },
+        update: { value },
+      });
+    }
 
     this.logger.log(`Captured ${Object.keys(metrics).length} metric snapshots for ${capturedOn.toISOString().slice(0, 10)}`);
   }

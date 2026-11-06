@@ -3,6 +3,7 @@ import {
   Download, Loader2, Maximize, Minimize, Pause, PictureInPicture2, Play, RotateCcw, Volume1, Volume2, VolumeX,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isStreamUrl, streamPosterUrl } from "@/lib/api/community";
 
 /**
  * A video in the feed that plays itself, silently, while it is on screen.
@@ -47,6 +48,27 @@ const inPip = (el: HTMLVideoElement) =>
 /** Picture-in-picture for page videos: Chromium and Safari, not Firefox. */
 const pipSupported = () =>
   typeof document !== "undefined" && "pictureInPictureEnabled" in document && document.pictureInPictureEnabled;
+
+type HlsModule = typeof import("hls.js");
+let hlsModule: Promise<HlsModule["default"]> | null = null;
+
+/**
+ * hls.js, for streamed videos everywhere but Safari. The light build — no
+ * subtitles or DRM, which posts don't have — fetched the first time a page
+ * has a stream on it, and once.
+ */
+function loadHls(): Promise<HlsModule["default"]> {
+  hlsModule ??= (import("hls.js/light") as unknown as Promise<HlsModule>).then((m) => m.default);
+  return hlsModule;
+}
+
+/**
+ * Safari, whose own HLS is the one to use there (and brings AirPlay).
+ * Elsewhere a browser saying it can play HLS is not enough: Chrome 156's own
+ * player reported "playing" and stalled at 0:00 on a stream hls.js played.
+ */
+const isSafari = () =>
+  typeof navigator !== "undefined" && /^((?!chrome|chromium|crios|fxios|edg|android).)*safari/i.test(navigator.userAgent);
 
 /** iOS can only take a <video> itself full screen, through its own player. */
 type WebkitVideo = HTMLVideoElement & { webkitEnterFullscreen?: () => void };
@@ -106,6 +128,74 @@ export function FeedVideo({ src }: { src: string }) {
   /** Floating in picture-in-picture right now. */
   const [pip, setPip] = useState(false);
   const [canPip] = useState(pipSupported);
+  /** A long video, streamed by Mux at the quality the connection can take. */
+  const stream = isStreamUrl(src);
+
+  /* ------------------------------ streaming ----------------------------- */
+
+  /**
+   * A stream plays through Safari's own HLS there, and through hls.js
+   * everywhere else — falling back to the browser's own HLS only where hls.js
+   * can't run (an older iPhone). Either way only the playlist loads until it
+   * plays, as a plain clip loads only its metadata.
+   */
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !stream) return;
+    const native = !!el.canPlayType("application/vnd.apple.mpegurl");
+    if (native && isSafari()) {
+      el.src = src;
+      return;
+    }
+
+    let cancelled = false;
+    let hls: InstanceType<HlsModule["default"]> | null = null;
+    let loading = false;
+    const startLoading = () => {
+      if (!hls || loading) return;
+      loading = true;
+      hls.startLoad();
+    };
+
+    loadHls()
+      .then((Hls) => {
+        if (cancelled) return;
+        if (!Hls.isSupported()) {
+          if (native) el.src = src;
+          else setFailed(true);
+          return;
+        }
+        // Never a bigger picture than the player shows: a phone in the feed
+        // has no use for 1080p.
+        hls = new Hls({ autoStartLoad: false, capLevelToPlayerSize: true });
+        let recovered = false;
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (!data.fatal) return;
+          // A decoding hiccup is worth one retry; anything else is said.
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !recovered) {
+            recovered = true;
+            hls?.recoverMediaError();
+            return;
+          }
+          setFailed(true);
+        });
+        hls.loadSource(src);
+        hls.attachMedia(el);
+        el.addEventListener("play", startLoading);
+        // Autoplay may have asked before hls.js arrived.
+        if (!el.paused) startLoading();
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+
+    return () => {
+      cancelled = true;
+      el.removeEventListener("play", startLoading);
+      hls?.destroy();
+    };
+    // Also when it fails: the fallback replaces the player, and hls.js goes with it.
+  }, [src, stream, failed]);
 
   /* ------------------------------ autoplay ------------------------------ */
 
@@ -342,14 +432,17 @@ export function FeedVideo({ src }: { src: string }) {
     return (
       <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-muted/40 px-4 py-8 text-center">
         <p className="text-sm text-muted-foreground">This video can't be played in your browser.</p>
-        <a
-          href={src}
-          download
-          className="inline-flex items-center gap-1.5 text-sm text-link hover:underline"
-        >
-          <Download className="h-4 w-4" aria-hidden="true" />
-          Download it instead
-        </a>
+        {/* A stream is a playlist, not a file: there is nothing to download. */}
+        {!stream && (
+          <a
+            href={src}
+            download
+            className="inline-flex items-center gap-1.5 text-sm text-link hover:underline"
+          >
+            <Download className="h-4 w-4" aria-hidden="true" />
+            Download it instead
+          </a>
+        )}
       </div>
     );
   }
@@ -383,7 +476,9 @@ export function FeedVideo({ src }: { src: string }) {
     >
       <video
         ref={ref}
-        src={src}
+        // A stream's source is set by the effect above.
+        src={stream ? undefined : src}
+        poster={stream ? streamPosterUrl(src) ?? undefined : undefined}
         playsInline
         // Metadata only until it plays: a page of posts should not download
         // every clip on it, only the ones someone actually watches.

@@ -249,6 +249,44 @@ export class SeekerPremiumService {
     });
   }
 
+  /**
+   * Tells someone their paid Premium has switched off: the plan ran out after
+   * they cancelled, or Stripe stopped trying to collect. Never throws.
+   */
+  async paidPremiumEnded(userId: string, why: 'ended' | 'unpaid') {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true } });
+    if (!user) return;
+    if (why === 'unpaid') {
+      await this.tell(user, {
+        subject: 'Premium is off until your payment goes through',
+        heading: 'Premium is paused',
+        lines: [
+          "We couldn't collect your Premium payment, so your account is back on the free plan for now.",
+          'Pay the open invoice in Manage billing and Premium comes straight back. Everything you made with it is still yours.',
+        ],
+        cta: { label: 'Manage billing', path: '/premium' },
+        notification: {
+          title: 'Premium is paused',
+          message: "Your payment didn't go through. Pay the open invoice to turn Premium back on.",
+        },
+      });
+      return;
+    }
+    await this.tell(user, {
+      subject: 'Your Premium has ended',
+      heading: 'Your Premium has ended',
+      lines: [
+        'Your account is back on the free plan. Everything you made with Premium is still yours.',
+        'You can start Premium again any time.',
+      ],
+      cta: { label: 'See Premium', path: '/premium' },
+      notification: {
+        title: 'Premium ended',
+        message: 'Your account is back on the free plan.',
+      },
+    });
+  }
+
   /* -------------------------------- helpers -------------------------------- */
 
   private tellCompEnded(user: { id: string; email: string }) {

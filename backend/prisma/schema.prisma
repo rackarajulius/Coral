@@ -118,6 +118,7 @@ model User {
   postLikes          PostLike[]
   postBookmarks      PostBookmark[]
   scheduledPosts     ScheduledPost[]
+  communityVideos    CommunityVideo[]
   postViews          PostView[]
   interviewPrepSessions InterviewPrepSession[]
   interviewPrepFeedback InterviewPrepFeedback[]
@@ -151,6 +152,9 @@ model User {
   /// People this user follows, and people who follow this user.
   following          UserFollow[]       @relation("UserFollowing")
   followers          UserFollow[]       @relation("UserFollowers")
+  /// Professionals this user saved to come back to, and who saved this user.
+  savedProfessionals SavedProfessional[] @relation("SavedProfessionals")
+  savedBy            SavedProfessional[] @relation("SavedBy")
   companyReviews     CompanyReview[]
   companyMemberships CompanyMember[]    @relation("UserCompanyMemberships")
   companyAuditLogs   CompanyAuditLog[]  @relation("CompanyAuditActor")
@@ -1045,9 +1049,37 @@ enum CompanyInvitationStatus {
 model Company {
   id        String   @id @default(uuid())
   name      String
-  /// Work-email domain, when the company has one. Used to *suggest* joining.
-  /// Never grants access on its own — see CompanyMemberStatus.PENDING.
+  /// The company's own domain — set only once an owner or admin has proven
+  /// control of it (CompanyDomainService), and never from a typed website.
+  /// One company per domain, as on LinkedIn. It admits colleagues at that
+  /// domain through the join link and earns members the community's
+  /// verified badge; an address at it is never, by itself, membership.
   domain    String?  @unique @db.VarChar(255)
+  /// When, how ("sign-in" | "dns" | "email") and by whom `domain` was proven.
+  /// Set together with `domain`, cleared together with it.
+  domainVerifiedAt     DateTime? @map("domain_verified_at")
+  domainVerifiedMethod String?   @map("domain_verified_method")
+  domainVerifiedById   String?   @map("domain_verified_by_id")
+
+  /// The company's one public page, as on LinkedIn: the profile everyone sees
+  /// and follows, that every owner and admin edits, and that every member's
+  /// jobs, messages and interviews are shown under. A member's own
+  /// EmployerProfile, if they have one, is personal (their job title) and is
+  /// never shown as the company. Resolved by CompanyPageService.
+  pageId    String?  @unique @map("page_id")
+  page      EmployerProfile? @relation("CompanyPage", fields: [pageId], references: [id], onDelete: SetNull)
+
+  /// Set while the page is taken down (LinkedIn's "Deactivate page"): it 404s,
+  /// leaves search and the directory, and nobody posts for the company until
+  /// an owner reactivates it. Nothing is deleted. Null by-id means the system
+  /// did it, when the last member's account was deleted (company-departure.ts).
+  deactivatedAt   DateTime? @map("deactivated_at")
+  deactivatedById String?   @map("deactivated_by_id")
+  /// Set when the owner asks for the deactivated page to be deleted for good:
+  /// it is deleted once this passes (30 days on). Until then the owner can
+  /// cancel, or reactivate, which cancels it.
+  deletesAt             DateTime? @map("deletes_at")
+  deletionRequestedById String?   @map("deletion_requested_by_id")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -1058,7 +1090,9 @@ model Company {
   scheduledTasks ScheduledTask[]
   auditLogs      CompanyAuditLog[]
   joinLinks   CompanyJoinLink[]
-  profiles    EmployerProfile[]
+  domainClaims CompanyDomainClaim[]
+  /// Every profile linked to the company, one per person. Only `page` is shown.
+  profiles    EmployerProfile[] @relation("CompanyProfiles")
   subscription CompanySubscription?
   usage        CompanyUsage[]
   candidateNotes CandidateNote[]
@@ -1079,6 +1113,7 @@ model Company {
   marketplaceRequestsReceived MarketplaceRequest[] @relation("MarketplaceRecipientCompany")
   marketplaceEvents MarketplaceEvent[]
 
+  @@index([deletesAt])
   @@map("companies")
 }
 
@@ -1098,6 +1133,33 @@ model Company {
 /// The token is stored in the clear here, unlike an emailed invitation. That is
 /// deliberate: a link that cannot be shown again is not a shareable link, and
 /// the containment comes from the domain lock rather than from secrecy.
+/// A domain an owner or admin is proving, before it becomes the company's.
+///
+/// "dns": publish `dnsToken` as a TXT record on the domain — the token is
+/// meant to be public, so it is stored as it is. "email": a six-digit code
+/// sent to an address at the domain, stored only as its SHA-256. Proving by
+/// signing in with an address at the domain needs no claim row.
+model CompanyDomainClaim {
+  id          String    @id @default(uuid())
+  companyId   String    @map("company_id")
+  domain      String    @db.VarChar(255)
+  method      String
+  dnsToken    String?   @map("dns_token")
+  email       String?
+  codeHash    String?   @map("code_hash")
+  attempts    Int       @default(0)
+  expiresAt   DateTime  @map("expires_at")
+  /// Who started it. Not a relation: a claim outliving its author is harmless.
+  createdById String    @map("created_by_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  consumedAt  DateTime? @map("consumed_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@map("company_domain_claims")
+}
+
 model CompanyJoinLink {
   id           String      @id @default(uuid())
   companyId    String      @map("company_id")
@@ -1248,11 +1310,21 @@ model EmployerProfile {
   // Now a real foreign key. It used to hold a loose domain string, which meant
   // "same company" was a guess rather than a membership.
   companyId       String?   @map("company_id")
-  company         Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  company         Company?  @relation("CompanyProfiles", fields: [companyId], references: [id], onDelete: SetNull)
+  /// Present when this profile is its company's page (Company.pageId).
+  pageOf          Company?  @relation("CompanyPage")
+  /// The page's own address, /company/<slug>, as on LinkedIn: chosen when the
+  /// page is created and changeable by its owners and admins. Pages only;
+  /// lowercase letters, digits and single hyphens (company/page-slug.ts).
+  slug            String?   @unique @db.VarChar(100)
   companyName     String    @map("company_name")
   companyLogo     String?   @map("company_logo")
   companyWebsite   String?   @map("company_website")
-  companySize     String?   @map("company_size") // 1-10, 11-50, 51-200, 201-500, 501-1000, 1000+
+  /// LinkedIn's size bands (company/company-facts.ts). Older pages may still
+  /// hold a range that spans two bands ("1-10", "1000+") until an owner re-picks.
+  companySize     String?   @map("company_size")
+  /// Organization type, a key from company/company-facts.ts COMPANY_TYPES.
+  companyType     String?   @map("company_type") @db.VarChar(40)
   industry        String?
   
   // User's role in company
@@ -1359,6 +1431,25 @@ model UserFollow {
   @@map("user_follows")
 }
 
+/// A professional someone saved to come back to. Private to them: the
+/// professional isn't told and no count of it is shown, so unlike a follow it
+/// says nothing in public. Never yourself (a check constraint in the migration,
+/// as well as the service).
+model SavedProfessional {
+  id             String   @id @default(uuid())
+  userId         String   @map("user_id")
+  professionalId String   @map("professional_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  user         User @relation("SavedProfessionals", fields: [userId], references: [id], onDelete: Cascade)
+  professional User @relation("SavedBy", fields: [professionalId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, professionalId])
+  @@index([userId, createdAt])
+  @@index([professionalId])
+  @@map("saved_professionals")
+}
+
 // Freelancer Profile (for gig workers)
 model FreelancerProfile {
   id              String    @id @default(uuid())
@@ -1386,7 +1477,14 @@ model FreelancerProfile {
   city            String?
   timezone        String?
   availableForRemote Boolean @default(true) @map("available_for_remote")
-  
+  // Where they're based, as Coral's city list reads `city` and `country` when
+  // the profile is saved: "toronto" → Toronto, Ontario, CA. The directory's
+  // location filter matches these, so "Ontario" finds someone who wrote
+  // "Toronto" and "Montreal" finds "Montréal". Null when it couldn't be read.
+  placeCountryCode String?  @map("place_country_code")
+  placeRegion     String?   @map("place_region")
+  placeCity       String?   @map("place_city")
+
   // Availability
   availability    String?   // full-time, part-time, not-available
   hoursPerWeek    Int?      @map("hours_per_week")
@@ -1411,6 +1509,7 @@ model FreelancerProfile {
   @@index([userId])
   @@index([createdAt])
   @@index([providerEnabled, publicPreviewEnabled, category, id], map: "freelancer_provider_public_category_id_idx")
+  @@index([placeCountryCode, placeRegion, placeCity], map: "freelancer_profiles_place_idx")
   @@map("freelancer_profiles")
 }
 
@@ -1756,6 +1855,46 @@ enum CommentPolicy {
   OFF
 }
 
+enum CommunityVideoStatus {
+  /// Waiting for the browser to finish sending it to Mux.
+  UPLOADING
+  /// Received; Mux is preparing it for streaming.
+  PROCESSING
+  /// Streams, and can be attached to a post.
+  READY
+  /// Will never stream; `failureReason` says why.
+  FAILED
+}
+
+/// A video for a community post, uploaded by the browser straight to Mux and
+/// streamed from there: never through our servers, and never in our storage.
+///
+/// A post names it by its stream URL (https://stream.mux.com/<playbackId>.m3u8)
+/// in `mediaUrls`, which is accepted only for the post's author's own READY
+/// video. Unused ones are deleted from Mux by the hourly sweep.
+model CommunityVideo {
+  id              String               @id @default(uuid())
+  /// Who uploaded it. Null once their account is gone, which the sweep reads
+  /// as "delete it".
+  ownerId         String?              @map("owner_id")
+  muxUploadId     String               @unique @map("mux_upload_id")
+  muxAssetId      String?              @unique @map("mux_asset_id")
+  playbackId      String?              @unique @map("playback_id")
+  status          CommunityVideoStatus @default(UPLOADING)
+  durationSeconds Float?               @map("duration_seconds")
+  /// "16:9", "9:16" — as Mux reports it.
+  aspectRatio     String?              @map("aspect_ratio") @db.VarChar(20)
+  failureReason   String?              @map("failure_reason") @db.Text
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+
+  owner User? @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+
+  @@index([ownerId, createdAt])
+  @@index([status, createdAt])
+  @@map("community_videos")
+}
+
 enum ScheduledPostStatus {
   SCHEDULED
   /// Taken by the publishing job. Only ever seen if a run died mid-way.
@@ -1774,8 +1913,9 @@ enum ScheduledPostStatus {
 /// whether the person who scheduled it still speaks for the company.
 model ScheduledPost {
   id            String              @id @default(uuid())
-  companyId     String              @map("company_id")
-  /// Who scheduled it. The post is published as theirs, in the company's name.
+  /// The company it goes out as; null for a post in the author's own name.
+  companyId     String?             @map("company_id")
+  /// Who scheduled it. The post is published as theirs, in the company's name when there is one.
   authorId      String              @map("author_id")
   publishAt     DateTime            @map("publish_at")
   /// What POST /community/posts would take: words, pictures or a document,
@@ -1788,12 +1928,13 @@ model ScheduledPost {
   createdAt     DateTime            @default(now()) @map("created_at")
   updatedAt     DateTime            @updatedAt @map("updated_at")
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  author  User    @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  post    Post?   @relation(fields: [postId], references: [id], onDelete: SetNull)
+  company Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  author  User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  post    Post?    @relation(fields: [postId], references: [id], onDelete: SetNull)
 
   @@index([status, publishAt])
   @@index([companyId, status, publishAt])
+  @@index([authorId, status, publishAt])
   @@map("scheduled_posts")
 }
 
@@ -2035,6 +2176,10 @@ model MarketplaceRequest {
   postId String? @map("post_id")
   acceptedAt DateTime? @map("accepted_at")
   firstRecipientReplyAt DateTime? @map("first_recipient_reply_at")
+  /// When the recipient first answered — accepted, declined or replied —
+  /// written once. How quickly a provider replies is measured from this,
+  /// never from updatedAt (the last change, not the first answer).
+  recipientRespondedAt DateTime? @map("recipient_responded_at")
   requesterLastReadAt DateTime? @map("requester_last_read_at")
   recipientLastReadAt DateTime? @map("recipient_last_read_at")
   createdAt DateTime @default(now()) @map("created_at")

@@ -9,6 +9,7 @@ async function bootstrap() {
     const app = await NestFactory.create(AppModule, {
       logger: false, // Disable NestJS verbose logging
     });
+    app.enableShutdownHooks();
 
     const configService = app.get(ConfigService);
     const { port, apiPrefix } = configureApp(app);

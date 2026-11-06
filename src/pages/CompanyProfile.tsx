@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { useParams, Link, useLocation } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { useParams, Link, useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import Header from '@/components/Header';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -31,14 +31,19 @@ import { trackPageSource } from '@/lib/api/analyticsEvents';
 const CompanyProfile = () => {
   const { id } = useParams<{ id?: string }>();
   const location = useLocation();
+  const navigate = useNavigate();
   // Set by the company's community page, so this page can offer the way back.
   const cameFromCommunity = (location.state as { from?: string } | null)?.from === 'community';
   const [company, setCompany] = useState<EmployerCompany | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(!!id);
   const [error, setError] = useState<string | null>(null);
+  // The page on screen, by id and address, so moving the address bar onto it
+  // doesn't load it twice.
+  const shownPage = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!id) return;
+    if (shownPage.current.has(id)) return;
     let cancelled = false;
     setIsLoading(true);
     setError(null);
@@ -47,6 +52,14 @@ const CompanyProfile = () => {
         const data = await getCompanyById(id);
         if (!cancelled) {
           setCompany(data);
+          shownPage.current = new Set([id, data.id, data.slug].filter(Boolean) as string[]);
+          // Show the page's own address — /company/<slug>, or the page's id
+          // when it has none — so what gets shared is the company's page,
+          // not a teammate's copy of it or an id nobody can read.
+          const address = data.slug ? `/company/${data.slug}` : `/company-profile/${data.id}`;
+          if (data.id && location.pathname !== address) {
+            navigate(address, { replace: true, state: location.state });
+          }
           // Attribute to the owning user the API resolved — the route param
           // may be a slug or a profile id, neither of which is the employer.
           const ownerId = (data as { userId?: string }).userId;

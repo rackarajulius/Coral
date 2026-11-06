@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, Optional } from '@nestjs/common';
 import { CronExpression } from '@nestjs/schedule';
 import { ExclusiveCron } from '../common/scheduling/exclusive-cron';
 import { randomUUID } from 'crypto';
@@ -8,6 +8,8 @@ import * as pdfParse from 'pdf-parse';
 import { PrismaService } from '../prisma/prisma.service';
 import { COMMUNITY_BUCKET, StorageService } from '../storage/storage.service';
 import { User } from '../common/types/user.types';
+import { CommunityVideosService } from './videos/community-videos.service';
+import { isStreamUrl } from './videos/stream-url';
 
 /** How long an unattached upload is given before it is treated as abandoned. */
 const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
@@ -116,6 +118,8 @@ export class CommunityMediaService {
   constructor(
     private readonly storage: StorageService,
     private readonly prisma: PrismaService,
+    /** Streamed videos (Mux). Optional so the media rules can be tested alone. */
+    @Optional() private readonly videos?: CommunityVideosService,
   ) {}
 
   async upload(
@@ -251,6 +255,21 @@ export class CommunityMediaService {
     }
   }
 
+  /**
+   * What a post may show: pictures and short clips from our storage, or one
+   * streamed video of the author's own — on its own, the way LinkedIn shows a
+   * video post.
+   */
+  async assertPostMedia(userId: string, urls: string[]): Promise<void> {
+    const streams = urls.filter(isStreamUrl);
+    this.assertOwnMedia(urls.filter((url) => !isStreamUrl(url)));
+    if (streams.length === 0) return;
+    if (streams.length > 1) throw new BadRequestException('A post can have one video.');
+    if (urls.length > 1) throw new BadRequestException('A video is posted on its own, without pictures.');
+    if (!this.videos) throw new BadRequestException('Videos have to be uploaded here.');
+    await this.videos.assertUsable(userId, streams);
+  }
+
   assertOwnMedia(urls: string[]): void {
     const foreign = urls.filter((u) => !this.isOwnMedia(u));
     if (foreign.length > 0) {
@@ -269,7 +288,10 @@ export class CommunityMediaService {
    * is preserved in the moderation record; the bytes are not.
    */
   async deleteForUrls(urls: string[]): Promise<void> {
-    for (const url of urls) {
+    // A streamed video lives at Mux, so the stream itself is deleted there.
+    const streams = urls.filter(isStreamUrl);
+    if (streams.length > 0) await this.videos?.deleteForUrls(streams);
+    for (const url of urls.filter((u) => !isStreamUrl(u))) {
       const path = this.pathFromUrl(url);
       if (!path) continue;
       try {

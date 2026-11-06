@@ -64,6 +64,14 @@ export class ListJobsQueryDto {
   @IsUUID()
   postedById?: string;
 
+  /**
+   * A company page: jobs posted by anyone at that company, which is what the
+   * company page lists. A member's own profile id stands for the page.
+   */
+  @IsOptional()
+  @IsUUID()
+  companyPageId?: string;
+
   @IsOptional()
   @IsEnum(JOB_SORT_OPTIONS)
   sort?: JobSortValue = 'newest';

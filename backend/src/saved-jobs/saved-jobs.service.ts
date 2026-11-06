@@ -2,6 +2,14 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { PRIVATE_JOB_FIELDS } from '../jobs/job-visibility';
+import { seatPage, withShownEmployer } from '../company/company-page';
+
+const SAVED_JOB_EMPLOYER = {
+  industry: true,
+  companySize: true,
+  companyDescription: true,
+  overview: true,
+} as const;
 
 @Injectable()
 export class SavedJobsService {
@@ -31,14 +39,9 @@ export class SavedJobsService {
                   lastName: true,
                   avatarUrl: true,
                   role: true,
-                  employerProfile: {
-                    select: {
-                      industry: true,
-                      companySize: true,
-                      companyDescription: true,
-                      overview: true,
-                    },
-                  },
+                  employerProfile: { select: SAVED_JOB_EMPLOYER },
+                  // The poster's company page, which the job is shown under.
+                  ...seatPage(SAVED_JOB_EMPLOYER),
                 },
               },
               _count: {
@@ -58,7 +61,7 @@ export class SavedJobsService {
     ]);
 
     return {
-      data,
+      data: data.map((saved) => ({ ...saved, job: withShownEmployer(saved.job) })),
       meta: {
         page,
         limit,

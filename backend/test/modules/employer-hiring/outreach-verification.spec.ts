@@ -23,11 +23,18 @@ function harness(
   level: string | null = 'unverified',
   seat: { role: CompanyRole; status: CompanyMemberStatus } | null = activeSeat(),
 ) {
+  const profile = async ({ select }: { select: Record<string, unknown> }) => select.verificationStatus
+    ? (level === null ? null : { verificationStatus: level })
+    : { companyName: 'Synthetic QA company' };
   const prisma = {
-    employerProfile: {
-      findUnique: jest.fn().mockImplementation(async ({ select }) => select.verificationStatus
-        ? (level === null ? null : { verificationStatus: level })
-        : { companyName: 'Synthetic QA company' }),
+    employerProfile: { findUnique: jest.fn().mockImplementation(profile) },
+    // The employer and their company's page (company-page.ts). With no
+    // company page in these fixtures, their own profile is what they hire
+    // under, so the level above is still the one being tested.
+    user: {
+      findUnique: jest.fn().mockImplementation(async ({ select }) => select.employerProfile
+        ? { employerProfile: await profile({ select: select.employerProfile.select }), companyMemberships: [] }
+        : null),
     },
     jobSeekerProfile: {
       findUnique: jest.fn().mockResolvedValue({
@@ -132,7 +139,8 @@ describe('Employer outreach initiation: company verification boundary', () => {
     const { dispatch, prisma, verify, notifications, email } = harness(level, activeSeat(CompanyRole.RECRUITER));
     await expect(dispatch()).resolves.toMatchObject({ success: true, data: { id: 'outreach-a', channel: 'both' } });
     expect(verify).toHaveBeenCalledWith('employer-a');
-    expect(prisma.employerProfile.findUnique.mock.invocationCallOrder[0])
+    // The company page's level is read (company-page.ts) before anything is sent.
+    expect(prisma.user.findUnique.mock.invocationCallOrder[0])
       .toBeLessThan(prisma.outreachMessage.create.mock.invocationCallOrder[0]);
     expect(prisma.outreachMessage.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ employerId: 'employer-a', candidateId: 'candidate-a', status: 'sent' }),
@@ -233,7 +241,8 @@ describe('Individual AI-screen invitation: company verification boundary', () =>
         success: true, data: { id: 'screen-a', candidateId: 'candidate-a', status: 'invited', mode },
       });
       expect(verify).toHaveBeenCalledWith('employer-a');
-      expect(prisma.employerProfile.findUnique.mock.invocationCallOrder[0])
+      // The company page's level is read (company-page.ts) before anything is sent.
+      expect(prisma.user.findUnique.mock.invocationCallOrder[0])
         .toBeLessThan(prisma.aiScreen.create.mock.invocationCallOrder[0]);
       expect(prisma.aiScreen.create).toHaveBeenCalledTimes(1);
       expect(notifications.create).toHaveBeenCalledWith(expect.objectContaining({ userId: 'candidate-a', type: 'ai_screen' }));

@@ -118,8 +118,10 @@ export class AuthService {
           ...(user.lastName ? {} : {
             lastName: metadata.full_name?.split(' ').slice(1).join(' ') || metadata.last_name
           }),
-          ...(user.displayName ? {} : {
-            displayName: metadata.full_name || metadata.name || email.split('@')[0]
+          // Only a name they gave. Never the email's local part: it is not a
+          // name, and the community and provider pages show it to strangers.
+          ...(user.displayName || !(metadata.full_name || metadata.name) ? {} : {
+            displayName: metadata.full_name || metadata.name
           }),
           ...(user.avatarUrl ? {} : {
             avatarUrl: metadata.avatar_url || metadata.picture
@@ -149,7 +151,9 @@ export class AuthService {
         emailVerified: supabaseUser.email_confirmed_at != null,
         firstName: metadata.full_name?.split(' ')[0] || metadata.first_name,
         lastName: metadata.full_name?.split(' ').slice(1).join(' ') || metadata.last_name,
-        displayName: metadata.full_name || metadata.name || email.split('@')[0],
+        // A name they gave, or none until onboarding asks; never the email's
+        // local part, which other people would see as this person's name.
+        displayName: metadata.full_name || metadata.name || null,
         avatarUrl: metadata.avatar_url || metadata.picture,
         provider,
         status: createStatus,

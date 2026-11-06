@@ -1,7 +1,8 @@
 import {
   Building2, MapPin, Users, Calendar, Globe,
-  ExternalLink, Star, CheckCircle, ShieldQuestion, Sparkles
+  ExternalLink, Star, CheckCircle, ShieldQuestion, Sparkles, Landmark
 } from 'lucide-react';
+import { companyTypeLabel } from '@/lib/companyFacts';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -43,6 +44,8 @@ const CompanyHero = ({ company }: CompanyHeroProps) => {
   const metaItems = [
     { icon: Building2, label: company ? company.industries?.[0] : mockCompany.industry },
     { icon: Users, label: company ? company.companySize : mockCompany.size },
+    // Organization type, as on LinkedIn; older pages may not have one yet.
+    { icon: Landmark, label: company ? companyTypeLabel(company.companyType) : null },
     { icon: MapPin, label: headquarters },
     // Never "Founded undefined" — the row drops out when the year is missing.
     { icon: Calendar, label: founded ? `Founded ${founded}` : null },
@@ -96,10 +99,16 @@ const CompanyHero = ({ company }: CompanyHeroProps) => {
                   <CheckCircle className="h-3.5 w-3.5" />
                   Verified
                 </Badge>
-              ) : (
+              ) : !company.verifiedDomain ? (
                 <Badge variant="secondary" className="bg-muted text-muted-foreground border-border gap-1 py-1 px-3">
                   <ShieldQuestion className="h-3.5 w-3.5" />
                   Unverified
+                </Badge>
+              ) : null}
+              {company?.verifiedDomain && (
+                <Badge variant="secondary" title="The company proved it owns this domain" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 gap-1 py-1 px-3">
+                  <Globe className="h-3.5 w-3.5" />
+                  {company.verifiedDomain}
                 </Badge>
               )}
             </div>
@@ -159,10 +168,16 @@ const CompanyHero = ({ company }: CompanyHeroProps) => {
               <CheckCircle className="h-3.5 w-3.5" />
               Verified
             </Badge>
-          ) : (
+          ) : !company.verifiedDomain ? (
             <Badge variant="secondary" className="bg-muted text-muted-foreground border-border gap-1 py-1 px-3">
               <ShieldQuestion className="h-3.5 w-3.5" />
               Unverified
+            </Badge>
+          ) : null}
+          {company?.verifiedDomain && (
+            <Badge variant="secondary" title="The company proved it owns this domain" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 gap-1 py-1 px-3">
+              <Globe className="h-3.5 w-3.5" />
+              {company.verifiedDomain}
             </Badge>
           )}
         </div>

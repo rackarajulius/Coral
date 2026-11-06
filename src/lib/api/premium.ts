@@ -37,11 +37,12 @@ export interface PremiumPlans {
   }[];
 }
 
+/** Sends the session when there is one; the plans route works without it. */
 async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   const {
     data: { session },
   } = await supabase.auth.getSession();
-  const res = await fetch(`${API_BASE_URL}/job-seekers/me/subscription${path}`, {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -53,15 +54,23 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (body as { data: T }).data;
 }
 
-export const getMySubscription = () => req<MySubscription>("");
-export const getPremiumPlans = () => req<PremiumPlans>("/plans");
+/** The caller's own subscription. Requires a signed-in job seeker. */
+const MINE = "/job-seekers/me/subscription";
+
+export const getMySubscription = () => req<MySubscription>(MINE);
+
+/**
+ * What Premium costs and includes — public, so the page can explain Premium to
+ * someone who hasn't signed in. Lives outside `/me` for that reason.
+ */
+export const getPremiumPlans = () => req<PremiumPlans>("/premium/plans");
 
 /**
  * Starts checkout and leaves for Stripe. Only a path is sent: the server joins
  * it to the site's own address, so this can never become a redirect elsewhere.
  */
 export async function startPremiumCheckout(interval: BillingInterval, returnPath: string) {
-  const { url } = await req<{ url: string }>("/checkout", {
+  const { url } = await req<{ url: string }>(`${MINE}/checkout`, {
     method: "POST",
     body: JSON.stringify({ interval, returnPath }),
   });
@@ -69,12 +78,50 @@ export async function startPremiumCheckout(interval: BillingInterval, returnPath
 }
 
 export async function openBillingPortal(returnPath: string) {
-  const { url } = await req<{ url: string }>("/portal", {
+  const { url } = await req<{ url: string }>(`${MINE}/portal`, {
     method: "POST",
     body: JSON.stringify({ returnPath }),
   });
   window.location.assign(url);
 }
+
+/** Stripe's own cancellation reasons, so they reach its reports as they are. */
+export type CancelReason =
+  | "too_expensive"
+  | "unused"
+  | "missing_features"
+  | "switched_service"
+  | "too_complex"
+  | "low_quality"
+  | "customer_service"
+  | "other";
+
+export const CANCEL_REASONS: Array<{ value: CancelReason; label: string }> = [
+  { value: "too_expensive", label: "It costs too much" },
+  { value: "unused", label: "I'm not using it enough" },
+  { value: "missing_features", label: "It's missing something I need" },
+  { value: "switched_service", label: "I found something else" },
+  { value: "too_complex", label: "It's hard to use" },
+  { value: "low_quality", label: "It didn't work well enough" },
+  { value: "customer_service", label: "I had a problem with support" },
+  { value: "other", label: "Something else" },
+];
+
+/**
+ * Cancels Premium at the end of the period already paid for. Returns the
+ * subscription as it now stands. Asking twice changes nothing.
+ */
+export const cancelPremium = (input: { reason?: CancelReason; comment?: string } = {}) =>
+  req<MySubscription>(`${MINE}/cancel`, { method: "POST", body: JSON.stringify(input) });
+
+/**
+ * Asks the server to check with Stripe now, rather than wait for Stripe's
+ * webhook. Used on the way back from checkout. Returns the subscription.
+ */
+export const syncPremium = () => req<MySubscription>(`${MINE}/sync`, { method: "POST" });
+
+/** Undoes a cancellation before the period ends: Premium renews as before. */
+export const keepPremium = () => req<MySubscription>(`${MINE}/keep`, { method: "POST" });
 
 /** "CA$9.99" — formatted from Stripe's own amount and currency, never typed in. */
 export function formatPrice(unitAmount: number, currency: string): string {

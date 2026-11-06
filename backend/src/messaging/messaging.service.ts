@@ -4,6 +4,7 @@ import { CompanyMemberStatus, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
 import { ROLE_LABELS, roleHasCapability } from '../company/capabilities';
+import { profileShownFor, profilesShownFor } from '../company/company-page';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MESSAGE_ATTACHMENT_BUCKET, StorageService } from '../storage/storage.service';
 import { AiService } from '../services/ai/ai.service';
@@ -88,10 +89,10 @@ export class MessagingService {
         where: { id: { in: peerIds } },
         select: { id: true, displayName: true, firstName: true, lastName: true },
       }),
-      this.prisma.employerProfile.findMany({
-        where: { userId: { in: peerIds } },
-        select: { userId: true, companyName: true },
-      }),
+      // The company each employer-side peer writes for: its page's name.
+      profilesShownFor(this.prisma, peerIds, { companyName: true }).then((byUser) =>
+        [...byUser].map(([userId, page]) => ({ userId, companyName: page.companyName })),
+      ),
       this.prisma.jobSeekerProfile.findMany({
         where: { userId: { in: peerIds } },
         select: { userId: true, currentTitle: true, headline: true },
@@ -401,8 +402,8 @@ export class MessagingService {
 
   private async displayName(userId: string, isEmployer: boolean): Promise<string> {
     if (isEmployer) {
-      const emp = await this.prisma.employerProfile.findUnique({ where: { userId }, select: { companyName: true } });
-      return emp?.companyName?.trim() || 'An employer';
+      const page = await profileShownFor(this.prisma, userId, { companyName: true });
+      return page?.companyName?.trim() || 'An employer';
     }
     const u = await this.prisma.user.findUnique({
       where: { id: userId },

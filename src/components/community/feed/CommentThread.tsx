@@ -20,6 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
+import { personName } from "@/lib/personName";
 import {
   addComment, authorName, deleteComment, initials, listComments, personPath, timeAgo,
   type CommentPolicy, type CommentSort, type CommunityComment,
@@ -226,7 +227,7 @@ function ReplyBox({
     );
   }
 
-  const name = user.displayName?.trim() || "You";
+  const name = personName(user) || "You";
   const ready = !!draft.trim();
 
   return (

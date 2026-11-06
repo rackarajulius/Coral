@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
+import { profileShownFor } from '../company/company-page';
 import { User } from '../common/types/user.types';
 import { CHANNEL_CAVEAT, classify, type Channel } from './traffic-source';
 import { GEO_CAVEATS, regionFromTimezone } from './geo';
@@ -58,10 +59,8 @@ export class EmployerAnalyticsService {
       await this.prisma.job.findMany({ where: { postedById: { in: memberIds } }, select: { id: true } })
     ).map((j) => j.id);
 
-    const profile = await this.prisma.employerProfile.findUnique({
-      where: { userId: user.id },
-      select: { id: true, createdAt: true },
-    });
+    // The company's page: followers follow it, whoever on the team is looking.
+    const profile = await profileShownFor(this.prisma, user.id, { id: true, createdAt: true });
 
     const [daily, prevDaily, apps, prevApps, followersBeforeStart, followsInRange] = await Promise.all([
       this.prisma.employerMetricDaily.findMany({
@@ -551,10 +550,7 @@ export class EmployerAnalyticsService {
     const memberIds = await this.companyContext.memberUserIds(user.id);
     const { start, end, prevStart } = this.window(rangeDays);
 
-    const profile = await this.prisma.employerProfile.findUnique({
-      where: { userId: user.id },
-      select: { id: true },
-    });
+    const profile = await profileShownFor(this.prisma, user.id, { id: true });
 
     const [daily, prevDaily, followsInRange, followsPrev, posts, prevPosts] = await Promise.all([
       this.prisma.employerMetricDaily.aggregate({

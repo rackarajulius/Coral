@@ -7,6 +7,7 @@ import { Prisma, SpaceKind, SpaceMemberRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { User } from '../../common/types/user.types';
 import { CommunityMediaService } from '../media.service';
+import { personName } from '../../common/person-name';
 
 /**
  * Where a pseudonym stops being a disclosure.
@@ -182,10 +183,7 @@ export class SpacesService {
       myRole: membership?.role ?? null,
       moderators: space.members.map((m) => ({
         id: m.user.id,
-        name:
-          m.user.displayName?.trim() ||
-          [m.user.firstName, m.user.lastName].filter(Boolean).join(' ').trim() ||
-          'Member',
+        name: personName(m.user, 'Member'),
         avatarUrl: m.user.avatarUrl,
       })),
     };

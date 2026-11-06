@@ -1,5 +1,6 @@
 import { EmployerBrand } from "@/data/companyProfile/employer-brand-schema";
-import { Building2, Globe, MapPin, Users, Calendar, Quote, Play, Star } from "lucide-react";
+import { Building2, Globe, MapPin, Users, Calendar, Quote, Play, Star, Landmark } from "lucide-react";
+import { companyTypeLabel } from "@/lib/companyFacts";
 import { cn } from "@/lib/utils";
 import { getSocialIcon } from "@/lib/socialIcons";
 import { Icon } from "./IconPicker";
@@ -50,6 +51,9 @@ export function PublicProfilePreview({ data }: Props) {
                 )}
                 {data.companySize && (
                   <span className="inline-flex items-center gap-1"><Users className="w-3.5 h-3.5" />{data.companySize} employees</span>
+                )}
+                {companyTypeLabel(data.companyType) && (
+                  <span className="inline-flex items-center gap-1"><Landmark className="w-3.5 h-3.5" />{companyTypeLabel(data.companyType)}</span>
                 )}
                 {data.foundedYear && (
                   <span className="inline-flex items-center gap-1"><Calendar className="w-3.5 h-3.5" />Founded {data.foundedYear}</span>

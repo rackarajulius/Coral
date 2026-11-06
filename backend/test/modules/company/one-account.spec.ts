@@ -315,18 +315,31 @@ describe('A personal profile made on first use', () => {
 });
 
 describe('Creating a company page from your own account', () => {
-  function harness(opts: { seated?: boolean; user?: Partial<User> } = {}) {
+  function harness(opts: { seated?: boolean; role?: CompanyRole; user?: Partial<User> } = {}) {
     const prisma = {
-      user: { update: jest.fn().mockResolvedValue({}) },
+      user: {
+        update: jest.fn().mockResolvedValue({}),
+        // The page this person is shown under (company-page.ts): none yet.
+        findUnique: jest.fn().mockResolvedValue({ employerProfile: null, companyMemberships: [] }),
+      },
       companyMember: {
-        findFirst: jest.fn().mockResolvedValue(opts.seated ? { id: 'm', companyId: 'company-a', role: CompanyRole.OWNER } : null),
+        findFirst: jest.fn().mockResolvedValue(
+          opts.seated ? { id: 'm', companyId: 'company-a', role: opts.role ?? CompanyRole.OWNER } : null,
+        ),
       },
       company: {
         create: jest.fn().mockResolvedValue({ id: 'company-new' }),
         update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        // An existing company has its page; the domain lookups find nothing.
+        findUnique: jest.fn().mockImplementation(async ({ where }) =>
+          where.id === 'company-a' ? { pageId: 'page-a' } : null),
+      },
+      employerProfile: {
+        upsert: jest.fn().mockResolvedValue({ id: 'page-new' }),
+        update: jest.fn().mockResolvedValue({}),
         findUnique: jest.fn().mockResolvedValue(null),
       },
-      employerProfile: { upsert: jest.fn().mockResolvedValue({}), findUnique: jest.fn().mockResolvedValue(null) },
     };
     const audit = { record: jest.fn().mockResolvedValue(undefined) };
     const service = new OnboardingService(collaborator(prisma), collaborator(audit));
@@ -334,7 +347,7 @@ describe('Creating a company page from your own account', () => {
       ...person(UserRole.JOB_SEEKER), email: 'ada@gmail.com', emailVerified: true,
       firstName: null, lastName: null, ...opts.user,
     } as User;
-    const step = { companyName: 'Acme', industry: 'Technology', companySize: '1-10' };
+    const step = { companyName: 'Acme', industry: 'Technology', companySize: '2-10', companyType: 'PRIVATELY_HELD' };
     return { service, prisma, audit, user, step };
   }
 
@@ -367,6 +380,84 @@ describe('Creating a company page from your own account', () => {
     await expect(service.saveCompany(user, step)).resolves.toBeDefined();
     expect(prisma.company.create).not.toHaveBeenCalled();
     expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('asks what kind of organization it is when creating, as LinkedIn does, but not when editing an older page', async () => {
+    const creating = harness({ user: { firstName: 'Ada', lastName: 'Lovelace' } });
+    const { companyType: _type, ...untyped } = creating.step;
+    await expect(creating.service.saveCompany(creating.user, { ...untyped, authorizedRepresentative: true }))
+      .rejects.toThrow('what kind of organization');
+    expect(creating.prisma.company.create).not.toHaveBeenCalled();
+
+    await creating.service.saveCompany(creating.user, { ...creating.step, authorizedRepresentative: true });
+    expect(creating.prisma.employerProfile.upsert.mock.calls[0][0].create).toMatchObject({ companyType: 'PRIVATELY_HELD', companySize: '2-10' });
+
+    // An older page edited without a type keeps whatever it has.
+    const editing = harness({ seated: true, role: CompanyRole.OWNER });
+    await editing.service.saveCompany(editing.user, untyped);
+    expect(editing.prisma.employerProfile.update.mock.calls[0][0].data).not.toHaveProperty('companyType');
+  });
+
+  it("makes the new company's page the creator's profile, public from the start", async () => {
+    const { service, prisma, user, step } = harness({ user: { firstName: 'Ada', lastName: 'Lovelace' } });
+    await service.saveCompany(user, { ...step, authorizedRepresentative: true });
+    // As on LinkedIn: live at once, rather than "unlisted" until someone found
+    // Review & publish in the editor.
+    const upsert = prisma.employerProfile.upsert.mock.calls[0][0];
+    // With no address typed, one is made from the name: /company/acme.
+    expect(upsert.create).toMatchObject({ companyName: 'Acme', companyId: 'company-new', visibility: 'public', slug: 'acme' });
+    expect(upsert.update).toMatchObject({ companyId: 'company-new', visibility: 'public', slug: 'acme' });
+    expect(prisma.company.update).toHaveBeenCalledWith({ where: { id: 'company-new' }, data: { pageId: 'page-new' } });
+  });
+
+  it('takes the address typed on the form, and refuses a taken one before creating anything', async () => {
+    const named = { user: { firstName: 'Ada', lastName: 'Lovelace' } };
+    const taken = harness(named);
+    taken.prisma.employerProfile.findUnique.mockImplementation(async ({ where }) =>
+      where.slug === 'acme' ? { id: 'someone-else' } : null);
+    await expect(taken.service.saveCompany(taken.user, { ...taken.step, authorizedRepresentative: true, pageSlug: 'Acme' }))
+      .rejects.toThrow('That address is taken');
+    expect(taken.prisma.company.create).not.toHaveBeenCalled();
+
+    const free = harness(named);
+    await free.service.saveCompany(free.user, { ...free.step, authorizedRepresentative: true, pageSlug: 'Acme Kampala!' });
+    expect(free.prisma.employerProfile.upsert.mock.calls[0][0].create).toMatchObject({ slug: 'acme-kampala' });
+  });
+
+  it("lets an admin change the page's address, and refuses one another page holds", async () => {
+    const { service, prisma, user, step } = harness({ seated: true, role: CompanyRole.ADMIN });
+    await service.saveCompany(user, { ...step, pageSlug: 'acme-ltd' });
+    expect(prisma.employerProfile.update).toHaveBeenCalledWith({
+      where: { id: 'page-a' }, data: expect.objectContaining({ slug: 'acme-ltd' }),
+    });
+
+    prisma.employerProfile.update.mockClear();
+    prisma.employerProfile.findUnique.mockImplementation(async ({ where }) =>
+      where.slug === 'globex' ? { id: 'globex-page' } : null);
+    await expect(service.saveCompany(user, { ...step, pageSlug: 'globex' })).rejects.toThrow('That address is taken');
+    expect(prisma.employerProfile.update).not.toHaveBeenCalled();
+  });
+
+  it("puts an admin's edit on the company's page, never on a row of their own", async () => {
+    const { service, prisma, user, step } = harness({ seated: true, role: CompanyRole.ADMIN });
+    await service.saveCompany(user, { ...step, companyName: 'Acme Ltd' });
+    expect(prisma.company.update).toHaveBeenCalledWith({ where: { id: 'company-a' }, data: { name: 'Acme Ltd' } });
+    expect(prisma.employerProfile.update).toHaveBeenCalledWith({
+      where: { id: 'page-a' },
+      data: expect.objectContaining({ companyName: 'Acme Ltd', industry: 'Technology', companySize: '2-10' }),
+    });
+    expect(prisma.employerProfile.upsert).not.toHaveBeenCalled();
+  });
+
+  it("refuses a seat that may not edit the company, instead of saving its edit somewhere nobody sees", async () => {
+    for (const role of [CompanyRole.RECRUITER, CompanyRole.VIEWER]) {
+      const { service, prisma, user, step } = harness({ seated: true, role });
+      await expect(service.saveCompany(user, { ...step, companyName: 'Renamed' }))
+        .rejects.toThrow("owners and admins");
+      expect(prisma.company.update).not.toHaveBeenCalled();
+      expect(prisma.employerProfile.update).not.toHaveBeenCalled();
+      expect(prisma.employerProfile.upsert).not.toHaveBeenCalled();
+    }
   });
 });
 

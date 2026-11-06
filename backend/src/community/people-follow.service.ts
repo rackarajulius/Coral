@@ -3,6 +3,7 @@ import { UserStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CommunityIdentityService } from './identity.service';
+import { personName } from '../common/person-name';
 
 /** Accounts that are not followable, and whose follows do not count. */
 export const HIDDEN_STATUSES: UserStatus[] = [UserStatus.INACTIVE, UserStatus.SUSPENDED, UserStatus.BANNED];
@@ -136,12 +137,7 @@ export class PeopleFollowService {
       }),
       this.identity.resolveOne(followerId),
     ]);
-    // Names first, as everywhere a person is named: a display name can be a
-    // handle or an email's local part, which is not what anyone is called.
-    const who =
-      [follower?.firstName, follower?.lastName].filter(Boolean).join(' ').trim() ||
-      follower?.displayName?.trim() ||
-      'Someone';
+    const who = personName(follower, 'Someone');
     const title = `${who} followed you`;
 
     const recent = await this.prisma.notification.findFirst({

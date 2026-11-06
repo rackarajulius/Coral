@@ -24,8 +24,10 @@ import JobDetails from "./JobDetails";
 import JobListingsFooter from "./JobListingsFooter";
 import FilterDrawer from "./FilterDrawer";
 import EmptyState from "./EmptyState";
+import { JobsTabs } from "@/components/jobs/JobsTabs";
 import SearchBar from "./SearchBar";
 import EmailAlertCard from "./EmailAlertCard";
+import MatcherHandoffCard, { THIN_RESULTS } from "./MatcherHandoffCard";
 import JobCardSkeleton from "./JobCardSkeleton";
 import JobDetailsSkeleton from "./JobDetailsSkeleton";
 
@@ -213,14 +215,29 @@ const JobListings = () => {
           </div>
         ))}
       </div>
+      {/* Only jobs posted here are listed; when they run thin, the web. */}
+      {filteredJobs.length < THIN_RESULTS && (
+        <div className="mt-3">
+          <MatcherHandoffCard />
+        </div>
+      )}
       <JobListingsFooter />
     </div>
+  );
+
+  const renderEmptyList = () => (
+    <>
+      <EmptyState />
+      <MatcherHandoffCard />
+    </>
   );
 
   return (
     <>
       <FilterDrawer />
       <SearchBar />
+      {/* For you · Match my resume, under the search, as on Glassdoor. */}
+      <JobsTabs />
 
       <div className="container mx-auto px-4 md:px-12 lg:px-24 py-4">
 
@@ -233,7 +250,7 @@ const JobListings = () => {
               ? renderSkeletons()
               : hasJobs
               ? renderJobList(true)
-              : <EmptyState />}
+              : renderEmptyList()}
           </div>
 
           {/* Job Details Column */}
@@ -257,7 +274,7 @@ const JobListings = () => {
               ? renderSkeletons()
               : hasJobs
               ? renderJobList(false)
-              : <EmptyState />
+              : renderEmptyList()
           ) : (
             <div className="fixed inset-0 top-16 z-40 bg-background flex flex-col border-t border-border">
               {/* Back Header */}

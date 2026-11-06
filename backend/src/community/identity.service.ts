@@ -9,7 +9,9 @@ import { isPublicProviderReady } from '../freelancers/provider-profile-policy';
  * `verified` is the whole point of this file. LinkedIn's "current company" is
  * a text field anyone can type; ours is only ever set from an ACTIVE
  * CompanyMember row — the same record that governs access to that company's
- * candidates and billing. It cannot be self-asserted.
+ * candidates and billing — and only for a company that has proven its domain
+ * or had its page reviewed by a person at Coral. Membership of a company
+ * anyone could have created still names it, without the check.
  *
  * Everything else is marked as the person's own description and is never
  * badged, because we have not checked it and saying otherwise would make the
@@ -59,7 +61,7 @@ export class CommunityIdentityService {
        */
       this.prisma.companyMember.findMany({
         where: { userId: { in: unique }, status: CompanyMemberStatus.ACTIVE },
-        select: { userId: true, companyId: true, company: { select: { name: true } } },
+        select: { userId: true, companyId: true, company: { select: { name: true, domain: true } } },
       }),
       this.prisma.employerProfile.findMany({
         where: { userId: { in: unique } },
@@ -83,13 +85,20 @@ export class CommunityIdentityService {
     ]);
 
     const titleByUser = new Map(employerProfiles.map((p) => [p.userId, p.jobTitle?.trim() || null]));
-    const pageByCompany = await this.linkablePages(memberships.map((m) => m.companyId));
+    const companyIds = memberships.map((m) => m.companyId);
+    const [pageByCompany, reviewed] = await Promise.all([
+      this.linkablePages(companyIds),
+      this.reviewedCompanies(companyIds),
+    ]);
 
     for (const m of memberships) {
       const title = titleByUser.get(m.userId);
       out.set(m.userId, {
         label: title ? `${title} at ${m.company.name}` : `Member of ${m.company.name}`,
-        verified: true,
+        // Membership says who they work with; the check says the company is
+        // the real one. Anyone can create an "Airtel Uganda" — only a proven
+        // domain, or a page a person at Coral reviewed, earns the check.
+        verified: !!m.company.domain || reviewed.has(m.companyId),
         companyId: m.companyId,
         companyName: m.company.name,
         companyProfileId: pageByCompany.get(m.companyId) ?? null,
@@ -151,24 +160,38 @@ export class CommunityIdentityService {
    * one is only kept out of the directory, which is not the same as being
    * closed to someone who was handed a link.
    *
-   * A company can own several employer profiles, one per seat. Oldest wins, so
-   * the destination is stable rather than changing with whoever joined last.
+   * A company has one page (Company.pageId), whichever of its members'
+   * profiles exist, so the destination is the same for everyone on the team.
    */
   private async linkablePages(companyIds: string[]): Promise<Map<string, string>> {
     const unique = [...new Set(companyIds)];
     const byCompany = new Map<string, string>();
     if (unique.length === 0) return byCompany;
 
-    const profiles = await this.prisma.employerProfile.findMany({
-      where: { companyId: { in: unique }, visibility: { not: 'private' } },
-      select: { id: true, companyId: true },
-      orderBy: { createdAt: 'asc' },
+    const companies = await this.prisma.company.findMany({
+      where: { id: { in: unique } },
+      select: { id: true, deactivatedAt: true, page: { select: { id: true, visibility: true } } },
     });
 
-    for (const p of profiles) {
-      if (p.companyId && !byCompany.has(p.companyId)) byCompany.set(p.companyId, p.id);
+    // A deactivated page has nowhere to send anyone until it is back.
+    for (const c of companies) {
+      if (c.page && c.page.visibility !== 'private' && !c.deactivatedAt) byCompany.set(c.id, c.page.id);
     }
     return byCompany;
+  }
+
+  /**
+   * Companies whose page's documents a person at Coral reviewed and approved.
+   * The page's level, not any member's: verification is the company's.
+   */
+  private async reviewedCompanies(companyIds: string[]): Promise<Set<string>> {
+    const unique = [...new Set(companyIds)];
+    if (unique.length === 0) return new Set();
+    const companies = await this.prisma.company.findMany({
+      where: { id: { in: unique }, page: { is: { verificationStatus: 'verified' } } },
+      select: { id: true },
+    });
+    return new Set(companies.map((c) => c.id));
   }
 
   /** Convenience for a single author. */

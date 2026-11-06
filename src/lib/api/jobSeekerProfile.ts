@@ -1,4 +1,5 @@
 import supabase from "@/lib/supabase";
+import { fitImage, IMAGE_SIZES } from "@/lib/imageResize";
 import { splitLocation, type LocationParts } from "@/lib/location/places";
 
 /** Re-exported where they always were; they live with the other place helpers. */
@@ -272,7 +273,7 @@ export function reportTimezone(userId: string): void {
 /** Uploads a profile photo (avatar); returns its public URL. */
 export async function uploadAvatar(file: File): Promise<string> {
   const form = new FormData();
-  form.append("file", file);
+  form.append("file", await fitImage(file, IMAGE_SIZES.avatar));
   const res = await fetch(`${API_BASE_URL}/job-seekers/me/avatar`, {
     method: "POST",
     headers: await authHeaderOnly(),
@@ -295,7 +296,7 @@ export async function deleteAvatar(): Promise<void> {
 /** Uploads a banner image; returns its public URL. */
 export async function uploadBanner(file: File): Promise<string> {
   const form = new FormData();
-  form.append("file", file);
+  form.append("file", await fitImage(file, IMAGE_SIZES.banner));
   const res = await fetch(`${API_BASE_URL}/job-seekers/me/banner`, {
     method: "POST",
     headers: await authHeaderOnly(),
@@ -315,7 +316,7 @@ export async function uploadBanner(file: File): Promise<string> {
  */
 export async function uploadPortfolioImage(file: File): Promise<string> {
   const form = new FormData();
-  form.append("file", file);
+  form.append("file", await fitImage(file, IMAGE_SIZES.post));
   const res = await fetch(`${API_BASE_URL}/job-seekers/me/portfolio/image`, {
     method: "POST",
     headers: await authHeaderOnly(),

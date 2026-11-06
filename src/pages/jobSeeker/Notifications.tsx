@@ -7,6 +7,7 @@ import {
   Briefcase,
   CalendarClock,
   CheckCheck,
+  CreditCard,
   Loader2,
   MessageCircle,
   Sparkles,
@@ -30,6 +31,7 @@ const TYPE_META: Record<string, { icon: React.ElementType; tint: string; label: 
   job_alert: { icon: BellRing, tint: "bg-amber-500/10 text-amber-600 dark:text-amber-400", label: "Job alert" },
   job_recommendation: { icon: Sparkles, tint: "bg-coral/10 text-coral", label: "Picked for you" },
   follow: { icon: UserPlus, tint: "bg-coral/10 text-coral", label: "New follower" },
+  billing: { icon: CreditCard, tint: "bg-muted text-muted-foreground", label: "Billing" },
   mention: { icon: AtSign, tint: "bg-blue-500/10 text-blue-600 dark:text-blue-400", label: "Mention" },
 };
 const FALLBACK = { icon: Bell, tint: "bg-muted text-muted-foreground", label: "Update" };

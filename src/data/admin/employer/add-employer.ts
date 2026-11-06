@@ -62,15 +62,8 @@ export interface AdminControls {
   addInternalAlert: boolean;
 }
 
-export const COMPANY_SIZES = [
-  "1-10",
-  "11-50",
-  "51-200",
-  "201-500",
-  "501-1000",
-  "1001-5000",
-  "5000+",
-];
+/** LinkedIn's size bands: the one list every company form uses. */
+export { COMPANY_SIZES } from "@/lib/companyFacts";
 
 export const INDUSTRIES = [
   "Software Development",

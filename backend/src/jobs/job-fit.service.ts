@@ -6,6 +6,7 @@ import { AiService, ResumeTailoring } from '../services/ai/ai.service';
 import { RESUME_BUCKET, StorageService } from '../storage/storage.service';
 import { User } from '../common/types/user.types';
 import { LIVE_JOB_STATUSES } from './job-lifecycle.service';
+import { JOB_COMPANY_SELECT, jobCompanyName } from './job-company-name';
 
 export interface JobFit {
   /** Skills the job asks for that the candidate demonstrably has. */
@@ -155,7 +156,7 @@ export class JobFitService {
   async tailorForJob(user: User, jobId: string): Promise<ResumeTailoring> {
     const job = await this.prisma.job.findUnique({
       where: { id: jobId },
-      select: { id: true, title: true, companyName: true, location: true, description: true, skills: true, status: true },
+      select: { id: true, title: true, location: true, description: true, skills: true, status: true, ...JOB_COMPANY_SELECT },
     });
     if (!job || !(await this.maySee(user, job))) throw new NotFoundException('Job not found');
 
@@ -179,7 +180,7 @@ export class JobFitService {
 
     return this.ai.tailorResume(text, {
       title: job.title,
-      company: job.companyName ?? '',
+      company: jobCompanyName(job) ?? '',
       location: job.location ?? '',
       description: [job.skills.join(', '), (job.description ?? '').slice(0, 1500)]
         .filter(Boolean)

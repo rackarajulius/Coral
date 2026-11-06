@@ -30,7 +30,9 @@ describe('permanent job seeker account closure', () => {
     for (const model of ['interview', 'aiScreen', 'outreachMessage', 'shortlistItem', 'conversation',
       'interviewCoachReport', 'interviewCoachSession', 'googleCredential', 'microsoftCredential',
       'zoomCredential', 'postReport', 'reviewFlag', 'availabilitySlot', 'analyticsEvent', 'space',
-      'candidateTag', 'scorecard', 'offer', 'emailTemplate', 'post', 'postComment']) {
+      'candidateTag', 'scorecard', 'offer', 'emailTemplate', 'post', 'postComment',
+      // Read first, to hand the person's companies over (company-departure.ts).
+      'companyMember', 'company', 'employerProfile', 'job']) {
       tx[model] = { findMany: jest.fn().mockResolvedValue([]), deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }), findUnique: jest.fn().mockResolvedValue(null), update: jest.fn() };
     }
@@ -79,6 +81,13 @@ describe('permanent job seeker account closure', () => {
     await expect(service.closeAccount(user, 'CLOSE')).rejects.toThrow(ForbiddenException);
     expect(storage.deleteFilesUnder).not.toHaveBeenCalled();
     expect(supabase.deleteAuthUser).not.toHaveBeenCalled();
+  });
+
+  it("hands the person's companies over before their account goes, so a page doesn't go with it", async () => {
+    await service.closeAccount(user, 'CLOSE');
+    const lookup = tx.companyMember.findMany.mock.invocationCallOrder[0];
+    expect(lookup).toBeLessThan(tx.user.deleteMany.mock.invocationCallOrder[0]);
+    expect(tx.companyMember.findMany.mock.calls[0][0].where.userId).toBe(user.id);
   });
 
   it('deletes owned data, non-FK records, and scoped uploads once closure is committed', async () => {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   type AlertEmploymentType,
@@ -18,6 +18,7 @@ import {
 } from '@/lib/api/jobAlerts';
 import { postedAgo } from '@/lib/resumeMatcher/matchFilters';
 import { getMyEntitlements, limitApplied, metricOf } from '@/lib/api/entitlements';
+import { useUpgradePrompt } from '@/stores/upgradePromptStore';
 import { Bell, ExternalLink, Globe, MapPin, Pencil, Plus, Trash2, Wallet } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -71,6 +72,7 @@ function WebMatches({
   premiumOnly: boolean;
 }) {
   const [all, setAll] = useState(false);
+  const showUpgrade = useUpgradePrompt((s) => s.show);
 
   if (premiumOnly && matches.length === 0) {
     return (
@@ -78,9 +80,15 @@ function WebMatches({
         <Globe className="h-3.5 w-3.5 shrink-0" />
         <span>
           Jobs from across the web are part of Premium.{' '}
-          <Link to="/premium" className="font-medium text-coral hover:underline">
+          <button
+            type="button"
+            onClick={() =>
+              showUpgrade({ metric: 'matcher.web', message: 'Alerts find jobs from across the web with Premium.' })
+            }
+            className="font-medium text-coral hover:underline"
+          >
             See Premium
-          </Link>
+          </button>
         </span>
       </p>
     );

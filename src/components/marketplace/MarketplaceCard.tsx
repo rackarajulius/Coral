@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { providerCategoryLabel } from "@/lib/api/providers";
+import { CategoryLabel } from "@/components/WorkCategory";
 import { marketplacePath, marketplacePrice, marketplaceStatusLabel, marketplaceWorkMode, type MarketplaceKind, type MarketplaceRecord, type ServiceListing } from "@/lib/api/marketplace";
 import { ListingCoverMedia } from "./ListingGallery";
 
@@ -18,7 +18,7 @@ function Cover({ record }: { record: MarketplaceRecord }) {
 
 export default function MarketplaceCard({ record, kind, management = false, children }: { record: MarketplaceRecord; kind: MarketplaceKind; management?: boolean; children?: React.ReactNode }) {
   return <Card className="flex h-full flex-col overflow-hidden rounded-2xl">{kind === "service" && <Cover record={record} />}<CardContent className="flex flex-1 flex-col p-5">
-    <div className="mb-3 flex flex-wrap gap-2"><Badge variant="secondary">{providerCategoryLabel(record.category)}</Badge>{management && <Badge variant="outline">{marketplaceStatusLabel(record.status)}</Badge>}</div>
+    <div className="mb-3 flex flex-wrap gap-2"><Badge variant="secondary"><CategoryLabel value={record.category} /></Badge>{management && <Badge variant="outline">{marketplaceStatusLabel(record.status)}</Badge>}</div>
     <h2 className="break-words text-lg font-semibold leading-6">{management ? record.title || "Untitled draft" : <Link to={`${marketplacePath(kind, record.id)}?source=directory`} className="hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{record.title}</Link>}</h2>
     <p className="mt-2 text-xs text-muted-foreground">{record.company?.name || record.owner?.displayName || "Coral member"}</p>
     <p className="mt-4 line-clamp-3 break-words text-sm leading-6 text-muted-foreground">{record.description || "Add a description before sharing this listing."}</p>

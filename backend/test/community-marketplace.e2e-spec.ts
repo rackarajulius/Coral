@@ -25,7 +25,7 @@ describe('Community canonical marketplace links (PostgreSQL)', () => {
     prisma = database.prisma;
     marketplace = new MarketplaceService(cast(prisma));
     posts = new PostsService(cast(prisma), cast({ assertPostable: jest.fn(), joinOnPost: jest.fn() }), cast({ resolve: jest.fn().mockResolvedValue(new Map()) }),
-      cast({ assertOwnMedia: jest.fn() }), cast({}), cast({ firstUrl: jest.fn().mockReturnValue(null) }), new CompanyContextService(cast(prisma)), cast({ create: jest.fn().mockResolvedValue(undefined) }), marketplace);
+      cast({ assertOwnMedia: jest.fn(), assertPostMedia: jest.fn() }), cast({}), cast({ firstUrl: jest.fn().mockReturnValue(null) }), new CompanyContextService(cast(prisma)), cast({ create: jest.fn().mockResolvedValue(undefined) }), marketplace);
     spaceId = (await prisma.space.create({ data: { name: 'Design work', slug: randomUUID() } })).id;
   }, 240_000);
   afterAll(async () => {

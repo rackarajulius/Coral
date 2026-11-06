@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { seatPage, shownProfile } from '../../company/company-page';
 import { CandidateJob, JobSource, SearchInput, cityOf, employmentTypeOf, isoDate, yearlyPay } from './types';
 
 const CURRENCY: Record<string, string> = { USD: '$', CAD: 'C$', EUR: '€', GBP: '£' };
@@ -60,7 +61,13 @@ export class PlatformJobSource implements JobSource {
         slug: true,
         companyName: true,
         companyLogo: true,
-        postedBy: { select: { employerProfile: { select: { companyName: true, companyLogo: true } } } },
+        postedBy: {
+          select: {
+            employerProfile: { select: { companyName: true, companyLogo: true } },
+            // The poster's company page, which the job is shown under.
+            ...seatPage({ companyName: true, companyLogo: true }),
+          },
+        },
         location: true,
         isRemote: true,
         isHybrid: true,
@@ -89,8 +96,8 @@ export class PlatformJobSource implements JobSource {
     return jobs.map((j) => ({
       id: `platform:${j.id}`,
       title: j.title,
-      company: j.companyName?.trim() || j.postedBy?.employerProfile?.companyName?.trim() || 'Company',
-      logoUrl: webImage(j.companyLogo) ?? webImage(j.postedBy?.employerProfile?.companyLogo),
+      company: j.companyName?.trim() || shownProfile(j.postedBy)?.companyName?.trim() || 'Company',
+      logoUrl: webImage(j.companyLogo) ?? webImage(shownProfile(j.postedBy)?.companyLogo),
       location: j.location?.trim() || (j.isRemote ? 'Remote' : ''),
       // Employers write requirements and the rest as lists beside the
       // description. Without them the AI scored a job here on its blurb alone.

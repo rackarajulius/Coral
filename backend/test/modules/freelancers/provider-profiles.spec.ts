@@ -1,10 +1,15 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../src/prisma/prisma.service';
 import { FreelancersService } from '../../../src/freelancers/freelancers.service';
+import { CitiesService } from '../../../src/locations/cities.service';
 import { UpdateFreelancerProfileDto } from '../../../src/freelancers/dto/update-freelancer-profile.dto';
 import { ProviderDirectoryQueryDto } from '../../../src/freelancers/dto/provider-directory-query.dto';
 import { AppValidationPipe } from '../../../src/common/pipes/validation.pipe';
 import { isPublicProviderReady, providerProfileReadiness } from '../../../src/freelancers/provider-profile-policy';
+import { readPlaceFilter, readProviderPlace } from '../../../src/freelancers/provider-place';
+
+// The real city list, loaded once for the file: place reading is the point.
+const cities = new CitiesService();
 
 function profile() {
   return {
@@ -36,11 +41,13 @@ function harness() {
       findFirst: jest.fn().mockResolvedValue(profile()), findMany: jest.fn().mockResolvedValue([]),
       upsert: jest.fn().mockImplementation(async ({ update }) => ({ ...profile(), ...update })),
     },
+    jobSeekerProfile: { findUnique: jest.fn().mockResolvedValue(null) },
+    completedWork: { count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]) },
     $queryRaw: jest.fn().mockResolvedValue([{ id: 'provider' }]),
     $transaction: jest.fn(),
   };
   prisma.$transaction.mockImplementation((work: (tx: typeof prisma) => unknown) => work(prisma));
-  return { prisma, service: new FreelancersService(prisma as unknown as PrismaService) };
+  return { prisma, service: new FreelancersService(prisma as unknown as PrismaService, cities) };
 }
 
 describe('Personal provider setup and privacy', () => {
@@ -102,10 +109,17 @@ describe('Personal provider setup and privacy', () => {
     const { service, prisma } = harness();
     const result = await service.updateMyProfile('provider', { providerEnabled: false, portfolioUrl: null, headline: null });
     expect(result.publicPreviewEnabled).toBe(false);
-    expect(result.completedProjects).toBe(88);
-    expect(result.statisticsProvenance).toBe('legacy_self_declared');
+    // Self-declared and never measured: not read back, even for the owner.
+    expect(result).not.toHaveProperty('statisticsProvenance');
     expect(prisma.freelancerProfile.upsert).toHaveBeenCalledWith(expect.objectContaining({
-      update: { providerEnabled: false, publicPreviewEnabled: false, portfolioUrl: null, headline: null },
+      select: expect.not.objectContaining({ completedProjects: expect.anything(), rating: expect.anything(), totalEarnings: expect.anything() }),
+    }));
+    expect(prisma.freelancerProfile.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      update: {
+        providerEnabled: false, publicPreviewEnabled: false, portfolioUrl: null, headline: null,
+        // Every save re-reads where they're based from the city and country kept.
+        placeCountryCode: 'CA', placeRegion: 'Ontario', placeCity: 'Toronto',
+      },
     }));
   });
 
@@ -159,27 +173,60 @@ describe('Provider public preview and people discovery', () => {
     expect(result.availability).toBeNull();
   });
 
-  it('filters directory privacy in the database and advances stable bounded pages without recruiting searches', async () => {
+  it('filters directory privacy in the database and advances bounded, numbered pages without recruiting searches', async () => {
     const { service, prisma } = harness();
     const second = { ...profile(), id: '10000000-0000-4000-8000-000000000002' };
     prisma.$queryRaw.mockResolvedValue([{ id: profile().id }, { id: second.id }]);
     prisma.freelancerProfile.findMany.mockResolvedValue([profile()]);
     const result = await service.listPublicProfiles({ category: 'design', q: 'designer', limit: 1 });
     expect(result.items).toHaveLength(1);
-    expect(result.nextCursor).toBe(profile().id);
+    expect(result).toMatchObject({ page: 1, nextPage: 2 });
     expect(prisma.freelancerProfile.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ category: 'design', providerEnabled: true, publicPreviewEnabled: true }),
-      take: 1, orderBy: { id: 'asc' },
+      take: 1,
     }));
     expect(JSON.stringify(prisma.freelancerProfile.findMany.mock.calls[0][0].where)).not.toMatch(/email|resume|jobSeekerProfile/);
-    await service.listPublicProfiles({ cursor: profile().id });
+    await service.listPublicProfiles({ page: 2 });
     const lookup = prisma.$queryRaw.mock.calls[1][0];
-    expect(lookup.text).toContain('AND profile.id >');
-    expect(lookup.values).toContain(profile().id);
-    expect(lookup.values.at(-1)).toBe(13);
+    // limit + 1 to know there is more, then the offset for page 2.
+    expect(lookup.values.slice(-2)).toEqual([13, 12]);
     expect(lookup.text).toContain("account.status = 'ACTIVE'");
     expect(lookup.text).toContain('profile.public_preview_enabled = true');
     expect(lookup.text).not.toMatch(/email|resume|job_seeker/);
+    // The deepest page never offers a next page the bounds would refuse.
+    await expect(service.listPublicProfiles({ q: 'designer', limit: 1, page: 24 })).resolves.toMatchObject({ page: 24, nextPage: null });
+  });
+
+  it('orders by an explainable rule: best match, then availability, then recently updated', async () => {
+    const { service, prisma } = harness();
+    prisma.$queryRaw.mockResolvedValue([]);
+    await service.listPublicProfiles({ q: 'react' });
+    const searched = prisma.$queryRaw.mock.calls[0][0].text;
+    // The kind of match leads when searching...
+    expect(searched).toMatch(/ORDER BY CASE[\s\S]*WHEN[\s\S]*THEN 0[\s\S]*THEN 1[\s\S]*ELSE 2/);
+    expect(searched).toContain('lower(btrim(label)) = lower(');
+    // ...then who can take work now, then who updated last, then a stable tie-break.
+    expect(searched).toMatch(/CASE profile\.availability WHEN 'available' THEN 0 WHEN 'limited' THEN 1/);
+    expect(searched).toMatch(/profile\.updated_at DESC, profile\.id ASC/);
+
+    await service.listPublicProfiles({});
+    const browsing = prisma.$queryRaw.mock.calls[1][0].text;
+    expect(browsing).not.toContain('lower(btrim(label))');
+    // Browsing starts the order at availability. A placeholder relevance of
+    // `0` here is read by PostgreSQL as a column position and fails.
+    expect(browsing).toMatch(/ORDER BY\s+CASE profile\.availability/);
+  });
+
+  it('keeps the directory order when the visibility recheck reads the page back', async () => {
+    const { service, prisma } = harness();
+    const second = { ...profile(), id: '10000000-0000-4000-8000-000000000002', userId: 'second-provider' };
+    // The directory ranks the second profile first...
+    prisma.$queryRaw.mockResolvedValue([{ id: second.id }, { id: profile().id }]);
+    // ...and the recheck hands them back in the database's own order.
+    prisma.freelancerProfile.findMany.mockResolvedValue([profile(), second]);
+    const result = await service.listPublicProfiles({});
+    expect(result.items.map((item: { userId: string }) => item.userId)).toEqual(['second-provider', profile().userId]);
+    expect(prisma.freelancerProfile.findMany.mock.calls[0][0]).not.toHaveProperty('orderBy');
   });
 
   it('matches skill labels case-insensitively and partially in the database', async () => {
@@ -200,7 +247,7 @@ describe('Provider public preview and people discovery', () => {
     'binds and escapes search punctuation literally: %s', async (search) => {
       const { service, prisma } = harness();
       prisma.$queryRaw.mockResolvedValue([]);
-      await expect(service.listPublicProfiles({ q: search })).resolves.toEqual({ items: [], nextCursor: null });
+      await expect(service.listPublicProfiles({ q: search })).resolves.toEqual({ items: [], page: 1, nextPage: null });
       const lookup = prisma.$queryRaw.mock.calls[0][0];
       const literal = search.replace(/[\\%_]/g, (character) => `\\${character}`);
       expect(lookup.values).toContain(`%${literal}%`);
@@ -214,7 +261,105 @@ describe('Provider public preview and people discovery', () => {
     const { service, prisma } = harness();
     await expect(service.listPublicProfiles({ q: 'x'.repeat(101) })).rejects.toBeInstanceOf(BadRequestException);
     await expect(service.listPublicProfiles({ limit: 25 })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.listPublicProfiles({ page: 0 })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.listPublicProfiles({ page: 25 })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.listPublicProfiles({ location: 'x'.repeat(101) })).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  });
+});
+
+describe('Where a provider is based, and the directory location filter', () => {
+  it.each([
+    ['toronto', 'Canada', { placeCountryCode: 'CA', placeRegion: 'Ontario', placeCity: 'Toronto' }],
+    // Accents set aside: what they typed finds how the list spells it.
+    ['Montreal', 'Canada', { placeCountryCode: 'CA', placeRegion: 'Quebec', placeCity: 'Montréal' }],
+    ['Toronto, ON', 'CA', { placeCountryCode: 'CA', placeRegion: 'Ontario', placeCity: 'Toronto' }],
+    // A province in the city box is a province.
+    ['Ontario', 'Canada', { placeCountryCode: 'CA', placeRegion: 'Ontario', placeCity: null }],
+    [null, 'Canada', { placeCountryCode: 'CA', placeRegion: null, placeCity: null }],
+    // A city only known elsewhere keeps the country they wrote, not another one.
+    ['Kampala', 'Canada', { placeCountryCode: 'CA', placeRegion: null, placeCity: null }],
+    ['Kampala', null, { placeCountryCode: 'UG', placeRegion: 'Central Region', placeCity: 'Kampala' }],
+    ['Qwxzvq', 'Nowhere', { placeCountryCode: null, placeRegion: null, placeCity: null }],
+  ])('reads %j in %j as %j', (city, country, expected) => {
+    expect(readProviderPlace(cities, city, country)).toEqual(expected);
+  });
+
+  it.each([
+    ['London', { kind: 'city', countryCode: 'CA', region: 'Ontario', city: 'London', label: 'London, Ontario, Canada' }],
+    ['London, UK', { kind: 'city', countryCode: 'GB', city: 'London' }],
+    ['Ontario', { kind: 'region', countryCode: 'CA', region: 'Ontario', label: 'Ontario, Canada' }],
+    // Both a province and a city: the province, which holds the city too.
+    ['Quebec', { kind: 'region', countryCode: 'CA', region: 'Quebec', label: 'Quebec, Canada' }],
+    ['Québec, QC', { kind: 'city', countryCode: 'CA', region: 'Quebec', city: 'Québec' }],
+    ['Canada', { kind: 'country', countryCode: 'CA', label: 'Canada' }],
+  ])('reads a search for %j', (text, expected) => {
+    expect(readPlaceFilter(cities, text, 'CA')).toMatchObject(expected);
+  });
+
+  it('matches a city on the place read at save, and says how the search was read', async () => {
+    const { service, prisma } = harness();
+    prisma.$queryRaw.mockResolvedValue([]);
+    await expect(service.listPublicProfiles({ location: 'Toronto, ON' })).resolves.toEqual({
+      items: [], page: 1, nextPage: null, place: { kind: 'city', label: 'Toronto, Ontario, Canada' },
+    });
+    const lookup = prisma.$queryRaw.mock.calls[0][0];
+    expect(lookup.text).toMatch(/profile\.place_country_code = \$\d+ AND profile\.place_city = \$\d+\s+AND profile\.place_region = \$\d+/);
+    expect(lookup.values).toEqual(expect.arrayContaining(['CA', 'Toronto', 'Ontario']));
+    // Never the words they wrote.
+    expect(lookup.text).not.toMatch(/profile\.city|profile\.country/);
+  });
+
+  it('matches a province or a country without a city', async () => {
+    const { service, prisma } = harness();
+    prisma.$queryRaw.mockResolvedValue([]);
+    await service.listPublicProfiles({ location: 'Ontario' });
+    expect(prisma.$queryRaw.mock.calls[0][0].text).toMatch(/place_country_code = \$\d+ AND profile\.place_region = \$\d+/);
+    expect(prisma.$queryRaw.mock.calls[0][0].text).not.toContain('place_city');
+    await service.listPublicProfiles({ location: 'canada' });
+    expect(prisma.$queryRaw.mock.calls[1][0].text).toContain('place_country_code');
+    expect(prisma.$queryRaw.mock.calls[1][0].text).not.toMatch(/place_region|place_city/);
+  });
+
+  it('finds nobody for a place it does not know, and says so instead of ignoring it', async () => {
+    const { service, prisma } = harness();
+    await expect(service.listPublicProfiles({ location: 'Qwxzvq' })).resolves.toEqual({ items: [], page: 1, nextPage: null, place: null });
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  it('filters to people open to remote work only when asked', async () => {
+    const { service, prisma } = harness();
+    prisma.$queryRaw.mockResolvedValue([]);
+    await service.listPublicProfiles({ remote: 'true' });
+    await service.listPublicProfiles({ remote: 'false' });
+    await service.listPublicProfiles({});
+    expect(prisma.$queryRaw.mock.calls[0][0].text).toContain('profile.available_for_remote = true');
+    expect(prisma.$queryRaw.mock.calls[1][0].text).not.toContain('available_for_remote');
+    expect(prisma.$queryRaw.mock.calls[2][0].text).not.toContain('available_for_remote');
+    // No location asked, no `place` in the answer.
+    await expect(service.listPublicProfiles({})).resolves.not.toHaveProperty('place');
+  });
+
+  it('reads the place on save, from what the save leaves, and tells the owner in words', async () => {
+    const { service, prisma } = harness();
+    // Only the city changes; the country already on the profile still counts.
+    const saved = await service.updateMyProfile('provider', { city: ' montreal ' });
+    expect(prisma.freelancerProfile.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      update: expect.objectContaining({ city: 'montreal', placeCountryCode: 'CA', placeRegion: 'Quebec', placeCity: 'Montréal' }),
+    }));
+    expect(saved.place).toEqual({ city: 'Montréal', region: 'Quebec', country: 'Canada' });
+    expect(saved).not.toHaveProperty('placeCountryCode');
+
+    // Clearing the city leaves the country.
+    await service.updateMyProfile('provider', { city: null });
+    expect(prisma.freelancerProfile.upsert.mock.calls[1][0].update).toMatchObject({ placeCountryCode: 'CA', placeRegion: null, placeCity: null });
+  });
+
+  it('reads a new profile as Canada until told otherwise', async () => {
+    const { service, prisma } = harness();
+    prisma.freelancerProfile.findUnique.mockResolvedValue(null);
+    await service.updateMyProfile('provider', { providerEnabled: true });
+    expect(prisma.freelancerProfile.upsert.mock.calls[0][0].create).toMatchObject({ country: 'Canada', placeCountryCode: 'CA' });
   });
 });
 
@@ -238,7 +383,7 @@ describe('Provider DTO validation and shared visibility policy', () => {
   });
 
   it.each([
-    { category: 'finance' }, { workPreferences: ['employment'] }, { availability: 'full-time' },
+    { category: 'legal' }, { workPreferences: ['employment'] }, { availability: 'full-time' },
     { hoursPerWeek: 169 }, { portfolioUrl: 'javascript:alert(1)' }, { skills: Array(31).fill('skill') },
     { portfolioUrl: 'https://private:credential@example.com/work' },
   ])('rejects unsupported or unbounded profile values: %j', async (body) => {
@@ -247,8 +392,17 @@ describe('Provider DTO validation and shared visibility policy', () => {
 
   it('bounds and validates public directory pagination', async () => {
     await expect(pipe.transform({ limit: '25' }, { type: 'query', metatype: ProviderDirectoryQueryDto })).rejects.toBeInstanceOf(BadRequestException);
-    await expect(pipe.transform({ cursor: 'private-owner' }, { type: 'query', metatype: ProviderDirectoryQueryDto })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(pipe.transform({ page: '0' }, { type: 'query', metatype: ProviderDirectoryQueryDto })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(pipe.transform({ page: 'two' }, { type: 'query', metatype: ProviderDirectoryQueryDto })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(pipe.transform({ page: '2' }, { type: 'query', metatype: ProviderDirectoryQueryDto })).resolves.toMatchObject({ page: 2 });
     await expect(pipe.transform({ limit: '12', q: ' designer ' }, { type: 'query', metatype: ProviderDirectoryQueryDto })).resolves.toMatchObject({ limit: 12, q: 'designer' });
+  });
+
+  it('validates the location and remote filters', async () => {
+    await expect(pipe.transform({ location: ' Toronto, ON ', remote: 'true' }, { type: 'query', metatype: ProviderDirectoryQueryDto }))
+      .resolves.toMatchObject({ location: 'Toronto, ON', remote: 'true' });
+    await expect(pipe.transform({ remote: 'yes' }, { type: 'query', metatype: ProviderDirectoryQueryDto })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(pipe.transform({ location: 'x'.repeat(101) }, { type: 'query', metatype: ProviderDirectoryQueryDto })).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('requires explicit personal visibility and evidence in the shared byline rule', () => {

@@ -42,6 +42,7 @@ import ProviderDashboard from "./pages/providers/ProviderDashboard";
 import ProviderPreview from "./pages/providers/ProviderPreview";
 import ProviderPublicProfile from "./pages/providers/ProviderPublicProfile";
 import ProviderDirectory from "./pages/providers/ProviderDirectory";
+import SavedProfessionals from "./pages/providers/SavedProfessionals";
 import ProviderAreaGate from "./components/providers/ProviderAreaGate";
 import MarketplaceDirectory from "./pages/marketplace/MarketplaceDirectory";
 import MarketplaceDetail from "./pages/marketplace/MarketplaceDetail";
@@ -195,7 +196,10 @@ const App = () => (
     <AppProviders>
       <Toaster />
       <Sonner />
-      <BrowserRouter>
+      {/* React Router v7's behaviour, opted into now. Safe here: every link
+          under the splat routes (/employers/settings/*, /employers/team/*)
+          is absolute, so relative splat resolution changes nothing. */}
+      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <ScrollToTopOnNavigate />
         <AuthModalProvider>
         <GoogleOneTap />
@@ -238,6 +242,7 @@ const App = () => (
                <Route path="/provider/preview" element={<ProviderPreview />} />
              </Route>
              <Route path="/providers" element={<ProviderDirectory />} />
+             <Route path="/providers/saved" element={<SavedProfessionals />} />
              <Route path="/providers/:userId" element={<ProviderPublicProfile />} />
              <Route path="/services" element={<MarketplaceDirectory kind="service" />} />
              <Route path="/services/:id" element={<MarketplaceDetail kind="service" />} />
@@ -248,6 +253,9 @@ const App = () => (
            </Route>
            <Route path="/companies" element={<Companies/>} />
             <Route path="/company" element={<CompanyProfile/>} />
+            {/* A page's own address, as on LinkedIn: /company/airtel-uganda.
+                /company-profile/:id keeps working and moves here. */}
+            <Route path="/company/:id" element={<CompanyProfile/>} />
             <Route path="/company-profile" element={<CompanyProfile/>} />
             <Route path="/company-profile/:id" element={<CompanyProfile/>} />
             <Route path="/find-talent" element={<FindTalent />} />

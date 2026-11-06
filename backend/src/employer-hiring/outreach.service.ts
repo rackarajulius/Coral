@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundEx
 import { OutreachResponse } from '@prisma/client';
 import { CompanyContextService } from '../company/company-context.service';
 import { roleHasCapability } from '../company/capabilities';
+import { profileShownFor } from '../company/company-page';
 import { PrismaService } from '../prisma/prisma.service';
 import { AiService, OutreachDraft } from '../services/ai/ai.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -274,8 +275,14 @@ export class OutreachService {
     // has no company to send for.
     if (!seat && sender.role !== 'EMPLOYER') return false;
     if (seat && (seat.status !== 'ACTIVE' || !roleHasCapability(seat.role, 'messaging:write'))) return false;
-    const profile = await this.prisma.employerProfile.findUnique({ where: { userId }, select: { verificationStatus: true } });
-    return !!profile && ['domain_verified', 'verified'].includes(profile.verificationStatus);
+    // The company's verification, as when the message was scheduled.
+    const page = await profileShownFor(this.prisma, userId, {
+      verificationStatus: true,
+      pageOf: { select: { deactivatedAt: true } },
+    });
+    // Not while the company's page is deactivated.
+    if (page?.pageOf?.deactivatedAt) return false;
+    return !!page && ['domain_verified', 'verified'].includes(page.verificationStatus);
   }
 
   /** Stops a scheduled message before it goes out. Anyone in the company may. */
@@ -675,11 +682,9 @@ export class OutreachService {
     };
   }
 
+  /** The company the candidate is approached by: the sender's company page. */
   private async employerCompany(userId: string): Promise<string> {
-    const emp = await this.prisma.employerProfile.findUnique({
-      where: { userId },
-      select: { companyName: true },
-    });
-    return emp?.companyName?.trim() || '';
+    const page = await profileShownFor(this.prisma, userId, { companyName: true });
+    return page?.companyName?.trim() || '';
   }
 }

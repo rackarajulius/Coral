@@ -19,22 +19,26 @@ import { User } from '../../common/types/user.types';
 import { AnnouncementReferenceDto, AnnouncementReferenceType, CommunityPostPurpose, CommunityPostType, CreatePostDto } from './dto/create-post.dto';
 import { ListPostsQueryDto } from './dto/list-posts-query.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
+import { personName } from '../../common/person-name';
+import { publicImageUrl } from '../../common/public-image-url';
 import { commentAccess } from '../comment-policy';
 import { announceMentions, plainText, resolveMentions, withoutMentions } from '../mentions';
+import { followStateFor } from '../follow-state';
 
 type AnnouncementCard = Awaited<ReturnType<MarketplaceService['projectAnnouncementReference']>>;
 
 /**
  * The community's sections, as post purposes.
  *
- * A question is talk, not an opportunity; a service announcement is on offer,
- * the same as an open project or a live job. Every purpose belongs to exactly
- * one section, so the three together are the whole feed.
+ * One for each side of the community: Showcase is people offering, with their
+ * work and their services, and Opportunities is people asking, with open
+ * projects and live jobs. Services used to sit with the asking side, so someone
+ * advertising and someone hiring shared a tab. General posts and questions have
+ * no section: they are on Home, which shows every purpose.
  */
 const SECTION_PURPOSES: Record<NonNullable<ListPostsQueryDto['section']>, PostPurpose[]> = {
-  discussion: [PostPurpose.GENERAL, PostPurpose.QUESTION],
-  showcase: [PostPurpose.SHOWCASE],
-  opportunity: [PostPurpose.OPPORTUNITY, PostPurpose.SERVICE_ANNOUNCEMENT],
+  showcase: [PostPurpose.SHOWCASE, PostPurpose.SERVICE_ANNOUNCEMENT],
+  opportunity: [PostPurpose.OPPORTUNITY],
 };
 
 @Injectable()
@@ -100,7 +104,7 @@ export class PostsService {
     ]);
 
     const normalized = await this.withPolls(
-      await this.withIdentity(await this.addViewerFlags(posts, currentUserId)),
+      await this.withIdentity(await this.addViewerFlags(posts, currentUserId), currentUserId),
       currentUserId,
     );
 
@@ -161,7 +165,7 @@ export class PostsService {
       throw new NotFoundException('Post not found');
     }
 
-    const [normalized] = await this.withIdentity(await this.addViewerFlags([post], currentUser?.id));
+    const [normalized] = await this.withIdentity(await this.addViewerFlags([post], currentUser?.id), currentUser?.id);
 
     return {
       ...normalized,
@@ -180,9 +184,25 @@ export class PostsService {
   async companyVoiceFor(userId: string): Promise<{ id: string; name: string } | null> {
     const context = await this.companyContext.forUser(userId);
     if (!context) return null;
+    // Nobody speaks for a company whose page is taken down.
+    if (context.deactivatedAt) return null;
     return CompanyContextService.canManageMembers(context.role)
       ? { id: context.companyId, name: context.companyName }
       : null;
+  }
+
+  /**
+   * The company voice as the composer's "Post as" menu shows it: with the
+   * page's logo, so the choice looks like what will be published.
+   */
+  async companyVoiceCardFor(userId: string): Promise<{ id: string; name: string; logoUrl: string | null } | null> {
+    const voice = await this.companyVoiceFor(userId);
+    if (!voice) return null;
+    const company = await this.prisma.company.findUnique({
+      where: { id: voice.id },
+      select: { page: { select: { companyLogo: true } } },
+    });
+    return { ...voice, logoUrl: publicImageUrl(company?.page?.companyLogo) };
   }
 
   private async selectedCompanyVoiceFor(userId: string, companyId?: string): Promise<{ id: string; name: string } | null> {
@@ -190,13 +210,16 @@ export class PostsService {
     if (typeof companyId !== 'string' || !isUUID(companyId)) throw new BadRequestException('Choose a valid company.');
     const membership = await this.prisma.companyMember.findUnique({
       where: { companyId_userId: { companyId, userId } },
-      select: { role: true, status: true, user: { select: { status: true } }, company: { select: { id: true, name: true } } },
+      select: { role: true, status: true, user: { select: { status: true } }, company: { select: { id: true, name: true, deactivatedAt: true } } },
     });
     if (!membership || membership.status !== CompanyMemberStatus.ACTIVE || membership.user.status !== 'ACTIVE' ||
       !CompanyContextService.canManageMembers(membership.role)) {
       throw new ForbiddenException('Only a current company owner or admin can publish in its name.');
     }
-    return membership.company;
+    if (membership.company.deactivatedAt) {
+      throw new ForbiddenException("This company's page is deactivated, so nobody can post in its name until an owner reactivates it.");
+    }
+    return { id: membership.company.id, name: membership.company.name };
   }
 
   async announcementOptions(userId: string, asCompany = false, selectedCompanyId?: string) {
@@ -226,7 +249,7 @@ export class PostsService {
     const document = this.documentFor(userId, dto);
     this.assertPostContent(dto.content, dto.mediaUrls, !!document);
     if (dto.spaceId) await this.spaces.assertPostable(dto.spaceId);
-    this.media.assertOwnMedia(dto.mediaUrls ?? []);
+    await this.media.assertPostMedia(userId, dto.mediaUrls ?? []);
     this.assertPurposeReference(dto.purpose ?? CommunityPostPurpose.GENERAL, dto.reference);
     if (dto.poll && new Set(dto.poll.options.map((o) => o.trim()).filter(Boolean)).size < 2) {
       throw new BadRequestException('A poll needs at least 2 different choices.');
@@ -248,7 +271,7 @@ export class PostsService {
     if (dto.spaceId) await this.spaces.assertPostable(dto.spaceId);
     // Refuses remote images: see CommunityMediaService for why an arbitrary
     // URL in a post is a tracking pixel with extra steps.
-    this.media.assertOwnMedia(dto.mediaUrls ?? []);
+    await this.media.assertPostMedia(userId, dto.mediaUrls ?? []);
 
     let companyId: string | null = null;
     if (dto.asCompany) {
@@ -402,7 +425,7 @@ export class PostsService {
     const nextContent = content !== undefined ? content : existing.content;
     const nextMediaUrls = dto.mediaUrls !== undefined ? dto.mediaUrls : existing.mediaUrls;
     this.assertPostContent(nextContent, nextMediaUrls, !!existing.documentUrl);
-    if (dto.mediaUrls !== undefined) this.media.assertOwnMedia(nextMediaUrls ?? []);
+    if (dto.mediaUrls !== undefined) await this.media.assertPostMedia(existing.authorId, nextMediaUrls ?? []);
     if (existing.documentUrl && ((dto.mediaUrls?.length ?? 0) > 0 || (dto.postType !== undefined && dto.postType !== CommunityPostType.DOCUMENT))) {
       throw new BadRequestException('A document is shared on its own, without pictures or video.');
     }
@@ -572,11 +595,7 @@ export class PostsService {
       where: { id: userId },
       select: { displayName: true, firstName: true, lastName: true },
     });
-    return (
-      user?.displayName?.trim() ||
-      [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim() ||
-      'Someone'
-    );
+    return personName(user, 'Someone');
   }
 
   async like(postId: string, userId: string) {
@@ -857,10 +876,10 @@ export class PostsService {
     return {
       space: { select: { id: true, slug: true, name: true } },
       // Present only on posts published in a company's name. The author is
-      // still included alongside it — see the byline in FeedPost.
-      company: { select: { id: true, name: true, profiles: {
-        where: { visibility: { not: 'private' } }, select: { id: true },
-        orderBy: { createdAt: 'asc' as const }, take: 1,
+      // still included alongside it — see the byline in FeedPost. The logo
+      // and link are the company's page (withCompanyLogos).
+      company: { select: { id: true, name: true, deactivatedAt: true, page: {
+        select: { id: true, companyLogo: true, visibility: true },
       } } },
       /**
        * The post being passed on, embedded.
@@ -888,9 +907,8 @@ export class PostsService {
           author: {
             select: { id: true, displayName: true, firstName: true, lastName: true, avatarUrl: true, role: true, createdAt: true },
           },
-          company: { select: { id: true, name: true, profiles: {
-            where: { visibility: { not: 'private' } }, select: { id: true },
-            orderBy: { createdAt: 'asc' as const }, take: 1,
+          company: { select: { id: true, name: true, deactivatedAt: true, page: {
+            select: { id: true, companyLogo: true, visibility: true },
           } } },
           space: { select: { id: true, slug: true, name: true } },
         },
@@ -945,10 +963,53 @@ export class PostsService {
     return posts.map((p) => ({ ...p, poll: byPost.get(p.id) ?? null }));
   }
 
-  private async withIdentity<T extends { authorId: string }>(posts: T[]) {
-    if (posts.length === 0) return posts as Array<T & { authorIdentity: AuthorIdentity }>;
-    const identities = await this.identity.resolve(posts.map((p) => p.authorId));
-    return posts.map((post) => ({
+  /**
+   * A company post's logo, from the page its byline links to, as `logoUrl`:
+   * a web address or null. The stored value never leaves as it is — older
+   * logos were saved inline, hundreds of kilobytes each, once per post.
+   */
+  private withCompanyLogos<T>(posts: T[]): T[] {
+    type Stored = {
+      id: string;
+      name: string;
+      deactivatedAt?: Date | null;
+      page?: { id: string; companyLogo?: string | null; visibility?: string | null } | null;
+    } | null | undefined;
+    // `profiles` keeps the shape clients read: the company's page, unless
+    // its page is private, in which case there is nowhere to link.
+    const shape = (company: Stored) => {
+      if (!company) return company;
+      // A private or deactivated page refuses visitors: nothing to link to.
+      const page = company.page && company.page.visibility !== 'private' && !company.deactivatedAt ? company.page : null;
+      return {
+        id: company.id,
+        name: company.name,
+        profiles: page ? [{ id: page.id }] : [],
+        logoUrl: publicImageUrl(page?.companyLogo),
+      };
+    };
+    return posts.map((post) => {
+      const record = post as T & { company?: Stored; resharedFrom?: ({ company?: Stored } & Record<string, unknown>) | null };
+      return {
+        ...record,
+        ...('company' in record ? { company: shape(record.company) } : {}),
+        ...(record.resharedFrom ? { resharedFrom: { ...record.resharedFrom, company: shape(record.resharedFrom.company) } } : {}),
+      } as T;
+    });
+  }
+
+  /**
+   * Who wrote each post, and whether the viewer follows its company or author
+   * — looked up side by side, so the follow state costs the feed no extra
+   * round trip.
+   */
+  private async withIdentity<T extends { authorId: string; company?: unknown }>(posts: T[], viewerId?: string) {
+    if (posts.length === 0) return posts as Array<T & { authorIdentity: AuthorIdentity; companyFollow: null; authorFollow: null }>;
+    const [identities, followed] = await Promise.all([
+      this.identity.resolve(posts.map((p) => p.authorId)),
+      followStateFor(this.prisma, posts, viewerId),
+    ]);
+    return followed.map((post) => ({
       ...post,
       authorIdentity: identities.get(post.authorId)!,
     }));
@@ -960,7 +1021,7 @@ export class PostsService {
   ): Promise<Array<T & { likedByMe: boolean; bookmarkedByMe: boolean; canEdit: boolean; canComment: boolean; linkedRecord: AnnouncementCard; linkedRecordUnavailable: boolean }>> {
     // A live reshare may outlast its removed source. Retain the sharer's words,
     // but do not serialize the removed original into any ordinary read payload.
-    const visiblePosts = await this.withLinkedRecords(posts.map((post) => {
+    const visiblePosts = await this.withLinkedRecords(this.withCompanyLogos(posts).map((post) => {
       const source = (post as T & { resharedFrom?: { removedAt?: Date | null } }).resharedFrom;
       return source?.removedAt ? { ...post, resharedFrom: null } : post;
     }));

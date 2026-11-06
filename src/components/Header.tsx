@@ -20,12 +20,12 @@ const Header = () => {
     // create a company page — for everyone else. Freelancer accounts keep
     // their own side for now.
     const side = accountSide(user);
+    // Someone who acts for a company reaches its dashboard from the profile
+    // menu's company section, so the header carries no second link to it.
     const employerLink =
-      side === "provider"
+      side === "provider" || actsForCompany(user)
         ? null
-        : actsForCompany(user)
-          ? { to: "/employers/dashboard", label: "Company dashboard" }
-          : { to: "/employers", label: "For Employers" };
+        : { to: "/employers", label: "For Employers" };
    
   const [opened, { open, close }] = useDisclosure(false);
    
@@ -35,8 +35,11 @@ const Header = () => {
 
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 w-full bg-card border-b border-border sm:px-6 md:px-8">
-      <div className="container mx-auto px-4 md:px-6">
+    <header className="fixed top-0 left-0 right-0 z-50 w-full bg-card border-b border-border">
+      {/* Full width: the logo and the account menu sit at the page's edges,
+          not inside the centred content column. The community tab has its
+          own centred bar (CommunityShell) and keeps it. */}
+      <div className="w-full px-4 sm:px-6 lg:px-8">
         <div className="flex h-16 items-center justify-between">
           <div className="flex items-center gap-4 ">
           <Link to="/" className="flex items-center gap-2 text-primary font-display font-bold text-xl">
@@ -48,12 +51,13 @@ const Header = () => {
             <Link to="/jobs" className="nav-link text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
               Find Jobs
             </Link>
+            {/* The resume matcher is reached from Find Jobs, as its "Match my
+                resume" tab, rather than from here. */}
             <Link to="/companies" className="nav-link text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
               Companies
             </Link>
-            <Link to="/providers" target={COMMUNITY_TAB} className="nav-link text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Professionals
-            </Link>
+            {/* Professionals live in the community (Marketplace → Professionals),
+                so the main nav reaches them through Community alone. */}
             <Link to="/community" target={COMMUNITY_TAB} className="nav-link text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
               Community
             </Link>
@@ -139,11 +143,6 @@ const Header = () => {
               </Link>
             </div>
 
-            <div className="border-b border-border pb-3">
-              <Link to="/providers" target={COMMUNITY_TAB} onClick={close} className="nav-link text-sm text-muted-foreground hover:text-foreground">
-                Find professionals
-              </Link>
-            </div>
             <div className="border-b border-border pb-3">
               <Link to="/community" target={COMMUNITY_TAB} onClick={close} className="nav-link text-sm text-muted-foreground hover:text-foreground">
                 Community

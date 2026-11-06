@@ -4,6 +4,7 @@ import { Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PIPELINE_STAGE_LABELS, stageFromApplicationStatus } from '../common/pipeline-stage';
 import { CompanyContextService } from '../company/company-context.service';
+import { profileShownFor, profilesShownFor } from '../company/company-page';
 import { AiService } from '../services/ai/ai.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SCREEN_VIDEO_BUCKET, StorageService } from '../storage/storage.service';
@@ -1056,16 +1057,14 @@ export class AiScreenService {
     return { strong_yes: 'Strong yes', yes: 'Yes', maybe: 'Maybe', no: 'No' }[r] ?? r;
   }
 
+  /** The company each employer screens for: its page's name. */
   private async companiesFor(employerIds: string[]): Promise<Map<string, string>> {
-    const profiles = await this.prisma.employerProfile.findMany({
-      where: { userId: { in: [...new Set(employerIds)] } },
-      select: { userId: true, companyName: true },
-    });
-    return new Map(profiles.map((p) => [p.userId, p.companyName?.trim() || 'An employer']));
+    const pages = await profilesShownFor(this.prisma, employerIds, { companyName: true });
+    return new Map([...pages].map(([userId, p]) => [userId, p.companyName?.trim() || 'An employer']));
   }
 
   private async employerCompany(userId: string): Promise<string> {
-    const emp = await this.prisma.employerProfile.findUnique({ where: { userId }, select: { companyName: true } });
-    return emp?.companyName?.trim() || 'An employer';
+    const page = await profileShownFor(this.prisma, userId, { companyName: true });
+    return page?.companyName?.trim() || 'An employer';
   }
 }

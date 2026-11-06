@@ -2,13 +2,14 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useMatch, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import {
-  AlertTriangle, Bookmark, BriefcaseBusiness, Heart, Layers, MessagesSquare, PenSquare, Search,
-  Sparkles, User as UserIcon, UserCheck,
+  AlertTriangle, Bookmark, BriefcaseBusiness, Heart, Layers, MessagesSquare, PenSquare, Presentation,
+  Search, User as UserIcon, UserCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
+import { useViewingAs } from "@/hooks/useViewingAs";
 import { PostComposer } from "./PostComposer";
 import { FeedPost } from "./FeedPost";
 import { SpaceView } from "./SpaceView";
@@ -21,7 +22,7 @@ import { PostListSkeleton } from "./skeletons";
 import { TidesView } from "@/components/community/tides/TidesView";
 import { CommunityRightRail } from "@/components/community/shell/CommunityRightRail";
 import {
-  VIEW_COPY, isPersonalView, isSectionView, parseView, type FeedViewId,
+  VIEW_COPY, isPersonalView, isSectionView, parseView, startingPurpose, type FeedViewId,
 } from "@/components/community/shell/feedViews";
 import { listPosts } from "@/lib/api/community";
 
@@ -52,20 +53,15 @@ const EMPTY_STATES: Record<FeedViewId | "all", { icon: React.ElementType; title:
     title: "Nothing here yet",
     body: "This is a new community. The first posts set the tone — a question you have wanted answered is a good place to start.",
   },
-  discussion: {
-    icon: MessagesSquare,
-    title: "No discussions yet",
-    body: "Ask a question or start a conversation, and it lands here.",
-  },
   showcase: {
-    icon: Sparkles,
+    icon: Presentation,
     title: "Nothing showcased yet",
-    body: "Post something you made and choose Showcase as what it is for.",
+    body: "Show something you made or a service you offer, and clients can find you here.",
   },
   opportunity: {
     icon: BriefcaseBusiness,
     title: "No opportunities yet",
-    body: "Open projects, live jobs and services on offer collect here.",
+    body: "Open projects and live jobs collect here.",
   },
   following: {
     icon: UserCheck,
@@ -124,6 +120,7 @@ export function CommunityFeed() {
   const { requireAuth } = useAuthModal();
   const [params, setParams] = useSearchParams();
   const { user, isLoading: authLoading } = useAuth();
+  const { view: side } = useViewingAs();
 
   // Signed out, a personal slice has nobody to belong to; the feed shows
   // everything rather than an empty "Saved" that is nobody's.
@@ -132,6 +129,8 @@ export function CommunityFeed() {
   const viewKey = view ?? "all";
 
   const [composeOpen, setComposeOpen] = useState(false);
+  // Opened as the company from the employer dashboard (?compose=company).
+  const [composeAsCompany, setComposeAsCompany] = useState(false);
   const [searchInput, setSearchInput] = useState("");
   const showingFeed = !slug && !searching && !postId && !browsingTides && !personId && !companyProfileId;
   // Home only: the personal slices are lists of your own things.
@@ -156,10 +155,13 @@ export function CommunityFeed() {
     };
   }, []);
 
-  // The bar's "Create" arrives as ?compose=1. Opened once, then taken out of
-  // the address so a reload or a back does not open it again.
+  // The bar's "Create" arrives as ?compose=1, and the employer dashboard's
+  // "Post as …" as ?compose=company. Opened once, then taken out of the
+  // address so a reload or a back does not open it again.
   useEffect(() => {
-    if (!showingFeed || params.get("compose") !== "1") return;
+    const compose = params.get("compose");
+    if (!showingFeed || (compose !== "1" && compose !== "company")) return;
+    setComposeAsCompany(compose === "company");
     setComposeOpen(true);
     const next = new URLSearchParams(params);
     next.delete("compose");
@@ -371,8 +373,13 @@ export function CommunityFeed() {
           <PostComposer
             spaceId={null}
             open={composeOpen}
-            onOpenChange={setComposeOpen}
+            onOpenChange={(open) => {
+              setComposeOpen(open);
+              if (!open) setComposeAsCompany(false);
+            }}
             showPrompt={false}
+            startPurpose={startingPurpose(view, side)}
+            startAsCompany={composeAsCompany}
           />
 
           {posts.isLoading && <PostListSkeleton />}

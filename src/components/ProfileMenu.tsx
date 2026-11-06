@@ -23,6 +23,7 @@ import {
   Save,
   Settings,
   BriefcaseBusiness,
+  Sparkles,
   UsersRound,
 } from "lucide-react"
 import { Link } from "react-router-dom"
@@ -31,18 +32,15 @@ import { accountSide, actsForCompany, companyLabel } from "@/lib/accountSide"
 
 /**
  * One account does everything, as on LinkedIn, so the menu has two parts:
- * your own pages, which everyone has, and the company you act for — or a way
- * to create a company page if you don't act for one yet. Freelancer accounts
- * keep their own menu for now, and an admin also gets the admin dashboard.
+ * your own pages, which everyone has, and the company you act for — one
+ * "Manage <company>" entry into its side of Coral, as LinkedIn's menu has
+ * one per page — or a way to create a company page if you don't act for one
+ * yet. Freelancer accounts keep their own menu for now, and an admin also
+ * gets the admin dashboard.
  */
-const COMPANY_ITEMS = [
-  { to: "/employers/dashboard", label: "Company dashboard", icon: LayoutDashboard },
-  { to: "/employers/chat", label: "Company chat", icon: MessageSquare },
-  { to: "/employers/notifications", label: "Company notifications", icon: BellIcon },
-  { to: "/employers/settings", label: "Company settings", icon: Settings },
-]
 const SEEKER_ITEMS = [
   { to: "/jobseeker/profile", label: "Profile", icon: CircleUserRound },
+  { to: "/resume-matcher", label: "AI Job Match", icon: Sparkles },
   { to: "/provider", label: "Offer services", icon: BriefcaseBusiness },
   { to: "/saved-jobs", label: "Saved Jobs", icon: Save },
   { to: "/jobseeker/chat", label: "Chat", icon: MessageSquare },
@@ -112,19 +110,12 @@ const ProfileMenu = () => {
           <>
             <DropdownMenuSeparator />
             {forCompany ? (
-              <DropdownMenuGroup>
-                <DropdownMenuLabel className="truncate text-xs font-medium text-muted-foreground">
-                  {companyLabel(user)}
-                </DropdownMenuLabel>
-                {COMPANY_ITEMS.map(({ to, label, icon: Icon }) => (
-                  <DropdownMenuItem asChild key={to}>
-                    <Link to={to} className="flex items-center">
-                      <Icon className="mr-2 h-4 w-4" size={14} />
-                      {label}
-                    </Link>
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuGroup>
+              <DropdownMenuItem asChild>
+                <Link to="/employers/dashboard" className="flex min-w-0 items-center">
+                  <Building2 className="mr-2 h-4 w-4 shrink-0" size={14} />
+                  <span className="truncate">Manage {companyLabel(user)}</span>
+                </Link>
+              </DropdownMenuItem>
             ) : (
               <DropdownMenuItem asChild>
                 <Link to="/employers/onboarding" className="flex items-center">

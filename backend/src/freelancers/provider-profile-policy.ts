@@ -1,4 +1,7 @@
-export const PROVIDER_CATEGORIES = ['design', 'marketing', 'software'] as const;
+import { WORK_CATEGORY_VALUES } from '../common/work-categories';
+
+/** The same list as service listings and project briefs: common/work-categories.ts. */
+export const PROVIDER_CATEGORIES = WORK_CATEGORY_VALUES;
 export const PROVIDER_WORK_PREFERENCES = ['contract', 'project', 'consulting'] as const;
 export const PROVIDER_AVAILABILITY = ['available', 'limited', 'unavailable'] as const;
 

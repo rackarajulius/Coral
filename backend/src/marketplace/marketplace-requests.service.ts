@@ -7,6 +7,7 @@ import { MarketplaceService } from './marketplace.service';
 import { MarketplaceActivityService } from './marketplace-activity.service';
 import { ListingKind, safeWorkUrl } from './marketplace-policy';
 import { CompletedWorkSettingsDto, CreateMarketplaceRequestDto, MarketplaceMessageDto, MarketplaceMessageQueryDto, MarketplaceRequestQueryDto, MarketplaceRequestReportDto, REQUEST_REPORT_REASONS } from './dto/marketplace-requests.dto';
+import { personName } from '../common/person-name';
 
 type Database = Prisma.TransactionClient | PrismaService;
 const PERSON = { id: true, displayName: true, firstName: true, lastName: true, status: true } satisfies Prisma.UserSelect;
@@ -130,7 +131,7 @@ export class MarketplaceRequestsService {
     const readAt = requester ? record.requesterLastReadAt : record.recipientLastReadAt;
     const unreadMessages = await database.marketplaceMessage.count({ where: { requestId: record.id, senderId: { not: userId }, ...(readAt ? { createdAt: { gt: readAt } } : {}) } });
     const initialUnread = !requester && (!readAt || readAt < record.createdAt) ? 1 : 0;
-    const person = (value: RequestRecord['requester']) => ({ id: value.id, displayName: value.displayName?.trim() || [value.firstName, value.lastName].filter(Boolean).join(' ') || 'Coral member' });
+    const person = (value: RequestRecord['requester']) => ({ id: value.id, displayName: personName(value, 'Coral member') });
     const work = record.completedWork, sides = this.sides(record);
     const completable = record.status === 'accepted' && !sides.providerCompanyId && communication;
     return {
@@ -209,7 +210,9 @@ export class MarketplaceRequestsService {
     return { data: await Promise.all(records.map(record => this.serialize(this.prisma, record, userId, false))), meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };
   }
   private async accepted(tx: Prisma.TransactionClient, record: RequestRecord, actorId: string, notify: boolean) {
-    const updated = await tx.marketplaceRequest.update({ where: { id: record.id }, data: { status: 'accepted', acceptedAt: new Date() }, include: REQUEST_INCLUDE });
+    // Only the recipient accepts, so accepting is their first answer unless they already gave one.
+    const now = new Date();
+    const updated = await tx.marketplaceRequest.update({ where: { id: record.id }, data: { status: 'accepted', acceptedAt: now, recipientRespondedAt: record.recipientRespondedAt ?? now }, include: REQUEST_INCLUDE });
     const eventId = await this.activity.record(tx, { type: 'marketplace_request_accepted', entityType: this.entityType(record.kind), entityId: this.listingId(record), actorId, companyId: record.recipientCompanyId ?? undefined, requestId: record.id, source: record.source, postId: record.postId ?? undefined, dedupeKey: `request:${record.id}:accepted` });
     if (notify) await this.activity.notify(tx, eventId, record.id, record.requesterId);
     return updated;
@@ -231,7 +234,9 @@ export class MarketplaceRequestsService {
       if (record.status === next) return this.serialize(tx, record, userId, true);
       if (action !== 'block' && (action === 'decline' ? record.status !== 'pending' : !['pending', 'accepted'].includes(record.status))) throw new ConflictException('This request cannot change to that state');
       if (action === 'block') await tx.marketplaceBlock.upsert({ where: { blockerId_blockedId: { blockerId: userId, blockedId: requester ? record.recipientId : record.requesterId } }, create: { blockerId: userId, blockedId: requester ? record.recipientId : record.requesterId }, update: {} });
-      const updated = await tx.marketplaceRequest.update({ where: { id }, data: { status: next }, include: REQUEST_INCLUDE });
+      // Declining is an answer; withdrawing or blocking is not.
+      const answered = action === 'decline' && !record.recipientRespondedAt ? { recipientRespondedAt: new Date() } : {};
+      const updated = await tx.marketplaceRequest.update({ where: { id }, data: { status: next, ...answered }, include: REQUEST_INCLUDE });
       const eventId = await this.activity.record(tx, { type: `marketplace_request_${next}`, entityType: this.entityType(record.kind), entityId: this.listingId(record), actorId: userId, requestId: id, source: record.source, dedupeKey: `request:${id}:${next}` });
       if (action !== 'block') await this.activity.notify(tx, eventId, id, requester ? record.recipientId : record.requesterId);
       return this.serialize(tx, updated, userId, true);
@@ -255,7 +260,8 @@ export class MarketplaceRequestsService {
       if (record.status === 'pending') record = await this.accepted(tx, record, userId, false);
       const sent = await tx.marketplaceMessage.create({ data: { requestId: id, senderId: userId, body, idempotencyKey: dto.idempotencyKey, payloadHash } });
       const firstRecipientReply = userId === record.recipientId && !record.firstRecipientReplyAt;
-      await tx.marketplaceRequest.update({ where: { id }, data: { ...(firstRecipientReply ? { firstRecipientReplyAt: sent.createdAt } : {}), [userId === record.requesterId ? 'requesterLastReadAt' : 'recipientLastReadAt']: sent.createdAt } });
+      const firstAnswer = userId === record.recipientId && !record.recipientRespondedAt;
+      await tx.marketplaceRequest.update({ where: { id }, data: { ...(firstRecipientReply ? { firstRecipientReplyAt: sent.createdAt } : {}), ...(firstAnswer ? { recipientRespondedAt: sent.createdAt } : {}), [userId === record.requesterId ? 'requesterLastReadAt' : 'recipientLastReadAt']: sent.createdAt } });
       if (firstRecipientReply) await this.activity.record(tx, { type: 'marketplace_recipient_replied', entityType: this.entityType(record.kind), entityId: this.listingId(record), actorId: userId, companyId: record.recipientCompanyId ?? undefined, requestId: id, source: record.source, postId: record.postId ?? undefined, dedupeKey: `request:${id}:first-recipient-reply` });
       const eventId = await this.activity.record(tx, { type: 'marketplace_message_sent', entityType: this.entityType(record.kind), entityId: this.listingId(record), actorId: userId, companyId: userId === record.requesterId ? record.requesterCompanyId ?? undefined : record.recipientCompanyId ?? undefined, requestId: id, source: record.source, dedupeKey: `message:${sent.id}` });
       await this.activity.notify(tx, eventId, id, userId === record.requesterId ? record.recipientId : record.requesterId);

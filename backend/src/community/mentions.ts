@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { personName } from '../common/person-name';
 import { HIDDEN_STATUSES } from './people-follow.service';
+import { IS_LIVE_PAGE } from '../company/company-page';
 
 /** A picture fit to send in a list: a web address, never an inline data URI. */
 function webImage(value: string | null | undefined): string | null {
@@ -305,6 +306,8 @@ export async function suggestMentions(db: MentionReader, viewerId: string, query
       where: {
         AND: [
           { visibility: { not: 'private' } },
+          // A company's page, never a member's copy of it.
+          IS_LIVE_PAGE,
           {
             OR: [
               { visibility: 'public' },

@@ -1,4 +1,5 @@
-import { IsBoolean, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { COMPANY_TYPES } from '../../company/company-facts';
 
 export class SaveCompanyStepDto {
   @IsString()
@@ -15,6 +16,14 @@ export class SaveCompanyStepDto {
   @IsString()
   @MaxLength(50)
   companySize?: string;
+
+  /**
+   * Organization type, as on LinkedIn's creation form, which requires it.
+   * Required here only when creating a page: older pages have none.
+   */
+  @IsOptional()
+  @IsIn(COMPANY_TYPES)
+  companyType?: string;
 
   @IsOptional()
   @IsString()
@@ -61,4 +70,14 @@ export class SaveCompanyStepDto {
   @IsOptional()
   @IsBoolean()
   authorizedRepresentative?: boolean;
+
+  /**
+   * The page's address, /company/<pageSlug>, as on LinkedIn's creation form.
+   * Normalized and checked server-side (company/page-slug.ts); made from the
+   * company name when left out.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  pageSlug?: string;
 }

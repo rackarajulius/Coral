@@ -115,9 +115,11 @@ export class CompanyEnrolmentService {
       // Only an admitted member's profile joins the company. A pending request
       // must leave the profile detached, or it would count toward a company
       // that has not accepted them.
+      // Never a row that is another company's page: moving it would move
+      // that company's page along with the person.
       if (input.status === CompanyMemberStatus.ACTIVE) {
         await tx.employerProfile.updateMany({
-          where: { userId: user.id },
+          where: { userId: user.id, pageOf: { is: null } },
           data: { companyId: input.companyId },
         });
       }

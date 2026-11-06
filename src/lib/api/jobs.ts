@@ -1,4 +1,5 @@
 import supabase from "@/lib/supabase";
+import { errorFromBody, isEntitlementError } from "@/lib/api/entitlementError";
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001/api/v1";
 
 export interface PublicJob {
@@ -20,6 +21,8 @@ export interface PublicJob {
 
 export interface ListJobsParams {
   postedById?: string;
+  /** A company page: jobs posted by anyone at that company. */
+  companyPageId?: string;
   limit?: number;
   sort?: "newest" | "oldest" | "salary_asc" | "salary_desc";
 }
@@ -39,6 +42,7 @@ interface ListJobsResponse {
 export async function listPublicJobs(params: ListJobsParams = {}): Promise<PublicJob[]> {
   const search = new URLSearchParams();
   if (params.postedById) search.set("postedById", params.postedById);
+  if (params.companyPageId) search.set("companyPageId", params.companyPageId);
   if (params.limit) search.set("limit", String(params.limit));
   if (params.sort) search.set("sort", params.sort);
 
@@ -131,7 +135,8 @@ export async function tailorResumeForJob(jobId: string): Promise<ResumeTailoring
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as { message?: string }).message || "Couldn't tailor your resume");
+    // A plan refusal comes back as an EntitlementError, for the upgrade dialog.
+    throw errorFromBody(body, "Couldn't tailor your resume");
   }
   return (await res.json()).data as ResumeTailoring;
 }
@@ -153,9 +158,19 @@ export interface CompanyResearch {
   sources: { title: string; url: string }[];
 }
 
-/** What this company is like, summarised from real web sources (cited). */
+/**
+ * What this company is like, summarised from real web sources (cited).
+ * Premium, so it needs a session; a plan refusal throws an EntitlementError,
+ * and any other failure is null.
+ */
 export async function getCompanyResearch(jobId: string): Promise<CompanyResearch | null> {
-  const res = await fetch(`${API_BASE_URL}/jobs/${jobId}/company-research`);
-  if (!res.ok) return null;
+  const headers = await authed();
+  if (!headers) throw new Error("Sign in to research this company");
+  const res = await fetch(`${API_BASE_URL}/jobs/${jobId}/company-research`, { headers });
+  if (!res.ok) {
+    const error = errorFromBody(await res.json().catch(() => ({})), "");
+    if (isEntitlementError(error)) throw error;
+    return null;
+  }
   return (await res.json()).data as CompanyResearch;
 }

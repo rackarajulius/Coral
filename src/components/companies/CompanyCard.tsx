@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Company } from "@/data/companies/mockCompanies";
 import { Link } from "react-router-dom";
+import { companyPageHref } from "@/lib/api/employerCompany";
 
 interface CompanyCardProps {
   company: Company;
@@ -66,7 +67,7 @@ const CompanyCard = ({ company }: CompanyCardProps) => {
           </Badge>
         </div>
         <Button asChild variant="default" size="sm" className="text-xs font-medium h-8 bg-orange-500 hover:bg-orange-600 text-white">
-          <Link to={`/company-profile/${company.id}`}>View</Link>
+          <Link to={companyPageHref(company)}>View</Link>
         </Button>
       </div>
     </Card>

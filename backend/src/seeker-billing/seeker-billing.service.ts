@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   Logger,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -15,6 +16,8 @@ import {
   SeekerMetric,
 } from '../seeker-entitlements/seeker-entitlements';
 import { seekerPriceId } from './seeker-prices';
+import { SeekerBillingWebhookService } from './seeker-billing-webhook.service';
+import { SeekerCancelDto } from './dto/seeker-billing.dto';
 
 export interface PremiumPrice {
   interval: BillingInterval;
@@ -50,6 +53,8 @@ export class SeekerBillingService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly stripe: StripeClient,
+    /** Writes what Stripe answers onto Premium at once — the webhook's own rules. */
+    @Optional() private readonly subscriptions?: SeekerBillingWebhookService,
   ) {}
 
   /** The caller's own subscription, as far as it exists. */
@@ -144,8 +149,22 @@ export class SeekerBillingService {
       'metadata[userId]': user.id,
       'subscription_data[metadata][kind]': 'jobseeker',
       'subscription_data[metadata][userId]': user.id,
-      'automatic_tax[enabled]': 'true',
       billing_address_collection: 'required',
+      /**
+       * Saves the address entered in Checkout back onto the customer, which
+       * `ensureCustomer` creates with only an email and a name. Without it
+       * Stripe refuses the session outright once automatic tax is on
+       * (`customer_tax_location_invalid`), and renewal invoices would carry no
+       * address even when it is off.
+       */
+      'customer_update[address]': 'auto',
+      /**
+       * Opt-in, and off by default — the same flag and the same reason as the
+       * employer checkout: without an origin address in Stripe Tax this does
+       * not degrade, it rejects every session. Hardcoding it on here is what
+       * made Premium checkout impossible to test while employer checkout worked.
+       */
+      ...(this.stripe.automaticTaxEnabled ? { 'automatic_tax[enabled]': 'true' } : {}),
     });
 
     if (!session.url) {
@@ -171,6 +190,92 @@ export class SeekerBillingService {
       throw new ServiceUnavailableException('Stripe did not return a portal URL.');
     }
     return { url: session.url };
+  }
+
+  /**
+   * Cancels Premium from the app.
+   *
+   * At the end of the period already paid for, as Stripe's own portal does:
+   * Premium stays on until then, nothing more is charged, and Keep Premium
+   * undoes it until that date. Asking twice changes nothing. The reason, if
+   * one is given, goes to Stripe with the cancellation rather than into a
+   * table of ours.
+   *
+   * A subscription Stripe has stopped collecting on (unpaid) has no paid
+   * period left to run out, so it ends now; Premium is already off.
+   */
+  async cancel(user: User, dto: SeekerCancelDto) {
+    const row = await this.prisma.userSubscription.findUnique({ where: { userId: user.id } });
+    if (!row?.stripeSubscriptionId || !LIVE.has(row.status)) {
+      throw new BadRequestException('There is no Premium subscription to cancel.');
+    }
+    if (row.cancelAtPeriodEnd) return this.subscription(user);
+
+    const id = encodeURIComponent(row.stripeSubscriptionId);
+    const unpaid = row.status === SubscriptionStatus.PAST_DUE && !row.stripeEntitled;
+    const comment = dto.comment?.trim();
+    const sub = unpaid
+      ? await this.stripe.delete<Record<string, unknown>>(`/subscriptions/${id}`)
+      : await this.stripe.post<Record<string, unknown>>(`/subscriptions/${id}`, {
+          cancel_at_period_end: 'true',
+          ...(dto.reason ? { 'cancellation_details[feedback]': dto.reason } : {}),
+          ...(comment ? { 'cancellation_details[comment]': comment } : {}),
+        });
+    return this.afterChange(user, sub);
+  }
+
+  /** Undoes a cancellation that hasn't taken effect yet: Premium renews as before. */
+  async keep(user: User) {
+    const row = await this.prisma.userSubscription.findUnique({ where: { userId: user.id } });
+    if (!row?.stripeSubscriptionId || !row.cancelAtPeriodEnd || !LIVE.has(row.status)) {
+      throw new BadRequestException('Premium is not set to end.');
+    }
+    if (row.currentPeriodEnd && row.currentPeriodEnd.getTime() <= Date.now()) {
+      throw new BadRequestException('Premium has already ended. You can start it again from the Premium page.');
+    }
+    const sub = await this.stripe.post<Record<string, unknown>>(
+      `/subscriptions/${encodeURIComponent(row.stripeSubscriptionId)}`,
+      { cancel_at_period_end: 'false' },
+    );
+    return this.afterChange(user, sub);
+  }
+
+  /**
+   * Asks Stripe what this person's Premium is, and applies it.
+   *
+   * For the moment someone comes back from checkout. Premium is granted by
+   * Stripe's webhook, which can be late — or, in local development without
+   * `stripe listen`, never arrive — and "payment went through, but Premium
+   * hasn't switched on" is the worst first minute a paying customer can have.
+   *
+   * Nothing is taken from the browser: only the caller's own Stripe customer
+   * is asked about, and what is applied is what Stripe says, by the webhook's
+   * rules. A live subscription wins over an ended one, the newest over older.
+   * Safe to repeat; the webhook, when it comes, changes nothing further.
+   */
+  async sync(user: User) {
+    const row = await this.prisma.userSubscription.findUnique({
+      where: { userId: user.id },
+      select: { stripeCustomerId: true },
+    });
+    if (!row?.stripeCustomerId || !this.stripe.configured || !this.subscriptions) return this.subscription(user);
+
+    const page = await this.stripe.get<{ data?: Array<Record<string, unknown>> }>(
+      `/subscriptions?customer=${encodeURIComponent(row.stripeCustomerId)}&status=all&limit=10`,
+    );
+    const live = new Set(['active', 'trialing', 'past_due', 'unpaid']);
+    const current = [...(page.data ?? [])].sort((a, b) =>
+      Number(live.has(String(b.status))) - Number(live.has(String(a.status))) ||
+      Number(b.created ?? 0) - Number(a.created ?? 0),
+    )[0];
+    if (!current) return this.subscription(user);
+    return this.afterChange(user, current);
+  }
+
+  /** What the page shows next, from what Stripe answered — not from the webhook that follows. */
+  private async afterChange(user: User, sub: Record<string, unknown>) {
+    const tier = this.subscriptions ? await this.subscriptions.apply(sub) : null;
+    return this.subscription(tier ? { ...user, subscriptionTier: tier } : user);
   }
 
   /* ------------------------------- helpers -------------------------------- */

@@ -29,9 +29,29 @@ function harness() {
     getAnnouncementOptions: jest.fn().mockResolvedValue({ services: [card], projects: [], jobs: [] }),
   };
   const context = { forUser: jest.fn().mockResolvedValue(null) };
-  const service = new PostsService(cast(prisma), cast({ assertPostable: jest.fn(), joinOnPost: jest.fn() }), cast({ resolve: jest.fn().mockResolvedValue(new Map()) }), cast({ assertOwnMedia: jest.fn() }), cast({}), cast({ firstUrl: jest.fn().mockReturnValue(null) }), cast(context), cast({}), cast(marketplace));
+  const service = new PostsService(cast(prisma), cast({ assertPostable: jest.fn(), joinOnPost: jest.fn() }), cast({ resolve: jest.fn().mockResolvedValue(new Map()) }), cast({ assertOwnMedia: jest.fn(), assertPostMedia: jest.fn() }), cast({}), cast({ firstUrl: jest.fn().mockReturnValue(null) }), cast(context), cast({}), cast(marketplace));
   return { service, prisma, record, marketplace, context };
 }
+
+describe('the two sides of the community', () => {
+  const purposesIn = async (section?: 'showcase' | 'opportunity') => {
+    const { service, prisma } = harness();
+    await service.list({ section });
+    return prisma.post.findMany.mock.calls[0][0].where.purpose;
+  };
+
+  it('puts services with the work people show, so everyone offering is in Showcase', async () => {
+    expect(await purposesIn('showcase')).toEqual({ in: [PostPurpose.SHOWCASE, PostPurpose.SERVICE_ANNOUNCEMENT] });
+  });
+
+  it('keeps Opportunities to people asking: open projects and live jobs', async () => {
+    expect(await purposesIn('opportunity')).toEqual({ in: [PostPurpose.OPPORTUNITY] });
+  });
+
+  it('shows every purpose on Home', async () => {
+    expect(await purposesIn()).toBeUndefined();
+  });
+});
 
 describe('Phase 2 linked community participation', () => {
   it('preserves legacy and ordinary posts, including format, while listing writes are disabled', async () => {

@@ -24,11 +24,12 @@ import { TrackEventDto } from './dto/track-event.dto';
 export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}
 
+  /** `?side=company`: the company dashboard's figures, whatever the account's role. */
   @Get('me')
-  async getMyAnalytics(@CurrentUser() user: User) {
+  async getMyAnalytics(@CurrentUser() user: User, @Query('side') side?: string) {
     return {
       success: true,
-      data: await this.analyticsService.getMyAnalytics(user),
+      data: await this.analyticsService.getMyAnalytics(user, side),
     };
   }
 

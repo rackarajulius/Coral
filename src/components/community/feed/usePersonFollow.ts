@@ -12,9 +12,11 @@ import { getPersonFollow, setPersonFollow, type PersonFollowStatus } from "@/lib
  * button change at once and are put back if the server refuses.
  *
  * `enabled` lets a caller wait (e.g. a card that has not opened) instead of
- * asking for every author on the page up front.
+ * asking for every author on the page up front. `initial` is the status when
+ * it came with what is on screen (a feed post): it fills an empty cache, so
+ * nothing is fetched for a minute.
  */
-export function usePersonFollow(personId: string, enabled = true) {
+export function usePersonFollow(personId: string, enabled = true, initial?: PersonFollowStatus | null) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   // Per viewer as well as per person: "following" is a statement about you.
@@ -26,6 +28,9 @@ export function usePersonFollow(personId: string, enabled = true) {
     enabled: enabled && !!personId,
     staleTime: 60_000,
     retry: false,
+    // Only used when nothing is cached: a follow made a moment ago wins.
+    initialData: initial ?? undefined,
+    initialDataUpdatedAt: initial ? Date.now() : undefined,
   });
 
   const mutation = useMutation({

@@ -14,6 +14,8 @@ export interface CompanyContext {
    * so "everything my company can see" is `IN (memberUserIds)`.
    */
   memberUserIds: string[];
+  /** Set while the company has taken its page down (company-status.service.ts). */
+  deactivatedAt?: Date | null;
 }
 
 /**
@@ -52,7 +54,7 @@ export class CompanyContextService {
   async membershipFor(userId: string) {
     return this.prisma.companyMember.findFirst({
       where: { userId, status: { not: CompanyMemberStatus.PENDING } },
-      include: { company: { select: { id: true, name: true } } },
+      include: { company: { select: { id: true, name: true, deactivatedAt: true } } },
       orderBy: { createdAt: 'asc' },
     });
   }
@@ -75,6 +77,7 @@ export class CompanyContextService {
       companyName: membership.company.name,
       role: membership.role,
       memberUserIds: members.map((m) => m.userId),
+      deactivatedAt: membership.company.deactivatedAt ?? null,
     };
   }
 

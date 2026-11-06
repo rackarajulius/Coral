@@ -1,21 +1,14 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, BarChart3, CalendarClock, Clock, FileText, ImageIcon, Loader2, Pencil, Trash2 } from "lucide-react";
-import { toast } from "sonner";
+import { useQuery } from "@tanstack/react-query";
+import { BarChart3, CalendarClock, Loader2, PenSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/contexts/AuthContext";
-import {
-  cancelScheduledPost, getCompanyInsights, listScheduledPosts, updateScheduledPost,
-  type CompanyInsights, type ScheduledPost,
-} from "@/lib/api/community";
-import { plainText, toDisplay, toStored, type Mention } from "@/lib/mentions";
-import { MentionField } from "./MentionField";
+import { getCompanyInsights, getCompanyVoice, listScheduledPosts, type CompanyInsights } from "@/lib/api/community";
+import { PostComposer } from "./PostComposer";
 import { ViewsChart } from "./ViewsChart";
-import { defaultScheduleTime, formatWhen, localZone, scheduleProblem, toLocalInput, SCHEDULE_MAX_MS, SCHEDULE_MIN_MS } from "./schedule";
+import { QueuedPost } from "./ScheduledQueue";
 
 /**
  * What a company page's owners and admins see on it, and nobody else: how its
@@ -40,6 +33,17 @@ export function CompanyPageAdmin({ companyId, companyName }: { companyId: string
     enabled: !!insights.data,
     retry: false,
   });
+  // The composer posts as the one company you speak for; offered here only
+  // when that is this page, so it never opens in another company's name.
+  const companyVoice = useQuery({
+    queryKey: ["community-company-voice", user?.id],
+    queryFn: getCompanyVoice,
+    enabled: !!insights.data,
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
+  const canPostHere = companyVoice.data?.id === companyId;
+  const [composing, setComposing] = useState(false);
 
   if (!insights.data) return null;
   const queue = scheduled.data ?? [];
@@ -47,10 +51,20 @@ export function CompanyPageAdmin({ companyId, companyName }: { companyId: string
 
   return (
     <section aria-labelledby="page-admin" className="mb-5 rounded-2xl border border-border bg-card p-5">
-      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-        <h2 id="page-admin" className="text-sm font-semibold">Your page</h2>
-        <p className="text-xs text-muted-foreground">Only {companyName}'s owners and admins see this.</p>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 id="page-admin" className="text-sm font-semibold">Your page</h2>
+          <p className="text-xs text-muted-foreground">Only {companyName}'s owners and admins see this.</p>
+        </div>
+        {canPostHere && (
+          <Button size="sm" className="gap-1.5 rounded-full" onClick={() => setComposing(true)}>
+            <PenSquare className="h-3.5 w-3.5" aria-hidden="true" /> Post as {companyName}
+          </Button>
+        )}
       </div>
+      {canPostHere && (
+        <PostComposer spaceId={null} open={composing} onOpenChange={setComposing} showPrompt={false} startAsCompany />
+      )}
       <Tabs defaultValue="analytics">
         <TabsList className="h-9 rounded-full">
           <TabsTrigger value="analytics" className="gap-1.5 rounded-full text-xs">
@@ -140,175 +154,6 @@ function Tile({ label, value, note }: { label: string; value: number; note?: str
       <dd className="mt-0.5 text-lg font-semibold tabular-nums">{value.toLocaleString()}</dd>
       {note && <dd className="text-[11px] text-muted-foreground">{note}</dd>}
     </div>
-  );
-}
-
-/** One post in the queue: when, by whom, what — and change, retry or cancel. */
-function QueuedPost({ item }: { item: ScheduledPost }) {
-  const queryClient = useQueryClient();
-  const refresh = () => void queryClient.invalidateQueries({ queryKey: ["scheduled-posts", item.companyId] });
-  const [timeOpen, setTimeOpen] = useState(false);
-  const [at, setAt] = useState(() => (item.status === "FAILED" ? defaultScheduleTime() : toLocalInput(new Date(item.publishAt))));
-  const [editing, setEditing] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-
-  const reschedule = useMutation({
-    mutationFn: () => updateScheduledPost(item.id, { publishAt: new Date(at).toISOString() }),
-    onSuccess: (updated) => {
-      toast.success(`Scheduled for ${formatWhen(updated.publishAt)}`);
-      setTimeOpen(false);
-      refresh();
-    },
-    onError: (e) => toast.error((e as Error).message),
-  });
-  const cancel = useMutation({
-    mutationFn: () => cancelScheduledPost(item.id),
-    onSuccess: () => {
-      toast.success("Scheduled post cancelled");
-      refresh();
-    },
-    onError: (e) => toast.error((e as Error).message),
-  });
-
-  const words = plainText(item.content).trim();
-  const failed = item.status === "FAILED";
-  const publishing = item.status === "PUBLISHING";
-
-  return (
-    <li className="py-3">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-        <span className={failed ? "font-medium text-destructive" : "font-medium"}>
-          {failed ? "Not published" : publishing ? "Publishing now" : formatWhen(item.publishAt)}
-        </span>
-        <span className="text-muted-foreground">· by {item.author.name}</span>
-      </div>
-      {words && <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-sm">{words}</p>}
-      <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
-        {item.document && (
-          <span className="inline-flex items-center gap-1">
-            <FileText className="h-3.5 w-3.5" aria-hidden="true" />
-            {item.document.title}{item.document.pages ? ` · ${item.document.pages} pages` : ""}
-          </span>
-        )}
-        {item.mediaUrls.length > 0 && (
-          <span className="inline-flex items-center gap-1">
-            <ImageIcon className="h-3.5 w-3.5" aria-hidden="true" />
-            {item.mediaUrls.length} {item.mediaUrls.length === 1 ? "attachment" : "attachments"}
-          </span>
-        )}
-        {item.poll && <span>Poll · {item.poll.options.length} choices</span>}
-      </div>
-      {failed && item.failureReason && (
-        <p className="mt-1.5 flex items-start gap-1.5 text-xs text-destructive">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          {item.failureReason}
-        </p>
-      )}
-
-      {!publishing && (
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <Popover open={timeOpen} onOpenChange={setTimeOpen}>
-            <PopoverTrigger asChild>
-              <Button size="sm" variant="outline" className="h-7 gap-1 rounded-full px-2.5 text-xs">
-                <Clock className="h-3.5 w-3.5" aria-hidden="true" />
-                {failed ? "Try again" : "Change time"}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent align="start" className="w-72 space-y-2 rounded-xl p-4">
-              <label htmlFor={`time-${item.id}`} className="text-sm font-medium">Publish on</label>
-              <input
-                id={`time-${item.id}`}
-                type="datetime-local"
-                value={at}
-                min={toLocalInput(new Date(Date.now() + SCHEDULE_MIN_MS))}
-                max={toLocalInput(new Date(Date.now() + SCHEDULE_MAX_MS))}
-                onChange={(e) => setAt(e.target.value)}
-                className="w-full rounded-lg border border-border bg-background px-2.5 py-2 text-sm outline-none focus:border-foreground/30"
-              />
-              <p className="text-[11px] text-muted-foreground">{scheduleProblem(at) ?? localZone()}</p>
-              <Button
-                size="sm"
-                className="w-full rounded-full"
-                onClick={() => reschedule.mutate()}
-                disabled={!!scheduleProblem(at) || reschedule.isPending}
-              >
-                {reschedule.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
-                Save time
-              </Button>
-            </PopoverContent>
-          </Popover>
-          {!failed && (
-            <Button size="sm" variant="ghost" className="h-7 gap-1 rounded-full px-2.5 text-xs" onClick={() => setEditing(true)}>
-              <Pencil className="h-3.5 w-3.5" aria-hidden="true" /> Edit words
-            </Button>
-          )}
-          {confirming ? (
-            <>
-              <span className="text-xs text-muted-foreground">Cancel this post?</span>
-              <Button size="sm" variant="destructive" className="h-7 rounded-full px-2.5 text-xs" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
-                {cancel.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
-                Yes, cancel it
-              </Button>
-              <Button size="sm" variant="ghost" className="h-7 rounded-full px-2.5 text-xs" onClick={() => setConfirming(false)}>
-                Keep it
-              </Button>
-            </>
-          ) : (
-            <Button size="sm" variant="ghost" className="h-7 gap-1 rounded-full px-2.5 text-xs text-muted-foreground hover:text-destructive" onClick={() => setConfirming(true)}>
-              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" /> Cancel
-            </Button>
-          )}
-        </div>
-      )}
-
-      {editing && <EditWords item={item} onClose={() => setEditing(false)} onSaved={refresh} />}
-    </li>
-  );
-}
-
-/** The words of a scheduled post, with the same "@" menu as the composer. */
-function EditWords({ item, onClose, onSaved }: { item: ScheduledPost; onClose: () => void; onSaved: () => void }) {
-  const [initial] = useState(() => toDisplay(item.content));
-  const [draft, setDraft] = useState(initial.text);
-  const [mentions, setMentions] = useState<Mention[]>(initial.mentions);
-  const save = useMutation({
-    mutationFn: () => updateScheduledPost(item.id, { content: toStored(draft.trim(), mentions) }),
-    onSuccess: () => {
-      toast.success("Scheduled post updated");
-      onSaved();
-      onClose();
-    },
-    onError: (e) => toast.error((e as Error).message),
-  });
-  const empty = !draft.trim() && !item.document && item.mediaUrls.length === 0;
-
-  return (
-    <Dialog open onOpenChange={(open) => !open && !save.isPending && onClose()}>
-      <DialogContent className="max-w-lg rounded-2xl">
-        <DialogHeader>
-          <DialogTitle>Edit scheduled post</DialogTitle>
-          <DialogDescription>Goes out {formatWhen(item.publishAt)}. Pictures and documents stay as they are.</DialogDescription>
-        </DialogHeader>
-        <MentionField
-          multiline
-          autoFocus
-          value={draft}
-          onValueChange={setDraft}
-          onMention={(m) => setMentions((all) => [...all, m])}
-          maxLength={5000}
-          rows={6}
-          aria-label="Scheduled post text"
-          className="w-full resize-y rounded-xl border border-border bg-background p-3 text-sm leading-relaxed outline-none focus:border-foreground/30"
-        />
-        <div className="flex justify-end gap-2">
-          <Button variant="outline" onClick={onClose} disabled={save.isPending}>Cancel</Button>
-          <Button onClick={() => save.mutate()} disabled={empty || save.isPending}>
-            {save.isPending && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
-            Save
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
   );
 }
 

@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { shareSession } from './sharedSession'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -20,6 +21,10 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     flowType: 'pkce'
   }
 })
+
+// One remembered session for every request on the page, rather than each
+// request taking the auth lock — see sharedSession.ts for the failure this ends.
+shareSession(supabase.auth)
 
 
 

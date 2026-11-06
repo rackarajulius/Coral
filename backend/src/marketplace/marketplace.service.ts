@@ -8,6 +8,7 @@ import { CATEGORIES, CURRENCIES, ListingReportDto, MarketplaceQueryDto } from '.
 import { assertListingMedia, defaults, ListingKind, ListingReference, normalizedLabels, ownListingMedia, PROJECT_FIELDS, publicServiceWhere, safeWorkUrl, SERVICE_FIELDS, validateFields, validateTransition } from './marketplace-policy';
 import { VideoPreviewService } from './video-preview.service';
 import { doneWorkFor } from './done-work';
+import { personName } from '../common/person-name';
 // Projects on a person's profile, not the project briefs this service also lists.
 import { PROJECT_ORDER as PROFILE_PROJECT_ORDER, PROJECT_SELECT as PROFILE_PROJECT_SELECT, publicProjects } from '../job-seekers/profile-projects';
 
@@ -101,6 +102,7 @@ export class MarketplaceService {
       ${query.country?.trim() ? Prisma.sql`AND lower(listing.country) = lower(${query.country.trim()})` : Prisma.empty}
       ${query.city?.trim() ? Prisma.sql`AND lower(listing.city) = lower(${query.city.trim()})` : Prisma.empty}
       ${kind === 'service' && query.availability ? Prisma.sql`AND listing.availability = ${query.availability}` : Prisma.empty}
+      ${query.ownerId ? Prisma.sql`AND listing.owner_user_id = ${query.ownerId} AND listing.company_id IS NULL` : Prisma.empty}
       ${pattern ? Prisma.sql`AND (listing.title ILIKE ${pattern} ESCAPE ${escape} OR listing.description ILIKE ${pattern} ESCAPE ${escape})` : Prisma.empty}
     `;
     const joins = Prisma.sql`FROM ${table} AS listing JOIN users AS account ON account.id = listing.owner_user_id
@@ -344,7 +346,7 @@ export class MarketplaceService {
     }));
   }
   private publicOwner(owner: RecordValue['owner']) {
-    return { id: owner.id, displayName: owner.displayName || `${owner.firstName ?? ''} ${owner.lastName ?? ''}`.trim() || 'Coral member', avatarUrl: safeWorkUrl(owner.avatarUrl), profileUrl: isPublicProviderReady(owner.freelancerProfile, owner) ? `/providers/${owner.id}` : null };
+    return { id: owner.id, displayName: personName(owner, 'Coral member'), avatarUrl: safeWorkUrl(owner.avatarUrl), profileUrl: isPublicProviderReady(owner.freelancerProfile, owner) ? `/providers/${owner.id}` : null };
   }
   private serialize(kind: ListingKind, record: RecordValue, managed = false) {
     const common = { id: record.id, title: record.title, description: record.description, category: record.category, skills: record.skills, workMode: record.workMode, country: record.country, city: record.city, currency: record.currency, status: record.status,

@@ -11,6 +11,7 @@ import { User } from '../../common/types/user.types';
 import { CreateCommentDto } from './dto/create-comment.dto';
 import { ListCommentsQueryDto } from './dto/list-comments-query.dto';
 import { UpdateCommentDto } from './dto/update-comment.dto';
+import { personName } from '../../common/person-name';
 import { assertMayComment } from '../comment-policy';
 import { announceMentions, plainText, resolveMentions } from '../mentions';
 
@@ -236,10 +237,7 @@ export class CommentsService {
       where: { id: input.commenterId },
       select: { displayName: true, firstName: true, lastName: true },
     });
-    const who =
-      actor?.displayName?.trim() ||
-      [actor?.firstName, actor?.lastName].filter(Boolean).join(' ').trim() ||
-      'Someone';
+    const who = personName(actor, 'Someone');
 
     const link = `/community/posts/${input.postId}`;
     const told = new Set<string>([input.commenterId]);

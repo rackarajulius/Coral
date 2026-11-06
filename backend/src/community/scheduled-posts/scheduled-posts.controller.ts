@@ -6,7 +6,10 @@ import { User } from '../../common/types/user.types';
 import { SchedulePostDto, UpdateScheduledPostDto } from './dto/scheduled-post.dto';
 import { ScheduledPostsService } from './scheduled-posts.service';
 
-/** Company posts written now and published later. Page owners and admins only. */
+/**
+ * Posts written now and published later: a company's, seen and changed by its
+ * page's owners and admins, or your own, seen and changed by you.
+ */
 @Controller('community/scheduled-posts')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ScheduledPostsController {
@@ -15,6 +18,11 @@ export class ScheduledPostsController {
   @Post()
   async schedule(@CurrentUser() user: User, @Body() dto: SchedulePostDto) {
     return { success: true, data: await this.scheduled.schedule(user.id, dto) };
+  }
+
+  @Get('mine')
+  async listMine(@CurrentUser() user: User) {
+    return { success: true, data: await this.scheduled.listMine(user.id) };
   }
 
   @Get('company/:companyId')

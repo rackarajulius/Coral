@@ -87,7 +87,7 @@ describe('Phase 0 community baseline: company voice and author authority', () =>
     const context = { forUser: jest.fn().mockResolvedValue(null) };
     const service = new PostsService(
       collaborator(prisma), collaborator(spaces), collaborator({ resolve: jest.fn().mockResolvedValue(new Map()) }),
-      collaborator({ assertOwnMedia: jest.fn() }), collaborator({}),
+      collaborator({ assertOwnMedia: jest.fn(), assertPostMedia: jest.fn() }), collaborator({}),
       collaborator({ firstUrl: jest.fn().mockReturnValue(null) }),
       collaborator(context), collaborator({}),
     );

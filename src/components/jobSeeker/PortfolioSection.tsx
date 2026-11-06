@@ -141,9 +141,9 @@ const PortfolioSection = () => {
       return;
     }
 
-    // Validate file size (max 5MB)
-    if (file.size > 5 * 1024 * 1024) {
-      setErrors(prev => ({ ...prev, image: 'Image must be less than 5MB' }));
+    // Resized before upload (lib/imageResize), so only the truly huge are refused.
+    if (file.size > 25 * 1024 * 1024) {
+      setErrors(prev => ({ ...prev, image: 'Image must be less than 25MB' }));
       return;
     }
 
@@ -486,7 +486,7 @@ const PortfolioSection = () => {
                     <>
                       <ImageIcon className="w-6 h-6" aria-hidden="true" />
                       <span className="text-xs">Click to upload image</span>
-                      <span className="text-xs text-gray-400">Max 5MB</span>
+                      <span className="text-xs text-gray-400">Max 25MB · resized for you</span>
                     </>
                   )}
                 </button>

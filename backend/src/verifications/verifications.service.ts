@@ -12,6 +12,7 @@ import { CreateVerificationDto } from './dto/create-verification.dto';
 import { ReviewVerificationDto } from './dto/review-verification.dto';
 import { VerificationsQueryDto } from './dto/verifications-query.dto';
 import { AuditLogService } from '../admin/audit-log.service';
+import { profileShownFor } from '../company/company-page';
 
 @Injectable()
 export class VerificationsService {
@@ -203,16 +204,18 @@ export class VerificationsService {
 
     // Approving a company verification is what actually lets an employer post
     // and contact candidates — the record alone changes nothing without this.
+    // It verifies the requester's company page, which every member hires
+    // under — not the requester's own row.
     if (
       dto.status === VerificationStatus.APPROVED &&
       verification.type === VerificationType.COMPANY
     ) {
-      await this.prisma.employerProfile
-        .update({
-          where: { userId: verification.userId },
-          data: { verificationStatus: 'verified' },
-        })
-        .catch(() => undefined);
+      const page = await profileShownFor(this.prisma, verification.userId, { id: true });
+      if (page) {
+        await this.prisma.employerProfile
+          .update({ where: { id: page.id }, data: { verificationStatus: 'verified' } })
+          .catch(() => undefined);
+      }
     }
 
     const requesterName =

@@ -1,14 +1,12 @@
 import supabase from "@/lib/supabase";
+import { personName } from "@/lib/personName";
+import type { PublicProject } from "@/lib/api/profileProjects";
+import type { DoneWorkSummary } from "@/lib/api/marketplace";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001/api/v1";
 
-export const PROVIDER_CATEGORIES = [
-  { value: "design", label: "Design" },
-  { value: "marketing", label: "Marketing" },
-  { value: "software", label: "Software" },
-] as const;
-
-export type ProviderCategory = (typeof PROVIDER_CATEGORIES)[number]["value"];
+/** A kind of work: one of the server's list (useWorkCategories), never written down here. */
+export type ProviderCategory = string;
 export type ProviderWorkPreference = "contract" | "project" | "consulting";
 
 export const PROVIDER_WORK_PREFERENCES: { value: ProviderWorkPreference; label: string }[] = [
@@ -45,6 +43,21 @@ export interface PublicProviderProfile {
   githubUrl: string | null;
   linkedinUrl: string | null;
   user: ProviderIdentity;
+  /** The Featured items from their profile; none when they've hidden it. */
+  featured?: {
+    id: string;
+    type: "project" | "video" | "document" | "design";
+    title: string;
+    description: string | null;
+    link: string | null;
+    imageUrl: string | null;
+  }[];
+  /** The projects from their profile; none when they've hidden it. */
+  projects?: PublicProject[];
+  /** Whether a visitor can open their full profile (experience, education). */
+  fullProfile?: boolean;
+  /** Work done through Coral, confirmed by both sides. */
+  doneWork?: DoneWorkSummary;
 }
 
 export interface OwnerProviderProfile extends PublicProviderProfile {
@@ -53,6 +66,8 @@ export interface OwnerProviderProfile extends PublicProviderProfile {
   publicPreviewEnabled: boolean;
   updatedAt?: string;
   readiness?: { ready: boolean; missingFields: string[] };
+  /** Where location searches find them, as read from the saved city and country; null when it couldn't be read. */
+  place?: { city: string | null; region: string | null; country: string } | null;
 }
 
 export interface UpdateProviderProfile {
@@ -78,8 +93,14 @@ export interface UpdateProviderProfile {
 
 export interface ProviderDirectoryResponse {
   items: PublicProviderProfile[];
-  nextCursor: string | null;
+  page: number;
+  nextPage: number | null;
+  /** Only when a location was asked for: how it was read, or null when it isn't a known place. */
+  place?: { kind: "city" | "region" | "country"; label: string } | null;
 }
+
+/** The deepest directory page the API serves; a search narrows past it. */
+export const MAX_PROVIDER_DIRECTORY_PAGE = 24;
 
 export class ProviderApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -132,25 +153,72 @@ export async function getPublicProviderProfile(userId: string, signal?: AbortSig
   return (await request<{ data: PublicProviderProfile }>(`/freelancers/${encodeURIComponent(userId)}`, { signal })).data;
 }
 
+/** How a provider replies to requests for their services, as Coral measured it. */
+export interface ProviderResponsiveness {
+  /** Whether there is enough to say anything at all. */
+  available: boolean;
+  /** Requests that count: answered, or a week old without an answer. */
+  considered: number;
+  replied: number;
+  /** Median hours from request to first answer; null until enough answers are timed. */
+  medianHoursToReply: number | null;
+  /** How many requests must count before clients are shown anything. */
+  needed: number;
+}
+
+/** A public provider's figures; null until there is enough to say. */
+export async function getProviderResponsiveness(userId: string, signal?: AbortSignal): Promise<ProviderResponsiveness | null> {
+  return (await request<{ data: ProviderResponsiveness | null }>(`/freelancers/${encodeURIComponent(userId)}/responsiveness`, { signal })).data;
+}
+
+/** The provider's own figures, including how far they are from being shown. */
+export async function getMyProviderResponsiveness(signal?: AbortSignal): Promise<ProviderResponsiveness> {
+  return (await request<{ data: ProviderResponsiveness }>("/freelancers/me/responsiveness", { signal })).data;
+}
+
+/** "within a day": the median, rounded up to words a client plans around. */
+export function replyWithin(hours: number): string {
+  if (hours <= 1) return "within an hour";
+  if (hours <= 24) return "within a day";
+  if (hours <= 72) return "within 3 days";
+  if (hours <= 168) return "within a week";
+  return "after more than a week";
+}
+
 export async function getProviderDirectory(
-  filters: { q?: string; category?: ProviderCategory; cursor?: string },
+  filters: { q?: string; category?: ProviderCategory; location?: string; remote?: boolean; page?: number },
   signal?: AbortSignal,
 ): Promise<ProviderDirectoryResponse> {
   const params = new URLSearchParams({ limit: "12" });
   if (filters.q) params.set("q", filters.q);
   if (filters.category) params.set("category", filters.category);
-  if (filters.cursor) params.set("cursor", filters.cursor);
+  if (filters.location) params.set("location", filters.location);
+  if (filters.remote) params.set("remote", "true");
+  if (filters.page && filters.page > 1) params.set("page", String(filters.page));
   return (await request<{ data: ProviderDirectoryResponse }>(`/freelancers?${params}`, { signal })).data;
 }
 
-export function providerName(profile: PublicProviderProfile): string {
-  return profile.user?.displayName?.trim()
-    || [profile.user?.firstName, profile.user?.lastName].filter(Boolean).join(" ").trim()
-    || "Professional";
+/** The professionals you saved, newest first, in the directory's shape. */
+export async function getSavedProfessionals(page: number, signal?: AbortSignal): Promise<ProviderDirectoryResponse> {
+  return (await request<{ data: ProviderDirectoryResponse }>(`/freelancers/saved?page=${page}`, { signal })).data;
 }
 
-export function providerCategoryLabel(category: ProviderCategory | null): string {
-  return PROVIDER_CATEGORIES.find((item) => item.value === category)?.label || "Professional";
+/** Everyone you saved, so a Save button can say so without a request of its own. */
+export async function getSavedProfessionalIds(signal?: AbortSignal): Promise<string[]> {
+  return (await request<{ data: string[] }>("/freelancers/saved/ids", { signal })).data;
+}
+
+export async function saveProfessional(userId: string): Promise<void> {
+  await request(`/freelancers/${encodeURIComponent(userId)}/save`, { method: "POST" });
+}
+
+export async function unsaveProfessional(userId: string): Promise<void> {
+  await request(`/freelancers/${encodeURIComponent(userId)}/save`, { method: "DELETE" });
+}
+
+/** Their name by the one rule (`personName`): first and last name, then display name. */
+export function providerName(profile: PublicProviderProfile): string {
+  return personName(profile.user) || "Professional";
 }
 
 /** Older stored links still need a safe protocol before being made clickable. */

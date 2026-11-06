@@ -14,6 +14,7 @@ import { trackPageSource } from "@/lib/api/analyticsEvents";
 import { shareJob } from "@/lib/jobs/shareJob";
 import { useSavedJob } from "@/hooks/useSavedJob";
 import { resolveJobIcon } from "@/lib/utils";
+import CompanyLogo from "@/components/company/CompanyLogo";
 import SlidingApplyBar from "./SlidingApplyBar";
 
 /**
@@ -344,15 +345,7 @@ const JobDetails = ({ job, isMobile = false, scrollContainerRef }: JobDetailsPro
           {/* Primary Apply Section */}
           <div ref={primaryApplyRef} className="mb-8">
             <div className="flex items-start gap-4 mb-6">
-              <div className="flex-shrink-0 w-16 h-16 rounded-xl bg-muted shadow-inner flex items-center justify-center overflow-hidden p-2">
-               <img
-              className="h-full rounded-sm w-full object-contain"
-              src={resolveJobIcon(job.icon)}
-              alt={`${job.company} logo`}
-              width="32"
-              height="32"
-            />
-              </div>
+              <CompanyLogo company={job.company} src={resolveJobIcon(job.icon)} className="h-16 w-16 rounded-xl p-2 text-2xl" />
               
               <div className="flex-1">
                 <h1 className="font-display text-2xl font-bold text-foreground mb-1">

@@ -203,7 +203,7 @@ function SpaceResults({ q }: { q: string }) {
 
       {results.isSuccess && spaces.length === 0 && (
         <p className="px-5 pb-5 text-sm text-muted-foreground">
-          No space matches “{q}”. Nobody has started one yet — you can, from the + beside Your spaces.
+          No space matches “{q}”. Nobody has started one yet — you can, with Start a space in the menu.
         </p>
       )}
 

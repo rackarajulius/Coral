@@ -1,6 +1,7 @@
-﻿import { ArrowRight, Sparkles } from "lucide-react";
+﻿import { ArrowRight, PenSquare, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
+import { COMMUNITY_TAB } from "@/lib/communityTab";
 import heroBg from "@/assets/dashboard-hero.jpg";
 
 const getGreeting = () => {
@@ -25,6 +26,11 @@ interface HeroBannerProps {
   summary: string;
   bannerUrl?: string | null;
   tagline?: string | null;
+  /**
+   * The company this person can post as, when they can — owners and admins
+   * of a live page. Opens the community composer already in its name.
+   */
+  postAsName?: string | null;
 }
 
 const HeroBanner = ({
@@ -34,6 +40,7 @@ const HeroBanner = ({
   summary,
   bannerUrl,
   tagline,
+  postAsName,
 }: HeroBannerProps) => (
   <section
     className="relative overflow-hidden rounded-3xl border border-border"
@@ -83,6 +90,14 @@ const HeroBanner = ({
         <Button size="sm" className="rounded-full bg-white/10 text-white border border-white/20 backdrop-blur-md hover:bg-white/20" asChild>
           <Link to="/employers/candidates">Review applicants</Link>
         </Button>
+        {postAsName && (
+          <Button size="sm" className="rounded-full bg-white/10 text-white border border-white/20 backdrop-blur-md hover:bg-white/20" asChild>
+            {/* In the community's own tab, like every way into it. */}
+            <Link to="/community?compose=company" target={COMMUNITY_TAB}>
+              <PenSquare className="h-4 w-4" /> Post as {postAsName}
+            </Link>
+          </Button>
+        )}
         <Button size="sm" variant="outline" className="rounded-full bg-transparent text-white border-white/30 hover:bg-white/10 hover:text-white" asChild>
           <Link to="/employers/hiring"><Sparkles className="h-4 w-4" /> Try Talent Scout</Link>
         </Button>

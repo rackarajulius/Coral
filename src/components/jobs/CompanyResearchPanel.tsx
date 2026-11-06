@@ -1,8 +1,15 @@
 import { useState } from "react";
-import { Building2, ChevronDown, ExternalLink, Loader2, MessageCircleQuestion } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Building2, ChevronDown, ExternalLink, Loader2, Lock, MessageCircleQuestion } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/contexts/AuthContext";
+import { useAuthModal } from "@/contexts/AuthModalContext";
+import { accountSide } from "@/lib/accountSide";
 import { getCompanyResearch, type CompanyResearch } from "@/lib/api/jobs";
+import { getMyEntitlements, refusalFor } from "@/lib/api/entitlements";
+import { isEntitlementError } from "@/lib/api/entitlementError";
+import { useUpgradePrompt } from "@/stores/upgradePromptStore";
 
 /**
  * "What's it actually like there" — summarised from real web sources, with the
@@ -10,6 +17,9 @@ import { getCompanyResearch, type CompanyResearch } from "@/lib/api/jobs";
  *
  * Loaded on demand rather than on mount: it's a live crawl + LLM call, so it
  * only runs when someone actually asks for it.
+ *
+ * Company research is Premium: signed out, the button asks for sign-in first;
+ * on a plan that doesn't cover it, it opens the plans instead of the research.
  */
 export default function CompanyResearchPanel({
   jobId,
@@ -24,16 +34,48 @@ export default function CompanyResearchPanel({
   const [data, setData] = useState<CompanyResearch | null>(null);
   const [loading, setLoading] = useState(false);
   const [asked, setAsked] = useState(false);
+  const { user, isAuthenticated } = useAuth();
+  const { requireAuth } = useAuthModal();
+  const side = accountSide(user);
+  const queryClient = useQueryClient();
+  const showUpgrade = useUpgradePrompt((s) => s.show);
+  const { data: entitlements } = useQuery({
+    queryKey: ["entitlements"],
+    queryFn: getMyEntitlements,
+    enabled: side === "seeker",
+    staleTime: 60_000,
+    retry: false,
+  });
+  const refusal = refusalFor(entitlements, "research.company");
 
-  const load = async () => {
+  const run = async () => {
     setLoading(true);
     setAsked(true);
     try {
       setData(await getCompanyResearch(jobId));
+      void queryClient.invalidateQueries({ queryKey: ["entitlements"] });
+    } catch (error) {
+      if (isEntitlementError(error)) {
+        // Back to the button, with the plans open over it.
+        setAsked(false);
+        showUpgrade({ code: error.code, metric: error.metric, tier: error.tier, resetsAt: error.resetsAt, message: error.message });
+      } else {
+        setData(null);
+      }
     } finally {
       setLoading(false);
     }
   };
+
+  const load = () => {
+    if (!isAuthenticated) requireAuth(() => void run());
+    else if (refusal) showUpgrade(refusal);
+    else void run();
+  };
+
+  // Not on an employer account's personal side yet: these tools are Premium,
+  // which is still a job seeker plan.
+  if (side === "employer" || side === "provider") return null;
 
   const profile = data?.profile;
   const facts = [
@@ -64,7 +106,12 @@ export default function CompanyResearchPanel({
             interviews — summarised from public sources.
           </p>
           <Button variant="outline" size="sm" onClick={load} className="gap-1.5">
-            <Building2 className="h-3.5 w-3.5" /> Research this company
+            {refusal ? (
+              <Lock className="h-3.5 w-3.5" aria-label="Premium" />
+            ) : (
+              <Building2 className="h-3.5 w-3.5" />
+            )}{" "}
+            Research this company
           </Button>
         </>
       ) : loading ? (

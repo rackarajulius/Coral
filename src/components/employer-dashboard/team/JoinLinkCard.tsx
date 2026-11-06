@@ -73,7 +73,7 @@ export default function JoinLinkCard() {
             <p className="flex items-start gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-xs text-emerald-700 dark:text-emerald-400">
               <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               <span>
-                Only people with an <strong>@{current.domain}</strong> address join straight away.
+                Only people with a confirmed <strong>@{current.domain}</strong> address join straight away.
                 Anyone else who opens this link is queued for your approval, so a link that leaks
                 doesn't give anything away.
               </span>
@@ -82,8 +82,9 @@ export default function JoinLinkCard() {
             <p className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-400">
               <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               <span>
-                Your company has no verified work domain, so the lock can't tell colleagues apart.
-                Everyone using this link is queued for your approval.
+                Your company hasn't proven a domain yet, so the lock can't tell colleagues apart.
+                Everyone using this link is queued for your approval. Prove your domain above to
+                let colleagues straight in.
               </span>
             </p>
           ) : (

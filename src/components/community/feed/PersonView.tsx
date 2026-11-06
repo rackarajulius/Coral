@@ -1,13 +1,11 @@
 import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ExternalLink, Loader2, MessagesSquare, Plus, UserCheck } from "lucide-react";
+import { AlertTriangle, BriefcaseBusiness, ExternalLink, MessagesSquare } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
-import { useAuthModal } from "@/contexts/AuthModalContext";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import {
   authorName,
@@ -20,6 +18,7 @@ import {
 } from "@/lib/api/community";
 import { FeedPost } from "./FeedPost";
 import { IdentityLine } from "./IdentityLine";
+import { PersonFollowButton } from "./PersonFollowButton";
 import { PostListSkeleton } from "./skeletons";
 import { usePersonFollow } from "./usePersonFollow";
 
@@ -91,11 +90,12 @@ export function PersonView({ personId }: { personId: string }) {
 
 function PersonHeader({ person, name }: { person: CommunityPerson; name: string }) {
   const { user } = useAuth();
-  const { requireAuth } = useAuthModal();
   const follow = usePersonFollow(person.id);
   const isMe = user?.id === person.id;
   const followers = follow.followerCount ?? person.followerCount;
   const profileUrl = person.identity?.profileUrl ?? null;
+  // A public provider profile takes the place of the career profile here.
+  const isProvider = !!profileUrl?.startsWith("/providers/");
 
   return (
     <section className="mb-5 overflow-hidden rounded-2xl border border-border bg-card">
@@ -127,12 +127,17 @@ function PersonHeader({ person, name }: { person: CommunityPerson; name: string 
 
           <div className="flex flex-wrap items-center gap-2">
             {profileUrl && (
-              // Their career profile is a page of the main site; it says where
-              // you came from so it can offer the way back.
+              // Their career profile is a page of the main site; their provider
+              // profile is here in the community. Either says where you came
+              // from so it can offer the way back.
               <Button asChild variant="outline" size="sm" className="gap-1.5 rounded-full">
                 <Link to={profileUrl} state={{ from: "community", personId: person.id }}>
-                  {isMe ? "Your professional profile" : "Professional profile"}
-                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                  {isProvider
+                    ? (isMe ? "Your services and work" : "Services and work")
+                    : (isMe ? "Your professional profile" : "Professional profile")}
+                  {isProvider
+                    ? <BriefcaseBusiness className="h-3.5 w-3.5" aria-hidden="true" />
+                    : <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />}
                 </Link>
               </Button>
             )}
@@ -141,34 +146,7 @@ function PersonHeader({ person, name }: { person: CommunityPerson; name: string 
                 This is how the community sees you
               </span>
             ) : (
-              <Button
-                size="sm"
-                onClick={() => requireAuth(() => follow.toggle())}
-                disabled={follow.isPending}
-                aria-pressed={follow.isFollowing}
-                className={cn(
-                  "group gap-1.5 rounded-full px-5",
-                  follow.isFollowing
-                    ? "border border-border bg-transparent text-foreground hover:border-destructive/40 hover:bg-transparent hover:text-destructive"
-                    : "bg-coral text-white hover:bg-coral/90",
-                )}
-              >
-                {follow.isPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                ) : follow.isFollowing ? (
-                  <UserCheck className="h-4 w-4" aria-hidden="true" />
-                ) : (
-                  <Plus className="h-4 w-4" aria-hidden="true" />
-                )}
-                {follow.isFollowing ? (
-                  <>
-                    <span className="group-hover:hidden">Following</span>
-                    <span className="hidden group-hover:inline">Unfollow</span>
-                  </>
-                ) : (
-                  "Follow"
-                )}
-              </Button>
+              <PersonFollowButton personId={person.id} />
             )}
           </div>
         </div>

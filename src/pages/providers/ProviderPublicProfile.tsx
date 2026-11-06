@@ -1,12 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Loader2 } from "lucide-react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import ProviderProfileContent from "@/components/providers/ProviderProfileContent";
 import { Button } from "@/components/ui/button";
+import { personPath } from "@/lib/api/community";
 import { getPublicProviderProfile, ProviderApiError } from "@/lib/api/providers";
 
 export default function ProviderPublicProfile() {
   const { userId } = useParams<{ userId: string }>();
+  // Opened from their community page ("Services and work"): the way back is there.
+  const state = useLocation().state as { from?: string; personId?: string } | null;
+  const back = state?.from === "community" && state.personId === userId
+    ? { to: personPath(userId!), label: "Back to their community page" }
+    : { to: "/providers", label: "Find professionals" };
   const profile = useQuery({
     queryKey: ["providers", "public", userId],
     queryFn: ({ signal }) => getPublicProviderProfile(userId!, signal),
@@ -20,7 +26,7 @@ export default function ProviderPublicProfile() {
   return (
     <>
       <main className="mx-auto w-full max-w-4xl px-4 pb-16 pt-6 sm:px-6">
-        <Link to="/providers" className="mb-5 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" aria-hidden="true" />Find professionals</Link>
+        <Link to={back.to} className="mb-5 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" aria-hidden="true" />{back.label}</Link>
         {profile.isPending && <div className="flex items-center gap-2 rounded-xl border p-8 text-sm text-muted-foreground" role="status"><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />Loading profile…</div>}
         {profile.isError && <div className="rounded-2xl border p-8 text-center">
           <h1 className="text-xl font-semibold">{unavailable ? "This profile isn't available" : "We couldn't load this profile"}</h1>

@@ -6,6 +6,7 @@ import { createHmac } from 'crypto';
 import { Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
+import { profileShownFor, profilesShownFor } from '../company/company-page';
 import { NotificationsService } from '../notifications/notifications.service';
 import { EmailService } from '../services/email/email.service';
 import { CalendarService } from '../integrations/calendar.service';
@@ -116,11 +117,9 @@ export class InterviewService {
     if (interviews.length === 0) return [];
 
     const employerIds = [...new Set(interviews.map((i) => i.employerId))];
-    const profiles = await this.prisma.employerProfile.findMany({
-      where: { userId: { in: employerIds } },
-      select: { userId: true, companyName: true },
-    });
-    const companyByEmployer = new Map(profiles.map((p) => [p.userId, p.companyName]));
+    // The company each interviewer is from: its page's name.
+    const pages = await profilesShownFor(this.prisma, employerIds, { companyName: true });
+    const companyByEmployer = new Map([...pages].map(([userId, p]) => [userId, p.companyName]));
 
     // Strip the employer-private scorecard; the candidate only ever sees the outcome.
     return interviews.map(({ feedback: _feedback, ...i }) => ({
@@ -498,10 +497,7 @@ export class InterviewService {
   }
 
   private async employerCompany(userId: string): Promise<string> {
-    const emp = await this.prisma.employerProfile.findUnique({
-      where: { userId },
-      select: { companyName: true },
-    });
-    return emp?.companyName?.trim() || 'An employer';
+    const page = await profileShownFor(this.prisma, userId, { companyName: true });
+    return page?.companyName?.trim() || 'An employer';
   }
 }

@@ -178,3 +178,49 @@ describe('Explicit default administrator provisioning', () => {
     expect(prisma.user.update).not.toHaveBeenCalled();
   });
 });
+
+describe('A display name is only ever one the person gave', () => {
+  // An email sign-up has no name in its metadata; Google gives full_name.
+  function signUp(lookup: 'new' | 'relinked', metadata: Record<string, string> = {}, existingDisplayName: string | null = null) {
+    const identity = { id: 'auth-new', email: 'jsmith1987@example.test', email_confirmed_at: null, user_metadata: metadata };
+    const existing = {
+      id: 'member', supabaseId: 'auth-old', email: identity.email, role: UserRole.JOB_SEEKER,
+      status: UserStatus.PENDING_ONBOARDING, lastLoginAt: null, displayName: existingDisplayName,
+    };
+    const prisma = { user: {
+      findUnique: jest.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(lookup === 'relinked' ? existing : null),
+      create: jest.fn().mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'member', ...data })),
+      update: jest.fn().mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ ...existing, ...data })),
+    } };
+    const service = new AuthService(prisma as unknown as PrismaService, { get: jest.fn() } as unknown as ConfigService);
+    return { service, prisma, identity };
+  }
+
+  it('gives a new email sign-up no display name, not the start of their email', async () => {
+    const { service, prisma, identity } = signUp('new');
+    await service.findOrCreateUser(identity, async () => true);
+    expect(prisma.user.create.mock.calls[0][0].data.displayName).toBeNull();
+  });
+
+  it('keeps the name an identity provider gives', async () => {
+    const { service, prisma, identity } = signUp('new', { full_name: 'Jane Smith' });
+    await service.findOrCreateUser(identity, async () => true);
+    expect(prisma.user.create.mock.calls[0][0].data.displayName).toBe('Jane Smith');
+  });
+
+  it('does not write the start of the email when linking an account that has no display name', async () => {
+    const { service, prisma, identity } = signUp('relinked');
+    await service.findOrCreateUser(identity, async () => true);
+    expect(prisma.user.update.mock.calls[0][0].data).not.toHaveProperty('displayName');
+  });
+
+  it('fills an empty display name from the provider when linking, and keeps one already set', async () => {
+    const linked = signUp('relinked', { name: 'Jane Smith' });
+    await linked.service.findOrCreateUser(linked.identity, async () => true);
+    expect(linked.prisma.user.update.mock.calls[0][0].data.displayName).toBe('Jane Smith');
+
+    const kept = signUp('relinked', { name: 'Jane Smith' }, 'Janie');
+    await kept.service.findOrCreateUser(kept.identity, async () => true);
+    expect(kept.prisma.user.update.mock.calls[0][0].data).not.toHaveProperty('displayName');
+  });
+});

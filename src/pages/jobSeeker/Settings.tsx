@@ -923,6 +923,14 @@ const SettingsPage = () => {
                 <div className="space-y-1">
                   <p className="text-xs font-medium text-foreground">Close your account</p>
                   <p className="text-xs text-muted-foreground">Permanently close your account and delete your profile.</p>
+                  {/* Their company outlives their account (backend company-departure.ts). */}
+                  {(user as { company?: { name?: string } | null } | null)?.company?.name && (
+                    <p className="text-xs text-muted-foreground">
+                      {(user as { company?: { name?: string } | null }).company!.name}'s page stays: it
+                      passes, with your jobs, to another member of the team — or is deactivated if you're
+                      the only one.
+                    </p>
+                  )}
                 </div>
                 <Button
                   variant="destructive"

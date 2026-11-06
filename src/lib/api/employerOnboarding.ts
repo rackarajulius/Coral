@@ -44,6 +44,12 @@ export interface OnboardingState {
    * represent it.
    */
   hasCompany?: boolean;
+  /**
+   * Whether this person may change the company's details and public face:
+   * an owner or admin, or someone about to create a company. Other seats see
+   * their company's setup without being offered edits that would be refused.
+   */
+  canEditCompany?: boolean;
 }
 
 /** A company the signed-in employer may already belong to. */
@@ -63,6 +69,8 @@ export interface CompanyStepInput {
   companyName: string;
   companyWebsite?: string;
   companySize?: string;
+  /** Organization type, a key from lib/companyFacts. Required when creating a page. */
+  companyType?: string;
   industry?: string;
   headquarters?: string;
   isRecruiter?: boolean;
@@ -73,6 +81,28 @@ export interface CompanyStepInput {
   lastName?: string;
   /** "I'm an authorized representative of this organization." Needed to create a page. */
   authorizedRepresentative?: boolean;
+  /** The page's address, /company/<pageSlug>. Made from the name when left out. */
+  pageSlug?: string;
+}
+
+/** Whether a page address can be used, as the server would save it. */
+export interface PageAddressCheck {
+  slug: string;
+  available: boolean;
+  reason: string | null;
+}
+
+export const checkPageAddress = (slug: string) =>
+  req<PageAddressCheck>(`me/onboarding/page-address?slug=${encodeURIComponent(slug)}`);
+
+/** The address as the server will store it — the same rules as company/page-slug.ts. */
+export function toPageSlug(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 100)
+    .replace(/-+$/g, "");
 }
 
 export const getOnboardingState = () => req<OnboardingState>("me/onboarding");
@@ -94,14 +124,8 @@ export const saveCompanyStep = (input: CompanyStepInput) =>
 export const completeOnboarding = () =>
   req<OnboardingState>("me/onboarding/complete", { method: "POST" });
 
-export const COMPANY_SIZES = [
-  "1-10",
-  "11-50",
-  "51-200",
-  "201-500",
-  "501-1000",
-  "1000+",
-];
+/** LinkedIn's size bands — the shared list in lib/companyFacts. */
+export { COMPANY_SIZES } from "@/lib/companyFacts";
 
 export const INDUSTRIES = [
   "Technology",
@@ -129,6 +153,12 @@ export interface VerificationState {
   companyWebsite: string | null;
   /** True when the instant domain check would succeed right now. */
   canAutoVerify: boolean;
+  /**
+   * Whether this person may verify the company: an owner or admin, or
+   * someone with no company. Verification is the company's, so a recruiter
+   * at a verified company is cleared and one at an unverified company waits.
+   */
+  canManage?: boolean;
   /** Free-mail addresses can't domain-verify; they need manual review. */
   needsDocuments: boolean;
   /** What to do next; null once verified. */

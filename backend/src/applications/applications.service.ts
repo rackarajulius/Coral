@@ -8,6 +8,7 @@ import { Prisma, UserRole } from '@prisma/client';
 import { User } from '../common/types/user.types';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
+import { profileShownFor } from '../company/company-page';
 import { CompanyAuditService } from '../company/company-audit.service';
 import { CandidateWatchersService } from '../company/candidate-watchers.service';
 import { PipelineLinkService } from '../company/pipeline-link.service';
@@ -655,10 +656,8 @@ export class ApplicationsService {
     const role = application.job.title;
     let company = application.job.companyName?.trim();
     if (!company) {
-      const employer = await this.prisma.employerProfile.findUnique({
-        where: { userId: application.job.postedById },
-        select: { companyName: true },
-      });
+      // The company the job is shown under: the poster's company page.
+      const employer = await profileShownFor(this.prisma, application.job.postedById, { companyName: true });
       company = employer?.companyName?.trim() || 'the employer';
     }
 

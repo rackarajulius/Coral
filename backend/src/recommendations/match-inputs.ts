@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { MatchJob, MatchProfile } from './job-match.rules';
+import { seatPage, shownProfile } from '../company/company-page';
 
 /**
  * The columns matching reads, in one place, so the feed, the fan-out and the
@@ -41,7 +42,11 @@ export const JOB_MATCH_SELECT = {
   companyName: true,
   companyLogo: true,
   postedBy: {
-    select: { employerProfile: { select: { companyName: true, companyLogo: true } } },
+    select: {
+      employerProfile: { select: { companyName: true, companyLogo: true } },
+      // The poster's company page, which the job is shown under.
+      ...seatPage({ companyName: true, companyLogo: true }),
+    },
   },
 } satisfies Prisma.JobSelect;
 
@@ -79,9 +84,10 @@ export function toMatchJob(j: JobRow): MatchJob {
 
 /** An admin's manual override names a company with no account; otherwise the poster's. */
 export function companyOf(j: JobRow): { name: string; logo: string | null } {
+  const page = shownProfile(j.postedBy);
   return {
-    name: j.companyName || j.postedBy?.employerProfile?.companyName || 'Company',
-    logo: j.companyLogo || j.postedBy?.employerProfile?.companyLogo || null,
+    name: j.companyName || page?.companyName || 'Company',
+    logo: j.companyLogo || page?.companyLogo || null,
   };
 }
 

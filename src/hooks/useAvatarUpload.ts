@@ -4,7 +4,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useProfile } from '@/contexts/ProfileContext';
 import { uploadAvatar, deleteAvatar } from '@/lib/api/jobSeekerProfile';
 
-const MAX_AVATAR_SIZE = 5 * 1024 * 1024; // 5MB
+// Resized to 400px before upload (lib/imageResize), so a photo straight off
+// a phone is fine.
+const MAX_AVATAR_SIZE = 25 * 1024 * 1024;
 
 /**
  * Single source of truth for profile-photo changes. Both the profile hero and
@@ -27,7 +29,7 @@ export function useAvatarUpload() {
       return;
     }
     if (file.size > MAX_AVATAR_SIZE) {
-      toast.error('Photo must be under 5MB');
+      toast.error('Photo must be under 25MB');
       return;
     }
 

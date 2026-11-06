@@ -35,11 +35,15 @@ const KpiGrid = () => {
   const responseRate =
     hiring?.available && hiring.responseRate !== null ? hiring.responseRate : null;
 
+  // Read defensively: a payload without trends (another side's figures) must
+  // show dashes, not take the dashboard down.
   const counters = analytics?.counters;
-  const viewsPerApplication = analytics?.conversion.viewsPerApplication ?? 0;
-  const applicantsDelta = analytics
-    ? weekOverWeekDelta(analytics.trends.applicantsWeekOverWeekPct)
-    : { delta: "—", trend: "neutral" as const };
+  const viewsPerApplication = analytics?.conversion?.viewsPerApplication ?? 0;
+  const applicantsTrend = analytics?.trends?.applicantsWeekOverWeekPct;
+  const applicantsDelta =
+    typeof applicantsTrend === "number"
+      ? weekOverWeekDelta(applicantsTrend)
+      : { delta: "—", trend: "neutral" as const };
   const activeJobsDelta: Pick<KpiCardProps, "delta" | "trend"> = counters?.newActiveJobsThisWeek
     ? { delta: `+${counters.newActiveJobsThisWeek} this week`, trend: "up" }
     : { delta: "No change this week", trend: "neutral" };

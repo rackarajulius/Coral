@@ -73,7 +73,8 @@ describe('screening applicants with AI', () => {
     job: { findUnique: jest.fn(), update: jest.fn() },
     application: { findMany: jest.fn() },
     aiScreen: { findMany: jest.fn(), count: jest.fn(), create: jest.fn() },
-    employerProfile: { findUnique: jest.fn() },
+    // The employer and the page of their company (company-page.ts).
+    user: { findUnique: jest.fn() },
     $transaction: jest.fn(),
   };
   const screens = new AiScreenService(
@@ -97,7 +98,7 @@ describe('screening applicants with AI', () => {
     prisma.aiScreen.count.mockResolvedValue(0);
     prisma.aiScreen.create.mockImplementation(async ({ data }) => ({ id: 'screen-1', status: 'invited', createdAt: new Date(), ...data }));
     prisma.$transaction.mockImplementation(async (ops: Promise<unknown>[]) => Promise.all(ops));
-    prisma.employerProfile.findUnique.mockResolvedValue({ companyName: 'Acme' });
+    prisma.user.findUnique.mockResolvedValue({ employerProfile: { companyName: 'Acme' }, companyMemberships: [] });
   });
 
   it('makes the posting say AI is used, from the first screen on', async () => {

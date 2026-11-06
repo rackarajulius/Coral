@@ -3,8 +3,9 @@ import { CompanyMemberStatus, CompanyRole, ScheduledPostStatus } from '@prisma/c
 import { ScheduledPostsService } from '../../../src/community/scheduled-posts/scheduled-posts.service';
 
 /**
- * Scheduled company posts: written now, published later by the same path as
- * pressing Post, by someone who still speaks for the company then.
+ * Scheduled posts: written now, published later by the same path as pressing
+ * Post — a company's by someone who still speaks for the company then, a
+ * personal one by its author, and seen by nobody else.
  */
 
 function collaborator<T>(value: unknown): T { return value as T; }
@@ -44,8 +45,8 @@ function harness() {
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       delete: jest.fn(),
     },
-    company: { findUnique: jest.fn().mockResolvedValue({ name: 'Acme' }) },
-    employerProfile: { findFirst: jest.fn().mockResolvedValue({ id: 'page-1' }) },
+    // The company and its one page (Company.pageId), which the failure links to.
+    company: { findUnique: jest.fn().mockResolvedValue({ name: 'Acme', page: { id: 'page-1', visibility: 'public' } }) },
   };
   const posts = {
     checkDraft: jest.fn().mockResolvedValue({ companyId: COMPANY }),
@@ -58,11 +59,33 @@ function harness() {
 }
 
 describe('Scheduling a post', () => {
-  it("is for posts in a company page's name", async () => {
-    const { service, prisma } = harness();
-    await expect(service.schedule(ADMIN, { content: 'Hello', publishAt: inHours(2) } as never))
-      .rejects.toThrow("company page's name");
+  it('works for a post in your own name, kept with no company in it', async () => {
+    const { service, prisma, posts } = harness();
+    posts.checkDraft.mockResolvedValue({ companyId: null });
+    const result = await service.schedule(OUTSIDER, { content: 'Hello', publishAt: inHours(2) } as never);
+    expect(posts.checkDraft).toHaveBeenCalledWith(OUTSIDER, expect.not.objectContaining({ asCompany: true }));
+    const data = prisma.scheduledPost.create.mock.calls[0][0].data;
+    expect(data).toEqual(expect.objectContaining({ companyId: null, authorId: OUTSIDER }));
+    expect(data.payload).toEqual({ content: 'Hello' });
+    expect(result).toEqual(expect.objectContaining({ companyId: null, content: 'Hello' }));
+    // Counted against the author's own queue, not a company's.
+    expect(prisma.scheduledPost.count).toHaveBeenCalledWith({
+      where: { authorId: OUTSIDER, companyId: null, status: ScheduledPostStatus.SCHEDULED },
+    });
+  });
+
+  it('never turns a company post into a personal one', async () => {
+    const { service, prisma, posts } = harness();
+    posts.checkDraft.mockResolvedValue({ companyId: null });
+    await expect(service.schedule(OUTSIDER, { content: 'Hi', asCompany: true, publishAt: inHours(2) } as never))
+      .rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.scheduledPost.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps announcements of listings to posting now', async () => {
+    const { service } = harness();
+    await expect(service.schedule(ADMIN, { content: 'Hi', reference: { type: 'service', id: 's' }, publishAt: inHours(2) } as never))
+      .rejects.toThrow('while the listing is open');
   });
 
   it('between ten minutes and ninety days ahead', async () => {
@@ -94,10 +117,14 @@ describe('Scheduling a post', () => {
   });
 
   it('keeps a queue, not a backlog', async () => {
-    const { service, prisma } = harness();
+    const { service, prisma, posts } = harness();
     prisma.scheduledPost.count.mockResolvedValue(100);
     await expect(service.schedule(ADMIN, { content: 'Hi', asCompany: true, publishAt: inHours(2) } as never))
       .rejects.toThrow('up to 100');
+    prisma.scheduledPost.count.mockResolvedValue(25);
+    posts.checkDraft.mockResolvedValue({ companyId: null });
+    await expect(service.schedule(OUTSIDER, { content: 'Hi', publishAt: inHours(2) } as never))
+      .rejects.toThrow('up to 25 posts of your own');
   });
 });
 
@@ -113,6 +140,18 @@ describe('The queue', () => {
     prisma.scheduledPost.findUnique.mockResolvedValue({ id: 'sched-1', companyId: COMPANY, authorId: ADMIN, status: ScheduledPostStatus.SCHEDULED });
     await expect(service.cancel(OUTSIDER, 'sched-1')).rejects.toBeInstanceOf(NotFoundException);
     await expect(service.cancel(ADMIN, 'sched-1')).resolves.toEqual({ id: 'sched-1', canceled: true });
+  });
+
+  it("lists your own posts for you alone, and a personal post is yours alone to change", async () => {
+    const { service, prisma } = harness();
+    await service.listMine(OUTSIDER);
+    expect(prisma.scheduledPost.findMany.mock.calls[0][0].where).toEqual(expect.objectContaining({ authorId: OUTSIDER, companyId: null }));
+
+    prisma.scheduledPost.findUnique.mockResolvedValue({ id: 'sched-1', companyId: null, authorId: OUTSIDER, status: ScheduledPostStatus.SCHEDULED });
+    // Not even an admin of some company sees someone's own post.
+    await expect(service.cancel(ADMIN, 'sched-1')).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.cancel(OUTSIDER, 'sched-1')).resolves.toEqual({ id: 'sched-1', canceled: true });
+    expect(prisma.companyMember.findUnique).not.toHaveBeenCalled();
   });
 
   it("new words are checked as their writer's, whoever changes them", async () => {
@@ -147,6 +186,26 @@ describe('Publishing what is due', () => {
     expect(posts.create).toHaveBeenCalledWith(ADMIN, expect.objectContaining({ content: 'Launch day', asCompany: true, companyId: COMPANY }));
     expect(prisma.scheduledPost.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: ScheduledPostStatus.PUBLISHED, postId: 'post-1' }),
+    }));
+  });
+
+  it("publishes a personal one in its author's own name, whatever the stored post says", async () => {
+    const { service, prisma, posts } = harness();
+    prisma.scheduledPost.findMany.mockResolvedValue([
+      { id: 'sched-2', companyId: null, authorId: OUTSIDER, payload: { content: 'Mine', asCompany: true, companyId: COMPANY } },
+    ]);
+    await service.publishDue();
+    expect(posts.create).toHaveBeenCalledWith(OUTSIDER, { content: 'Mine' });
+  });
+
+  it("tells the author when a personal one could not go out, and where to find it", async () => {
+    const { service, prisma, posts, notifications } = harness();
+    prisma.scheduledPost.findMany.mockResolvedValue([{ id: 'sched-2', companyId: null, authorId: OUTSIDER, payload: { content: 'Mine' } }]);
+    posts.create.mockRejectedValue(new BadRequestException('That space is closed.'));
+    await service.publishDue();
+    expect(prisma.company.findUnique).not.toHaveBeenCalled();
+    expect(notifications.create).toHaveBeenCalledWith(expect.objectContaining({
+      userId: OUTSIDER, title: "Your scheduled post wasn't published", message: 'That space is closed.', link: '/community?scheduled=1',
     }));
   });
 

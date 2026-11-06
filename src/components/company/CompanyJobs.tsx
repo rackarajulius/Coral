@@ -60,7 +60,9 @@ const CompanyJobs = ({ company }: CompanyJobsProps) => {
 
     let cancelled = false;
     setLoading(true);
-    listPublicJobs({ postedById: company.userId, limit: 6 })
+    // The company's jobs, whoever on the team posted them — not only the
+    // jobs of the person whose profile became the page.
+    listPublicJobs({ companyPageId: company.id, limit: 6 })
       .then((data) => {
         if (!cancelled) setJobs(data);
       })
@@ -159,7 +161,9 @@ const CompanyJobs = ({ company }: CompanyJobsProps) => {
     <Card id="jobs" className="border-border rounded-2xl">
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-lg font-semibold">Open Positions</CardTitle>
-        <Badge variant="secondary" className="text-xs">{openJobs.length} openings</Badge>
+        <Badge variant="secondary" className="text-xs">
+          {openJobs.length} {openJobs.length === 1 ? "opening" : "openings"}
+        </Badge>
       </CardHeader>
       <CardContent>
         {openJobs.length === 0 ? (

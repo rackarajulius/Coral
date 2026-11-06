@@ -10,9 +10,11 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/contexts/AuthContext";
+import { CityAutocomplete } from "@/components/location/CityAutocomplete";
+import { CategoryOptions } from "@/components/WorkCategory";
+import { ProviderReplyStatus } from "@/components/providers/ProviderReplies";
 import { getMyProfile as getMyJobSeekerProfile } from "@/lib/api/jobSeekerProfile";
 import {
-  PROVIDER_CATEGORIES,
   PROVIDER_WORK_PREFERENCES,
   getMyProviderProfile,
   providerPublicationNeeds,
@@ -99,6 +101,25 @@ function toPayload(draft: ProviderDraft): UpdateProviderProfile {
     githubUrl: optionalText(draft.githubUrl),
     linkedinUrl: optionalText(draft.linkedinUrl),
   };
+}
+
+/** "Toronto, Ontario or Canada". */
+const orList = (items: string[]) => items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} or ${items[items.length - 1]}`;
+
+/**
+ * What a location search finds them under, as the server read the saved
+ * city and country. Unsaved edits get guidance, not a guess.
+ */
+function placeNote(saved: OwnerProviderProfile | null | undefined, draft: ProviderDraft): string {
+  const unsaved = !saved || draft.city.trim() !== (saved.city ?? "") || draft.country.trim() !== (saved.country ?? "");
+  if (unsaved) return "Pick your city from the suggestions so clients searching by city, province or country can find you. Save to see how it reads.";
+  const place = saved.place;
+  if (!place) return "Location searches won't find you yet: we didn't recognise this place. Pick your city from the suggestions.";
+  const names = [place.city, place.region, place.country].filter((name): name is string => !!name);
+  const found = `Clients who search for ${orList(names)} will find you.`;
+  return draft.city.trim() && !place.city
+    ? `${found} We didn't recognise "${draft.city.trim()}" as a city; pick one from the suggestions to be found by city too.`
+    : found;
 }
 
 export default function ProviderDashboard() {
@@ -197,8 +218,13 @@ export default function ProviderDashboard() {
   }, [user?.id]);
 
   function update<K extends keyof ProviderDraft>(field: K, value: ProviderDraft[K]) {
+    updateFields({ [field]: value } as Pick<ProviderDraft, K>);
+  }
+
+  /** Several fields in one change: picking a city also sets its country. */
+  function updateFields(values: Partial<ProviderDraft>) {
     if (!draft || !user) return;
-    setForm({ ownerId: user.id, values: { ...draft, [field]: value } });
+    setForm({ ownerId: user.id, values: { ...draft, ...values } });
     setMessage("");
     setValidationError("");
     save.reset();
@@ -286,10 +312,10 @@ export default function ProviderDashboard() {
               </Card>
 
               <Card className="rounded-2xl">
-                <CardHeader><CardTitle className="text-lg">Introduce your work</CardTitle><CardDescription>The first Coral pilot brings together professionals in design, marketing and software in Canada.</CardDescription></CardHeader>
+                <CardHeader><CardTitle className="text-lg">Introduce your work</CardTitle><CardDescription>Choose the kind of work you offer, then describe it in your own words.</CardDescription></CardHeader>
                 <CardContent className="space-y-4">
                   {user?.role === "JOB_SEEKER" && <div className="rounded-xl border p-4"><Button type="button" variant="outline" onClick={() => { setMessage(""); save.reset(); importProfile.mutate(user.id); }}>{importProfile.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}Use my professional profile</Button><p className="mt-2 text-xs leading-5 text-muted-foreground">Fill empty introduction, skills, location and work-link fields from your existing profile. Review them before saving. Filled fields and visibility choices stay as they are.</p>{importProfile.isError && <p className="mt-2 text-xs text-destructive" role="alert">{importProfile.error.message}</p>}</div>}
-                  <div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="provider-category">Category</Label><select id="provider-category" className={selectClass} value={draft.category} onChange={(event) => update("category", event.target.value as ProviderCategory | "")}><option value="">Choose a category</option>{PROVIDER_CATEGORIES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div><div className="space-y-2"><Label htmlFor="provider-title">Professional title</Label><Input id="provider-title" maxLength={255} placeholder="e.g. Product designer" value={draft.title} onChange={(event) => update("title", event.target.value)} /></div></div>
+                  <div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="provider-category">Category</Label><select id="provider-category" className={selectClass} value={draft.category} onChange={(event) => update("category", event.target.value as ProviderCategory | "")}><option value="">Choose a category</option><CategoryOptions selected={draft.category || undefined} /></select></div><div className="space-y-2"><Label htmlFor="provider-title">Professional title</Label><Input id="provider-title" maxLength={255} placeholder="e.g. Product designer" value={draft.title} onChange={(event) => update("title", event.target.value)} /></div></div>
                   <div className="space-y-2"><Label htmlFor="provider-headline">Headline</Label><Input id="provider-headline" maxLength={255} placeholder="Describe the work you help people accomplish" value={draft.headline} onChange={(event) => update("headline", event.target.value)} /></div>
                   <div className="space-y-2"><Label htmlFor="provider-summary">Introduction</Label><Textarea id="provider-summary" rows={5} maxLength={5000} placeholder="Who do you help, what do you do, and what experience can you share?" value={draft.summary} onChange={(event) => update("summary", event.target.value)} /><p className="text-xs text-muted-foreground">Use at least 30 characters for a public profile. Share only information you want visitors to read.</p></div>
                   <div className="space-y-2"><Label htmlFor="provider-skills">Skills</Label><Input id="provider-skills" value={draft.skills} onChange={(event) => update("skills", event.target.value)} placeholder="e.g. Figma, user research, prototyping" /><p className="text-xs text-muted-foreground">Separate skills with commas. Up to 30 skills.</p></div>
@@ -304,13 +330,16 @@ export default function ProviderDashboard() {
                   <div className="space-y-2"><Label htmlFor="provider-github">GitHub work</Label><Input id="provider-github" type="url" maxLength={2048} placeholder="https://github.com/" value={draft.githubUrl} onChange={(event) => update("githubUrl", event.target.value)} /></div>
                   <div className="space-y-2"><Label htmlFor="provider-linkedin">LinkedIn profile</Label><Input id="provider-linkedin" type="url" maxLength={2048} placeholder="https://www.linkedin.com/in/" value={draft.linkedinUrl} onChange={(event) => update("linkedinUrl", event.target.value)} /><p className="text-xs text-muted-foreground">Optional professional profile link. A public profile also needs a portfolio or GitHub work link.</p></div>
                   <p className="text-xs leading-5 text-muted-foreground">Coral displays these as links you supply. It does not label them as verified skills or completed projects.</p>
+                  {/* Their Featured items appear on this public page too: say so where they set it up. */}
+                  <p className="text-xs leading-5 text-muted-foreground">The Featured items on <Link to="/jobseeker/profile" className="text-link hover:underline">your profile</Link>, with their pictures, also show on your provider page, unless you've hidden your profile.</p>
                 </CardContent>
               </Card>
 
               <Card className="rounded-2xl">
                 <CardHeader><CardTitle className="text-lg">Location and availability</CardTitle><CardDescription>Let visitors understand where and how you work.</CardDescription></CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="provider-country">Country</Label><Input id="provider-country" maxLength={100} value={draft.country} onChange={(event) => update("country", event.target.value)} /></div><div className="space-y-2"><Label htmlFor="provider-city">City</Label><Input id="provider-city" maxLength={100} value={draft.city} onChange={(event) => update("city", event.target.value)} /></div></div>
+                  <div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="provider-country">Country</Label><Input id="provider-country" maxLength={100} value={draft.country} onChange={(event) => update("country", event.target.value)} /></div><div className="space-y-2"><Label htmlFor="provider-city">City</Label><CityAutocomplete id="provider-city" variant="field" placeholder="Start typing your city" near={draft.country.trim() || undefined} value={draft.city} onChange={(text) => update("city", text.slice(0, 100))} onSelect={(city) => updateFields({ city: city.name, country: city.country })} aria-describedby="provider-place-note" /></div></div>
+                  <p id="provider-place-note" className="text-xs leading-5 text-muted-foreground">{placeNote(profile.data, draft)}</p>
                   <div className="space-y-2"><Label htmlFor="provider-timezone">Timezone</Label><Input id="provider-timezone" maxLength={100} placeholder="e.g. America/Toronto" value={draft.timezone} onChange={(event) => update("timezone", event.target.value)} /><p className="text-xs text-muted-foreground">Optional. Helps visitors understand your working hours.</p></div>
                   <div className="flex items-center gap-2"><Checkbox id="provider-remote" checked={draft.availableForRemote} onCheckedChange={(value) => update("availableForRemote", value === true)} /><Label htmlFor="provider-remote">Open to remote work</Label></div>
                   <div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="provider-availability">Availability</Label><select id="provider-availability" className={selectClass} value={draft.availability} onChange={(event) => update("availability", event.target.value)}><option value="">Not specified</option><option value="available">Available for work</option><option value="limited">Limited availability</option><option value="unavailable">Currently unavailable</option>{draft.availability && !["available", "limited", "unavailable"].includes(draft.availability) && <option value={draft.availability}>Update previous availability</option>}</select></div><div className="space-y-2"><Label htmlFor="provider-hours">Hours available per week</Label><Input id="provider-hours" type="number" min={0} max={168} step={1} value={draft.hoursPerWeek} onChange={(event) => update("hoursPerWeek", event.target.value)} placeholder="Optional" /></div></div>
@@ -335,6 +364,7 @@ export default function ProviderDashboard() {
 
           <aside className="space-y-4 lg:sticky lg:top-20">
             <Card className="rounded-2xl"><CardHeader><CardTitle className="flex items-center gap-2 text-base">{savedIsPublic ? <Eye className="h-4 w-4" aria-hidden="true" /> : <Lock className="h-4 w-4" aria-hidden="true" />}{savedIsPublic ? "Public profile" : "Private profile"}</CardTitle></CardHeader><CardContent className="space-y-4"><p className="text-sm leading-6 text-muted-foreground">{savedIsPublic ? "Visitors can discover the work details in your saved provider profile." : "Your saved provider profile is visible only to you. Build your introduction before sharing."}</p>{profile.data && <Button asChild variant="outline" className="w-full"><Link to="/provider/preview"><Eye className="mr-2 h-4 w-4" aria-hidden="true" />Preview saved profile</Link></Button>}{savedIsPublic && <><Button asChild variant="ghost" className="w-full"><Link to={`/providers/${profile.data.userId}`}>View public profile<ExternalLink className="ml-2 h-3.5 w-3.5" aria-hidden="true" /></Link></Button><Button variant="outline" className="w-full" disabled={busy} onClick={() => { setValidationError(""); setMessage(""); save.reset(); withdraw.mutate({ id: user.id, supabaseId: user.supabaseId }); }}>{withdraw.isPending ? "Withdrawing access…" : "Make saved profile private"}</Button></>}{isDirty && <p className="text-xs text-muted-foreground">Save your changes before previewing them.</p>}</CardContent></Card>
+            {profile.data && <ProviderReplyStatus />}
             <div className="px-2 text-xs leading-6 text-muted-foreground"><p>Your provider introduction uses your Coral name and profile photo.</p>{user?.role === "JOB_SEEKER" && <Link to="/jobseeker/profile" className="text-primary underline underline-offset-4">Manage your personal profile</Link>}</div>
           </aside>
         </div>}

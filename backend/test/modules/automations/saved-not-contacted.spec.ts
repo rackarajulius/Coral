@@ -64,12 +64,15 @@ describe('Saved but never contacted', () => {
     const before = Date.now();
 
     await service.execute(task);
+    const after = Date.now();
 
     const where = prisma.shortlistItem.findMany.mock.calls[0][0].where;
     expect(where.shortlist).toEqual({ employerId: { in: ['employer-a', 'colleague-a'] } });
     expect(where.applicationId).toBeNull();
     expect(where.OR).toEqual([{ stage: null }, { stage: PipelineStage.SOURCED }]);
-    expect(before - where.addedAt.lt.getTime()).toBeGreaterThanOrEqual(3 * 86_400_000);
+    // Three days before the moment it ran, whichever millisecond that was.
+    expect(where.addedAt.lt.getTime()).toBeGreaterThanOrEqual(before - 3 * 86_400_000);
+    expect(where.addedAt.lt.getTime()).toBeLessThanOrEqual(after - 3 * 86_400_000);
 
     // A colleague's message counts; a cancelled one does not.
     const outreachWhere = prisma.outreachMessage.findMany.mock.calls[0][0].where;

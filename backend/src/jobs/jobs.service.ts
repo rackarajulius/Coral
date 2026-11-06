@@ -26,6 +26,14 @@ import {
   UpdateJobDto,
 } from './dto/job.dto';
 import { UpdateJobManagementStatusDto } from './dto/update-job-management-status.dto';
+import { JOB_COMPANY_SELECT } from './job-company-name';
+import {
+  canonicalPageId,
+  pagePosterIds,
+  profileShownFor,
+  seatPage,
+  withShownEmployer,
+} from '../company/company-page';
 
 @Injectable()
 export class JobsService {
@@ -43,10 +51,9 @@ export class JobsService {
    */
   private async notifyFollowersOfNewJob(postedById: string, jobTitle: string) {
     try {
-      const profile = await this.prisma.employerProfile.findUnique({
-        where: { userId: postedById },
-        select: { id: true, companyName: true },
-      });
+      // The company's followers, whoever on the team posted: they follow the
+      // company's page, not the poster's own profile.
+      const profile = await profileShownFor(this.prisma, postedById, { id: true, companyName: true });
       if (!profile) return;
 
       const followers = await this.prisma.companyFollow.findMany({
@@ -76,7 +83,8 @@ export class JobsService {
     const limit = Math.min(query.limit ?? 20, 100);
     const skip = (page - 1) * limit;
 
-    const where = this.buildJobsWhere(query, { enforceActiveOnly: true });
+    const postedByIds = query.companyPageId ? await this.postersOfPage(query.companyPageId) : undefined;
+    const where = this.buildJobsWhere(query, { enforceActiveOnly: true, postedByIds });
     const orderBy = this.buildOrderBy(query.sort);
 
     const [data, total] = await Promise.all([
@@ -92,7 +100,7 @@ export class JobsService {
     ]);
 
     return {
-      data,
+      data: data.map(withShownEmployer),
       meta: {
         page,
         limit,
@@ -124,7 +132,7 @@ export class JobsService {
     ]);
 
     return {
-      data,
+      data: data.map(withShownEmployer),
       meta: {
         page,
         limit,
@@ -277,7 +285,7 @@ export class JobsService {
 
     return {
       // `aiScreened`: the edit form keeps the AI statement locked on.
-      job: { ...job, aiScreened: await this.aiHasScreened(jobId) },
+      job: { ...withShownEmployer(job), aiScreened: await this.aiHasScreened(jobId) },
       counters: {
         viewsCount: job.viewsCount,
         applicationsCount: job.applicationsCount,
@@ -320,7 +328,7 @@ export class JobsService {
     // A team previewing its own draft, or an applicant rereading a closed
     // role, is not a view of an open job.
     if (!LIVE_JOB_STATUSES.includes(job.status)) {
-      return job;
+      return withShownEmployer(job);
     }
 
     await this.prisma.job.update({
@@ -331,7 +339,7 @@ export class JobsService {
     });
 
     return {
-      ...job,
+      ...withShownEmployer(job),
       viewsCount: job.viewsCount + 1,
     };
   }
@@ -406,7 +414,7 @@ export class JobsService {
     return {
       success: true,
       message: 'Job created successfully',
-      data: created,
+      data: withShownEmployer(created),
     };
   }
 
@@ -523,7 +531,7 @@ export class JobsService {
     return {
       success: true,
       message: 'Job updated successfully',
-      data: updated,
+      data: withShownEmployer(updated),
     };
   }
 
@@ -550,7 +558,7 @@ export class JobsService {
       return {
         success: true,
         message: `Job already in ${nextStatus} status`,
-        data: existing,
+        data: withShownEmployer(existing),
       };
     }
 
@@ -575,7 +583,7 @@ export class JobsService {
       success: true,
       message: `Job status updated from ${currentStatus} to ${nextStatus}`,
       data: {
-        job: updated,
+        job: withShownEmployer(updated),
         transition: {
           from: currentStatus,
           to: nextStatus,
@@ -642,7 +650,7 @@ export class JobsService {
     return {
       success: true,
       message: 'Job duplicated successfully',
-      data: duplicated,
+      data: withShownEmployer(duplicated),
     };
   }
 
@@ -766,7 +774,7 @@ export class JobsService {
 
   private buildJobsWhere(
     query: ListJobsQueryDto,
-    options: { enforceActiveOnly: boolean },
+    options: { enforceActiveOnly: boolean; postedByIds?: string[] },
   ): Prisma.JobWhereInput {
     const where: Prisma.JobWhereInput = {};
 
@@ -861,7 +869,28 @@ export class JobsService {
       where.postedById = query.postedById;
     }
 
+    // A company page's jobs: anyone at the company, resolved by the caller.
+    if (options.postedByIds) {
+      const and = Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [];
+      where.AND = [...and, { postedById: { in: options.postedByIds } }];
+    }
+
     return where;
+  }
+
+  /**
+   * Who posts for a company page: every member whose records are the
+   * company's. Any of its members' profile ids stands for the page.
+   */
+  private async postersOfPage(profileId: string): Promise<string[]> {
+    const pageId = await canonicalPageId(this.prisma, profileId);
+    const page = pageId
+      ? await this.prisma.employerProfile.findUnique({
+          where: { id: pageId },
+          select: { id: true, userId: true, companyId: true },
+        })
+      : null;
+    return page ? pagePosterIds(this.prisma, page) : [];
   }
 
   private buildOrderBy(sort?: JobSortValue): Prisma.JobOrderByWithRelationInput[] {
@@ -886,6 +915,34 @@ export class JobsService {
    *   read by no one.
    */
   private buildJobInclude(opts: { employerBrand?: boolean } = {}) {
+    const employer = {
+      companyName: true,
+      companyLogo: true,
+      // The employer's own words — authoritative, unlike web research.
+      tagline: true,
+      companyDescription: true,
+      companyWebsite: true,
+      industry: true,
+      companySize: true,
+      headquarters: true,
+      foundedYear: true,
+      companyCulture: true,
+      companyBenefits: true,
+      /** Cheap, and worth showing wherever the company appears. */
+      id: true,
+      verificationStatus: true,
+      ...(opts.employerBrand
+        ? {
+            mission: true,
+            whyWorkHere: true,
+            coreValues: true,
+            awards: true,
+            diversityStatement: true,
+            deiStats: true,
+            galleryPhotos: true,
+          }
+        : {}),
+    } satisfies Prisma.EmployerProfileSelect;
     return {
       postedBy: {
         select: {
@@ -895,36 +952,10 @@ export class JobsService {
           lastName: true,
           avatarUrl: true,
           role: true,
-          employerProfile: {
-            select: {
-              companyName: true,
-              companyLogo: true,
-              // The employer's own words — authoritative, unlike web research.
-              tagline: true,
-              companyDescription: true,
-              companyWebsite: true,
-              industry: true,
-              companySize: true,
-              headquarters: true,
-              foundedYear: true,
-              companyCulture: true,
-              companyBenefits: true,
-              /** Cheap, and worth showing wherever the company appears. */
-              id: true,
-              verificationStatus: true,
-              ...(opts.employerBrand
-                ? {
-                    mission: true,
-                    whyWorkHere: true,
-                    coreValues: true,
-                    awards: true,
-                    diversityStatement: true,
-                    deiStats: true,
-                    galleryPhotos: true,
-                  }
-                : {}),
-            },
-          },
+          employerProfile: { select: employer },
+          // A job is shown under its poster's company page, not under the
+          // poster's own copy of it. withShownEmployer swaps it in.
+          ...seatPage(employer),
         },
       },
       _count: {
@@ -1015,7 +1046,7 @@ export class JobsService {
   async getVisibleJobEntity(id: string, viewer?: User | null) {
     const job = await this.prisma.job.findUnique({
       where: { id },
-      select: { id: true, title: true, companyName: true, status: true, postedById: true },
+      select: { id: true, title: true, status: true, postedById: true, ...JOB_COMPANY_SELECT },
     });
     return job && (await this.canView(job, viewer)) ? job : null;
   }

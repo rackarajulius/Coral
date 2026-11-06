@@ -16,9 +16,11 @@ import {
   type EmployerCompany,
 } from "@/lib/api/employerCompany";
 import { SectionCard, Field } from "./shared";
+import { companySizeOptions } from "@/lib/companyFacts";
+import { PageStatusCard } from "./PageStatusCard";
 
 const INDUSTRIES = ["Technology", "Finance", "Healthcare", "Retail", "Education", "Manufacturing"];
-const SIZES = ["1-10", "11-50", "51-200", "201-500", "501-1000", "1000+"];
+// LinkedIn's size bands: the one list every company form uses.
 
 /** Finds a social link by platform, tolerating however it was labelled. */
 function findSocial(links: CompanySocialLink[], platform: string): CompanySocialLink | undefined {
@@ -221,8 +223,8 @@ export default function General() {
             <Select value={form.companySize} onValueChange={(v) => set("companySize", v)}>
               <SelectTrigger className="bg-card"><SelectValue placeholder="Select" /></SelectTrigger>
               <SelectContent>
-                {Array.from(new Set([...SIZES, form.companySize].filter(Boolean))).map(i =>
-                  <SelectItem key={i} value={i}>{i} employees</SelectItem>)}
+                {companySizeOptions(form.companySize).map((s) =>
+                  <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
               </SelectContent>
             </Select>
           </Field>
@@ -278,6 +280,9 @@ export default function General() {
           </Field>
         </div>
       </SectionCard>
+
+      {/* Last, as on LinkedIn's Settings: taking the page down. */}
+      <PageStatusCard />
     </div>
   );
 }

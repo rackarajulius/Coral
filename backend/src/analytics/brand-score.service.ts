@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
+import { profileShownFor } from '../company/company-page';
 import { User } from '../common/types/user.types';
 
 const DAY_MS = 86_400_000;
@@ -63,7 +64,11 @@ export class BrandScoreService {
     const memberIds = await this.companyContext.memberUserIds(user.id);
     const [profile, jobs, apps, staleApps, interviews, openInterviews, recentPosts] =
       await Promise.all([
-        this.prisma.employerProfile.findUnique({ where: { userId: user.id } }),
+        // The company's page, which is what candidates see — not the
+        // caller's own row, which for a teammate is empty.
+        profileShownFor(this.prisma, user.id, { id: true }).then((page) =>
+          page ? this.prisma.employerProfile.findUnique({ where: { id: page.id } }) : null,
+        ),
         this.prisma.job.findMany({
           where: { postedById: { in: memberIds } },
           select: { id: true, status: true, skills: true, description: true },

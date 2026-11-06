@@ -73,7 +73,7 @@ export class PostsController {
    */
   @Get('company-voice')
   async companyVoice(@CurrentUser() user: User) {
-    return { success: true, data: { company: await this.postsService.companyVoiceFor(user.id) } };
+    return { success: true, data: { company: await this.postsService.companyVoiceCardFor(user.id) } };
   }
 
   @Get('announcement-options')

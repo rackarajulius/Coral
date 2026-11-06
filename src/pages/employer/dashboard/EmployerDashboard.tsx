@@ -1,13 +1,16 @@
 import { useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import HeroBanner from "@/components/employer-dashboard/overview/HeroBanner";
 import KpiGrid from "@/components/employer-dashboard/overview/KpiGrid";
 import QuickActionsGrid from "@/components/employer-dashboard/overview/QuickActionsGrid";
 import ActivityFeed from "@/components/employer-dashboard/overview/ActivityFeed";
 import NextBestActions from "@/components/employer-dashboard/overview/NextBestActions";
 import FinishSetupCard from "@/components/employer-dashboard/overview/FinishSetupCard";
+import PageDeactivatedNotice from "@/components/employer-dashboard/overview/PageDeactivatedNotice";
 import UpgradeBanner from "@/components/employer-dashboard/overview/UpgradeBanner";
 import { useAuth } from "@/contexts/AuthContext";
 import { personName } from "@/lib/personName";
+import { getCompanyVoice } from "@/lib/api/community";
 import { useJobsStore } from "@/stores/jobsStore";
 import { useEmployerCompanyStore } from "@/stores/employerCompanyStore";
 
@@ -15,6 +18,15 @@ const Dashboard = () => {
   const { user } = useAuth();
   const { jobs, fetchJobs } = useJobsStore();
   const { identity, loaded, fetchCompany } = useEmployerCompanyStore();
+  // Whether this person can post in the company's name: the composer's own
+  // query and key, so the community opens with it already known.
+  const companyVoice = useQuery({
+    queryKey: ["community-company-voice", user?.id],
+    queryFn: getCompanyVoice,
+    enabled: !!user,
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
 
   useEffect(() => {
     fetchJobs().catch(() => {});
@@ -55,10 +67,12 @@ const Dashboard = () => {
             summary={`${activeJobsCount} active job${activeJobsCount === 1 ? "" : "s"} · ${totalApplicants} total applicant${totalApplicants === 1 ? "" : "s"}`}
             bannerUrl={bannerUrl}
             tagline={tagline}
+            postAsName={companyVoice.data?.name ?? null}
           />
           {/* Above the metrics: verification gates posting, so an employer who
               skipped it needs to see that before anything else. Renders
               nothing once setup is complete. */}
+          <PageDeactivatedNotice />
           <FinishSetupCard />
           <KpiGrid />
           <QuickActionsGrid />

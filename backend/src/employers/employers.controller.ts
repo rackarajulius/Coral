@@ -133,6 +133,13 @@ export class EmployersController {
     return { success: true, data: await this.onboarding.matches(user) };
   }
 
+  /** Whether a page address is free and well formed, as the person types it. */
+  @Roles(UserRole.EMPLOYER, UserRole.JOB_SEEKER, UserRole.ADMIN)
+  @Get('me/onboarding/page-address')
+  async checkPageAddress(@CurrentUser() user: User, @Query('slug') slug = '') {
+    return { success: true, data: await this.onboarding.checkPageAddress(user, String(slug).slice(0, 200)) };
+  }
+
   @Roles(UserRole.EMPLOYER, UserRole.JOB_SEEKER, UserRole.ADMIN)
   @Post('me/onboarding/company')
   async saveCompanyStep(@CurrentUser() user: User, @Body() dto: SaveCompanyStepDto) {
@@ -177,7 +184,7 @@ export class EmployersController {
   @RequiresCapability('company:write')
   @Patch('me/company')
   async updateMyCompany(@CurrentUser() user: User, @Body() dto: UpdateEmployerCompanyDto) {
-    const company = await this.employersService.updateMyCompany(user.id, dto);
+    const company = await this.employersService.updateMyCompany(user, dto);
     return {
       success: true,
       message: 'Company profile updated successfully',

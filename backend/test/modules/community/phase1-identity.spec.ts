@@ -27,6 +27,9 @@ function harness() {
     employerProfile: { findMany: jest.fn().mockResolvedValue([]) },
     jobSeekerProfile: { findMany: jest.fn().mockResolvedValue([]) },
     freelancerProfile: { findMany: jest.fn().mockResolvedValue([]) },
+    // Each company's one page (Company.pageId): where its badge links, and
+    // whose review earns the check.
+    company: { findMany: jest.fn().mockResolvedValue([]) },
   };
   return { prisma, service: new CommunityIdentityService(prisma as unknown as PrismaService) };
 }
@@ -124,17 +127,24 @@ describe('Phase 1 community identity: public provider and recruiting privacy', (
 });
 
 describe('Phase 1 community identity: verified company membership and safe projections', () => {
-  function membershipFixture() {
+  // A company that has proven its domain, unless a test says otherwise.
+  function membershipFixture(
+    domain: string | null = 'company-a.example',
+    page: { visibility: string } | null = { visibility: 'public' },
+    reviewed: string[] = [],
+    deactivatedAt: Date | null = null,
+  ) {
     const result = harness();
     result.prisma.companyMember.findMany.mockResolvedValue([
-      { userId: 'professional', companyId: 'company-a', company: { name: 'Company A' } },
+      { userId: 'professional', companyId: 'company-a', company: { name: 'Company A', domain } },
     ]);
-    result.prisma.employerProfile.findMany
-      .mockResolvedValueOnce([{ userId: 'professional', jobTitle: 'Recruiter' }])
-      .mockResolvedValueOnce([
-        { id: 'oldest-public-page', companyId: 'company-a' },
-        { id: 'newer-public-page', companyId: 'company-a' },
-      ]);
+    // Their own row holds only their title; the company is shown by its page.
+    result.prisma.employerProfile.findMany.mockResolvedValue([{ userId: 'professional', jobTitle: 'Recruiter' }]);
+    result.prisma.company.findMany.mockImplementation(async (args: { where: { page?: unknown } }) =>
+      args.where.page
+        ? reviewed.map((id) => ({ id }))
+        : [{ id: 'company-a', deactivatedAt, page: page && { id: 'company-page', ...page } }],
+    );
     return result;
   }
 
@@ -144,7 +154,14 @@ describe('Phase 1 community identity: verified company membership and safe proje
     prisma.freelancerProfile.findMany.mockResolvedValue([provider()]);
     await expect(service.resolveOne('professional')).resolves.toEqual({
       label: 'Recruiter at Company A', verified: true, companyId: 'company-a',
-      companyName: 'Company A', companyProfileId: 'oldest-public-page', profileUrl: '/providers/professional',
+      companyName: 'Company A', companyProfileId: 'company-page', profileUrl: '/providers/professional',
+    });
+  });
+
+  it("links the company's page whoever on the team is speaking, and nothing when that page is private", async () => {
+    const { service } = membershipFixture('company-a.example', { visibility: 'private' });
+    await expect(service.resolveOne('professional')).resolves.toMatchObject({
+      label: 'Recruiter at Company A', companyId: 'company-a', companyProfileId: null,
     });
   });
 
@@ -165,12 +182,40 @@ describe('Phase 1 community identity: verified company membership and safe proje
     expect(identity.profileUrl).toBeUndefined();
     expect(prisma.companyMember.findMany).toHaveBeenCalledWith({
       where: { userId: { in: ['professional'] }, status: CompanyMemberStatus.ACTIVE },
-      select: { userId: true, companyId: true, company: { select: { name: true } } },
+      select: { userId: true, companyId: true, company: { select: { name: true, domain: true } } },
     });
-    expect(prisma.employerProfile.findMany).toHaveBeenLastCalledWith({
-      where: { companyId: { in: ['company-a'] }, visibility: { not: 'private' } },
-      select: { id: true, companyId: true }, orderBy: { createdAt: 'asc' },
+    expect(prisma.company.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['company-a'] } },
+      select: { id: true, deactivatedAt: true, page: { select: { id: true, visibility: true } } },
     });
+  });
+
+  it("keeps the label but links nowhere while the company has deactivated its page", async () => {
+    const { service } = membershipFixture('company-a.example', { visibility: 'public' }, [], new Date());
+    await expect(service.resolveOne('professional')).resolves.toMatchObject({
+      label: 'Recruiter at Company A', companyId: 'company-a', companyProfileId: null,
+    });
+  });
+
+  it('gives an unproven company membership its label but not the check', async () => {
+    // Anyone can create an "Airtel Uganda"; without a proven domain or a
+    // reviewed page, saying who they work with is not saying it is real.
+    const { prisma, service } = membershipFixture(null);
+    await expect(service.resolveOne('professional')).resolves.toMatchObject({
+      label: 'Recruiter at Company A', verified: false, companyId: 'company-a', companyProfileId: 'company-page',
+    });
+    // The review that counts is the company page's — never any one member's
+    // own row, which is not what candidates see.
+    expect(prisma.company.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['company-a'] }, page: { is: { verificationStatus: 'verified' } } },
+      select: { id: true },
+    });
+    expect(prisma.employerProfile.findMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives the check to a company whose page a person at Coral reviewed, without a domain', async () => {
+    const { service } = membershipFixture(null, { visibility: 'public' }, ['company-a']);
+    await expect(service.resolveOne('professional')).resolves.toMatchObject({ label: 'Recruiter at Company A', verified: true });
   });
 
   it('does not award a company badge from a self-entered title without active membership', async () => {

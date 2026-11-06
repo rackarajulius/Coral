@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { approveEmployer, suspendEmployer, banEmployer, deleteEmployer } from "@/lib/api/adminEmployers";
+import { COMPANY_DELETION_RULE, departureNote } from "@/lib/api/accountDeletion";
 import { timeAgo } from "@/lib/timeAgo";
 
 interface Props {
@@ -56,7 +57,7 @@ const actionConfig: Record<DestructiveType, { title: string; description: (name:
   },
   delete: {
     title: "Delete Employer",
-    description: (name) => `Are you sure you want to permanently delete "${name}"? All associated data, job listings, and applications will be removed. This action cannot be undone.`,
+    description: (name) => `Are you sure you want to permanently delete "${name}"? Their account and personal data will be removed. ${COMPANY_DELETION_RULE} This action cannot be undone.`,
     confirmLabel: "Delete",
   },
 };
@@ -97,8 +98,10 @@ export function EmployerDetailDrawer({ employer, open, onOpenChange, onChanged }
     const verb = destructiveAction === "suspend" ? "suspended" : destructiveAction === "ban" ? "banned" : "deleted";
     setBusy(true);
     try {
-      await action(employer.id);
-      toast.success(`${employer.company} ${verb}`);
+      const result = await action(employer.id);
+      toast.success(`${employer.company} ${verb}`, {
+        description: Array.isArray(result) ? departureNote(result) : undefined,
+      });
       setDestructiveAction(null);
       onChanged?.();
       onOpenChange(false);

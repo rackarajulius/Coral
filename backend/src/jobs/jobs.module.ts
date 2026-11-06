@@ -11,9 +11,12 @@ import { CompanyResearchModule } from '../resume-matcher/company-research/compan
 import { AnalyticsModule } from '../analytics/analytics.module';
 import { EmployersModule } from '../employers/employers.module';
 import { AiModule } from '../services/ai/ai.module';
+import { SeekerEntitlementsModule } from '../seeker-entitlements/seeker-entitlements.module';
 
 @Module({
-  imports: [ApplicationsModule, NotificationsModule, AiModule, StorageModule, CompanyResearchModule, AnalyticsModule, EmployersModule],
+  // SeekerEntitlementsModule: tailoring and company research on a job page are
+  // the same Premium features as on the matcher, metered the same way.
+  imports: [ApplicationsModule, NotificationsModule, AiModule, StorageModule, CompanyResearchModule, AnalyticsModule, EmployersModule, SeekerEntitlementsModule],
   controllers: [JobsController],
   providers: [JobsService, JobMatchService, JobFitService, JobLifecycleService],
   exports: [JobsService],

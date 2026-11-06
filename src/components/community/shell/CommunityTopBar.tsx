@@ -1,11 +1,11 @@
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Briefcase, Menu, Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import ProfileMenu from "@/components/ProfileMenu";
 import NotificationBell from "@/components/NotificationBell";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
 import { BRAND_NAME } from "@/lib/brand";
+import { CommunityProfileMenu } from "./CommunityProfileMenu";
 
 /**
  * The community's own top bar.
@@ -84,7 +84,7 @@ export function CommunityTopBar({ onOpenMenu }: { onOpenMenu: () => void }) {
           {isLoading ? (
             <div className="h-8 w-8 animate-pulse rounded-full bg-muted" aria-hidden="true" />
           ) : isAuthenticated ? (
-            <ProfileMenu />
+            <CommunityProfileMenu />
           ) : (
             <Button size="sm" className="rounded-full" onClick={() => openAuth()}>
               Sign in

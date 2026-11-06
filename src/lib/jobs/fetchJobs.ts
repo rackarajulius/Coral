@@ -73,11 +73,10 @@ export function transformBackendJob(job: Record<string, unknown>): Job {
     (poster?.displayName as string) ||
     [poster?.firstName, poster?.lastName].filter(Boolean).join(" ") ||
     "Unknown";
-  const icon =
-    (job.companyLogo as string) ||
-    (employerProfile?.companyLogo as string) ||
-    (poster?.avatarUrl as string) ||
-    "";
+  // A company without a logo shows its first letter. The recruiter's own
+  // account photo used to stand in here, putting a person's face where the
+  // company's logo belongs.
+  const icon = (job.companyLogo as string) || (employerProfile?.companyLogo as string) || "";
   const isRemote = Boolean(job.isRemote);
   const rawLocation = (job.location as string) ?? "";
   const location = isRemote

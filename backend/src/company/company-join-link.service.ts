@@ -199,10 +199,18 @@ export class CompanyJoinLinkService {
       return {
         status: CompanyMemberStatus.PENDING,
         pendingReason:
-          'This company has no verified work domain, so joins are approved by an owner.',
+          "This company hasn't proven a domain yet, so an owner approves each join.",
       };
     }
+    // The company's domain is proven (CompanyDomainService); the joiner's
+    // address must be too, or typing one at sign-up would be a way in.
     // Free-mail hosts return null here, so gmail.com can never match a company.
+    if (workDomain(user.email) === companyDomain && !user.emailVerified) {
+      return {
+        status: CompanyMemberStatus.PENDING,
+        pendingReason: `Your @${companyDomain} address isn't confirmed yet, so an owner needs to approve you.`,
+      };
+    }
     if (workDomain(user.email) === companyDomain) {
       return { status: CompanyMemberStatus.ACTIVE, pendingReason: null };
     }
