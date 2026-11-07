@@ -60,37 +60,13 @@ export class PostsService {
     const limit = Math.min(query.limit ?? 20, 50);
     const skip = (page - 1) * limit;
 
-    /**
-     * The personal slices need to know who is asking.
-     *
-     * Signed out they resolve to nothing rather than silently falling back to
-     * the whole feed — "Saved" showing every post on the platform would be a
-     * lie about whose list it is.
-     */
-    const personal = await this.buildPersonalFilter(query.filter, currentUserId);
-    if (personal === 'none') {
+    const where = await this.feedWhere(query, currentUserId);
+    if (where === 'none') {
       return {
         data: [],
         meta: { page: query.page ?? 1, limit: query.limit ?? 20, total: 0, totalPages: 1 },
       };
     }
-
-    const where = {
-      // Removed content is gone from every listing. It survives in the table
-      // so a decision can be reviewed, not so it can keep being read.
-      removedAt: null,
-      ...personal,
-      ...(query.spaceId ? { spaceId: query.spaceId } : {}),
-      // A person's posts are what they said as themselves: what they published
-      // in a company's name is the company's, and lives on its page.
-      ...(query.authorId ? { authorId: query.authorId, companyId: null } : {}),
-      ...(query.companyId ? { companyId: query.companyId } : {}),
-      ...(query.query
-        ? { content: { contains: query.query, mode: 'insensitive' as const } }
-        : {}),
-      ...(query.hashtag ? { hashtags: { has: query.hashtag.toLowerCase() } } : {}),
-      ...(query.section ? { purpose: { in: SECTION_PURPOSES[query.section] } } : {}),
-    };
 
     const [posts, total] = await Promise.all([
       this.prisma.post.findMany({
@@ -116,6 +92,50 @@ export class PostsService {
         total,
         totalPages: Math.max(Math.ceil(total / limit), 1),
       },
+    };
+  }
+
+  /**
+   * How many posts this slice of the feed has gained since the newest one the
+   * reader already has — for the "New posts" button. Exactly the feed's own
+   * rules, so the button never promises a post the feed won't show; one count
+   * query, so asking every minute costs next to nothing.
+   */
+  async countNewer(query: ListPostsQueryDto, after: string, currentUserId?: string): Promise<{ count: number }> {
+    const since = new Date(after);
+    if (Number.isNaN(since.getTime())) throw new BadRequestException('Give the time of the newest post you have.');
+    const where = await this.feedWhere(query, currentUserId);
+    if (where === 'none') return { count: 0 };
+    return { count: await this.prisma.post.count({ where: { ...where, createdAt: { gt: since } } }) };
+  }
+
+  /** Which posts a slice of the feed holds — shared by the feed and its "New posts" count. */
+  private async feedWhere(query: ListPostsQueryDto, currentUserId?: string) {
+    /**
+     * The personal slices need to know who is asking.
+     *
+     * Signed out they resolve to nothing rather than silently falling back to
+     * the whole feed — "Saved" showing every post on the platform would be a
+     * lie about whose list it is.
+     */
+    const personal = await this.buildPersonalFilter(query.filter, currentUserId);
+    if (personal === 'none') return 'none' as const;
+
+    return {
+      // Removed content is gone from every listing. It survives in the table
+      // so a decision can be reviewed, not so it can keep being read.
+      removedAt: null,
+      ...personal,
+      ...(query.spaceId ? { spaceId: query.spaceId } : {}),
+      // A person's posts are what they said as themselves: what they published
+      // in a company's name is the company's, and lives on its page.
+      ...(query.authorId ? { authorId: query.authorId, companyId: null } : {}),
+      ...(query.companyId ? { companyId: query.companyId } : {}),
+      ...(query.query
+        ? { content: { contains: query.query, mode: 'insensitive' as const } }
+        : {}),
+      ...(query.hashtag ? { hashtags: { has: query.hashtag.toLowerCase() } } : {}),
+      ...(query.section ? { purpose: { in: SECTION_PURPOSES[query.section] } } : {}),
     };
   }
 
@@ -370,7 +390,13 @@ export class PostsService {
       }
     }
 
-    const [normalized] = await this.addViewerFlags([created], userId);
+    // Shaped exactly as the feed shapes it — who wrote it, its poll, who to
+    // follow — so the page can put it straight at the top of the feed
+    // instead of downloading the feed again to find it.
+    const [normalized] = await this.withPolls(
+      await this.withIdentity(await this.addViewerFlags([created], userId), userId),
+      userId,
+    );
     return {
       success: true,
       data: normalized,

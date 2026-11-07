@@ -11,6 +11,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
 import { useViewingAs } from "@/hooks/useViewingAs";
 import { PostComposer } from "./PostComposer";
+import { NewPostsButton } from "./NewPostsButton";
 import { FeedPost } from "./FeedPost";
 import { SpaceView } from "./SpaceView";
 import { CommunitySearch } from "./CommunitySearch";
@@ -380,6 +381,13 @@ export function CommunityFeed() {
             showPrompt={false}
             startPurpose={startingPurpose(view, side)}
             startAsCompany={composeAsCompany}
+          />
+
+          {/* "3 new posts": what others have posted since this feed loaded. */}
+          <NewPostsButton
+            feedKey={["community-posts", "feed", view]}
+            params={{ filter: isPersonalView(view) ? view : undefined, section: isSectionView(view) ? view : undefined }}
+            newestAt={feedPosts[0]?.createdAt}
           />
 
           {posts.isLoading && <PostListSkeleton />}

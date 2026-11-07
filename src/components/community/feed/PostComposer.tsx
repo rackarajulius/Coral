@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BarChart3, Building2, CalendarPlus, Check, ChevronDown, ChevronRight, Clock, FileText, Globe, ImagePlus, Loader2, MessageCircle, Search, Video, X,
+  AlertTriangle, BarChart3, Building2, CalendarPlus, Check, ChevronDown, ChevronRight, Clock, FileText, Globe, ImagePlus, Loader2, MessageCircle,
+  Search, Video, Volume2, VolumeX, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
@@ -13,7 +14,9 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Progress } from "@/components/ui/progress";
+import { useVideoUploads, type VideoUpload } from "./videoUploads";
+import { addPostToFeeds } from "./feedCache";
+import { announceNewPost } from "./feedLive";
 import { cn } from "@/lib/utils";
 import { createTide } from "@/lib/api/tides";
 import {
@@ -26,9 +29,9 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
 import {
-  COMMENT_POLICY_LABELS, createPost, discardCommunityVideo, getAnnouncementOptions, getCommunityVideo, getCompanyVoice, getGifStatus,
-  getVideoUploadSettings, listSpaces, schedulePost, startVideoUpload, uploadPostDocument, uploadPostMedia,
-  type CommentPolicy, type CommunityVideo, type MediaKind, type PostPurpose, type Space, type UploadedDocument,
+  COMMENT_POLICY_LABELS, createPost, getAnnouncementOptions, getCompanyVoice, getGifStatus,
+  getVideoUploadSettings, listSpaces, schedulePost, uploadPostDocument, uploadPostMedia,
+  type CommentPolicy, type CommunityPost, type MediaKind, type PostPurpose, type Space, type UploadedDocument,
 } from "@/lib/api/community";
 import { GifPicker } from "./GifPicker";
 import { MentionField } from "./MentionField";
@@ -57,22 +60,6 @@ const MAX_LONG_VIDEO_BYTES = 5 * 1024 ** 3;
 function clock(seconds: number): string {
   const whole = Math.round(seconds);
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
-}
-
-/**
- * A long video in the draft: sent from this browser to Mux, then prepared
- * there for streaming. Only a "ready" one can be posted, and it is posted on
- * its own.
- */
-interface LongVideo {
-  /** Ours, once the server has given an upload address. */
-  id: string | null;
-  name: string;
-  phase: "uploading" | "processing" | "ready" | "failed";
-  /** Percent sent. */
-  progress: number;
-  video?: CommunityVideo;
-  error?: string;
 }
 
 /** Enough to post and to label the picker — the rest is fetched on demand. */
@@ -282,11 +269,19 @@ function ComposerDialog({
   });
   const streaming = videoSettings.data?.enabled === true;
   const maxVideoSeconds = streaming ? videoSettings.data!.maxSeconds : MAX_VIDEO_SECONDS;
-  const [longVideo, setLongVideo] = useState<LongVideo | null>(null);
-  const upchunkRef = useRef<{ abort: () => void } | null>(null);
+  /**
+   * A long video in the draft, uploading in the page's own store
+   * (videoUploads.ts) rather than here — so it keeps going if the post is
+   * sent before it finishes and this composer closes.
+   */
+  const [videoKey, setVideoKey] = useState<string | null>(null);
+  const longVideo = useVideoUploads((s) => (videoKey ? s.uploads[videoKey] : undefined));
+  const startUpload = useVideoUploads((s) => s.start);
+  const removeUpload = useVideoUploads((s) => s.remove);
+  const postWhenReady = useVideoUploads((s) => s.postWhenReady);
   // For the clean-up when the composer closes, which sees no fresh state.
-  const longVideoRef = useRef<LongVideo | null>(null);
-  longVideoRef.current = longVideo;
+  const videoKeyRef = useRef<string | null>(null);
+  videoKeyRef.current = videoKey;
   const postedRef = useRef(false);
   const [poll, setPoll] = useState<string[] | null>(null);
   const [gifOpen, setGifOpen] = useState(false);
@@ -430,6 +425,9 @@ function ComposerDialog({
    * the listing is open) are posted now.
    */
   const canSchedule = !tide && !structured && !reference;
+  // A scheduled post keeps the video's stream address, which exists once the
+  // video is ready; posting now can go ahead before that.
+  const scheduleBlockedByVideo = !!longVideo && longVideo.phase !== "ready";
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleAt, setScheduleAt] = useState("");
   const schedule = useMutation({
@@ -449,9 +447,9 @@ function ComposerDialog({
   });
 
   const post = useMutation({
-    // Returns nothing on purpose: the two calls hand back different shapes
-    // and neither result is used, so the mutation's type stays honest.
-    mutationFn: async (): Promise<void> => {
+    // The post as the server sent it back, to put straight into the feed —
+    // or null for a tide (a different shape) or a post waiting for its video.
+    mutationFn: async (): Promise<CommunityPost | null> => {
       if (tide) {
         await createTide({
           ...tidePayload(tide),
@@ -459,14 +457,41 @@ function ComposerDialog({
           announcement: toStored(content.trim(), mentions) || undefined,
           ...(asCompany ? { asCompany: true } : {}),
         });
-        return;
+        return null;
       }
-      await createPost(postInput(), user?.supabaseId);
+      // A video still on its way: the post is handed to the page's upload
+      // store, which sends it the moment the video is ready, and this
+      // composer closes now — as on Threads.
+      if (longVideo && videoKey && longVideo.phase !== "ready") {
+        const input = postInput();
+        const supabaseId = user?.supabaseId;
+        const spaceChanged = !!target;
+        postWhenReady(videoKey, async (streamUrl) => {
+          const created = await createPost({ ...input, mediaUrls: [streamUrl] }, supabaseId);
+          addPostToFeeds(queryClient, created.data);
+          announceNewPost();
+          if (spaceChanged) {
+            void queryClient.invalidateQueries({ queryKey: ["community-spaces"] });
+            void queryClient.invalidateQueries({ queryKey: ["space"] });
+          }
+          return created.data.id;
+        });
+        return null;
+      }
+      return (await createPost(postInput(), user?.supabaseId)).data;
     },
-    onSuccess: () => {
+    onSuccess: (created) => {
       postedRef.current = true;
       rememberAudience(user?.id, target);
-      void queryClient.invalidateQueries({ queryKey: ["community-posts"] });
+      if (created) {
+        // At the top of the feed the moment it is saved — no reload.
+        addPostToFeeds(queryClient, created);
+        announceNewPost();
+      } else if (tide) {
+        // A tide's post comes back as the tide, so the feed reloads for it.
+        void queryClient.invalidateQueries({ queryKey: ["community-posts"] });
+        announceNewPost();
+      }
       void queryClient.invalidateQueries({ queryKey: ["tides"] });
       // Posting in a space joins it, so the lists of your spaces have moved.
       if (target) {
@@ -478,59 +503,17 @@ function ComposerDialog({
     onError: (e) => toast.error((e as Error).message),
   });
 
-  /**
-   * Where the long video got to, asked of the server — which asks Mux — every
-   * few seconds while it is being prepared.
-   */
-  const videoProgress = useQuery({
-    queryKey: ["community-video", longVideo?.id],
-    queryFn: () => getCommunityVideo(longVideo!.id!),
-    enabled: !!longVideo?.id && longVideo.phase === "processing",
-    refetchInterval: 2500,
-    retry: false,
-    gcTime: 0,
-  });
-  useEffect(() => {
-    const v = videoProgress.data;
-    if (!v) return;
-    setLongVideo((cur) => {
-      if (!cur || cur.id !== v.id || cur.phase !== "processing") return cur;
-      if (v.status === "ready") return { ...cur, phase: "ready", video: v };
-      if (v.status === "failed") return { ...cur, phase: "failed", error: v.failureReason ?? "That video couldn't be prepared." };
-      return cur;
-    });
-  }, [videoProgress.data]);
-
-  // Leaving mid-upload loses it, so the browser asks first.
-  const sendingVideo = longVideo?.phase === "uploading";
-  useEffect(() => {
-    if (!sendingVideo) return;
-    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [sendingVideo]);
-
   // A video that was never posted is stopped and deleted when the draft goes.
   useEffect(() => () => {
-    const draft = longVideoRef.current;
-    if (postedRef.current || !draft) return;
-    upchunkRef.current?.abort();
-    if (draft.id) void discardCommunityVideo(draft.id).catch(() => undefined);
-  }, []);
+    if (!postedRef.current && videoKeyRef.current) removeUpload(videoKeyRef.current);
+  }, [removeUpload]);
 
   const removeLongVideo = () => {
-    upchunkRef.current?.abort();
-    upchunkRef.current = null;
-    const id = longVideo?.id;
-    setLongVideo(null);
-    if (id) void discardCommunityVideo(id).catch(() => undefined);
+    if (videoKey) removeUpload(videoKey);
+    setVideoKey(null);
   };
 
-  /**
-   * A long video goes from this browser straight to Mux, in 5MB pieces that
-   * are retried and resume after the connection drops — never through our
-   * servers, which could not take a file this size.
-   */
+  /** Shown and playing at once, from the file; uploaded in the background. */
   const pickLongVideo = async (file: File | undefined) => {
     if (videoRef.current) videoRef.current.value = "";
     if (!file) return;
@@ -549,35 +532,7 @@ function ComposerDialog({
       toast.error(`That video is ${clock(seconds)} long. Videos can be up to ${clock(maxVideoSeconds)}.`);
       return;
     }
-
-    setLongVideo({ id: null, name: file.name, phase: "uploading", progress: 0 });
-    try {
-      const { id, uploadUrl } = await startVideoUpload();
-      // Taken out while the address was being fetched: nothing to send.
-      if (!longVideoRef.current) {
-        void discardCommunityVideo(id).catch(() => undefined);
-        return;
-      }
-      setLongVideo((cur) => (cur ? { ...cur, id } : cur));
-      const { createUpload } = await import("@mux/upchunk");
-      const upload = createUpload({ endpoint: uploadUrl, file, chunkSize: 5120 });
-      upchunkRef.current = upload;
-      const mine = (cur: LongVideo | null) => !!cur && cur.id === id;
-      upload.on("progress", (e) => setLongVideo((cur) => (mine(cur) ? { ...cur!, progress: Number(e.detail) || 0 } : cur)));
-      upload.on("success", () => {
-        upchunkRef.current = null;
-        setLongVideo((cur) => (mine(cur) ? { ...cur!, phase: "processing", progress: 100 } : cur));
-      });
-      upload.on("error", () => {
-        upchunkRef.current = null;
-        setLongVideo((cur) => (mine(cur)
-          ? { ...cur!, phase: "failed", error: "The upload stopped. Check your connection and pick the video again." }
-          : cur));
-        void discardCommunityVideo(id).catch(() => undefined);
-      });
-    } catch (e) {
-      setLongVideo((cur) => (cur ? { ...cur, phase: "failed", error: (e as Error).message } : cur));
-    }
+    setVideoKey(startUpload(file));
   };
 
   const pickMedia = async (files: FileList | null) => {
@@ -640,10 +595,11 @@ function ComposerDialog({
   const docReady = !attachedDoc || !!docTitle.trim();
   // Words, pictures, a video or a document can each be the whole post — the
   // server takes any one of them.
-  // A long video has to be ready before the post can go out with it.
-  const videoReady = !longVideo || longVideo.phase === "ready";
-  const canPost = (!!content.trim() || media.length > 0 || !!attachedDoc || longVideo?.phase === "ready")
-    && docReady && pollReady && referenceReady && videoReady && !uploading && !post.isPending;
+  // A video still uploading doesn't hold the post back (it goes out when the
+  // video is ready); one that failed has to be removed first.
+  const videoUsable = !longVideo || longVideo.phase !== "failed";
+  const canPost = (!!content.trim() || media.length > 0 || !!attachedDoc || !!longVideo)
+    && docReady && pollReady && referenceReady && videoUsable && !uploading && !post.isPending;
   const dirty = !!content.trim() || media.length > 0 || !!poll || !!attachedDoc || !!longVideo;
 
   return (
@@ -829,7 +785,7 @@ function ComposerDialog({
               )}
 
               {longVideo && (
-                <LongVideoCard draft={longVideo} onRemove={removeLongVideo} />
+                <VideoDraftTile draft={longVideo} onRemove={removeLongVideo} />
               )}
 
               {attachedDoc && (
@@ -928,7 +884,8 @@ function ComposerDialog({
                 video was already accepted here and simply could not be found.
                 An affordance nobody recognises is the same as a missing one.
               */}
-              <div className="mt-3 flex items-center gap-1">
+              {/* Wraps rather than running under the scrollbar once the post is tall. */}
+              <div className="mt-3 flex flex-wrap items-center gap-1">
                 <input
                   ref={photoRef}
                   type="file"
@@ -1029,10 +986,10 @@ function ComposerDialog({
 
         <footer className="flex items-center justify-between gap-3 border-t border-border px-4 py-3">
           <span className="text-xs text-muted-foreground">
-            {longVideo && longVideo.phase !== "ready"
-              ? longVideo.phase === "failed"
-                ? "Remove the video to post without it"
-                : "You can post once the video is ready"
+            {longVideo?.phase === "failed"
+              ? "Remove the video to post without it"
+              : longVideo && longVideo.phase !== "ready"
+                ? "Post now — your video keeps uploading"
               : tide && !tideReady(tide)
               ? "A tide needs a name and a start"
               : !tide && content.length > MAX_LENGTH - 500
@@ -1056,7 +1013,13 @@ function ComposerDialog({
                 }}
               >
                 <PopoverTrigger asChild>
-                  <Button size="sm" variant="outline" className="gap-1.5 rounded-full" disabled={!canPost || schedule.isPending}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1.5 rounded-full"
+                    disabled={!canPost || scheduleBlockedByVideo || schedule.isPending}
+                    title={scheduleBlockedByVideo ? "You can schedule once the video is ready" : undefined}
+                  >
                     <Clock className="h-3.5 w-3.5" aria-hidden="true" />
                     Schedule
                   </Button>
@@ -1086,7 +1049,7 @@ function ComposerDialog({
                     size="sm"
                     className="w-full rounded-full"
                     onClick={() => schedule.mutate()}
-                    disabled={!canPost || !!scheduleProblem(scheduleAt) || schedule.isPending}
+                    disabled={!canPost || scheduleBlockedByVideo || !!scheduleProblem(scheduleAt) || schedule.isPending}
                   >
                     {schedule.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
                     Schedule post
@@ -1117,58 +1080,94 @@ function ComposerDialog({
 }
 
 /**
- * A long video in the draft: how far the upload is, then its still and
- * length once Mux has it ready — or why it can't be posted.
+ * A long video in the draft, as Threads shows one: the video itself, playing
+ * muted from the picked file the moment it is chosen, in a tile shaped like
+ * it. The upload carries on underneath, with a thin line for how far it has
+ * got; nothing waits for it.
+ *
+ * A file this browser can't play (an iPhone's HEVC .mov in Chrome, say) gets
+ * Mux's still once that exists, and its name until then.
  */
-function LongVideoCard({ draft, onRemove }: { draft: LongVideo; onRemove: () => void }) {
-  const ready = draft.phase === "ready" ? draft.video : undefined;
+function VideoDraftTile({ draft, onRemove }: { draft: VideoUpload; onRemove: () => void }) {
+  const [muted, setMuted] = useState(true);
+  const [playable, setPlayable] = useState(true);
+  const [portrait, setPortrait] = useState(false);
+  const poster = draft.video?.posterUrl ?? null;
+
   return (
-    <div className="mt-3 overflow-hidden rounded-xl border border-border">
-      {ready?.posterUrl && (
-        <div className="relative bg-black">
-          <img src={ready.posterUrl} alt="" className="mx-auto block max-h-64 w-full object-contain" />
-          {ready.durationSeconds !== null && (
-            <span className="absolute bottom-2 right-2 rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white">
-              {clock(ready.durationSeconds)}
-            </span>
-          )}
-        </div>
-      )}
-      <div className="flex items-start gap-3 p-3">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-          <Video className="h-5 w-5" aria-hidden="true" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium">{draft.name}</p>
-          {draft.phase === "uploading" && (
-            <>
-              <Progress value={draft.progress} className="mt-1.5 h-1.5" aria-label="Upload progress" />
-              <p className="mt-1 text-xs tabular-nums text-muted-foreground">
-                {draft.id ? `Uploading… ${Math.floor(draft.progress)}%` : "Starting the upload…"} Keep this window open.
-              </p>
-            </>
-          )}
-          {draft.phase === "processing" && (
-            <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-              Preparing it for streaming. This usually takes under a minute.
-            </p>
-          )}
-          {draft.phase === "ready" && (
-            <p className="mt-1 text-xs text-muted-foreground">Ready. It plays at the quality each viewer's connection can take.</p>
-          )}
-          {draft.phase === "failed" && (
-            <p className="mt-1 text-xs text-destructive" role="alert">{draft.error}</p>
-          )}
-        </div>
+    <div className="mt-3">
+      <div
+        className={cn(
+          "relative overflow-hidden rounded-xl border border-border bg-black",
+          // Shaped like the video: a tall one stays narrow, as on Threads.
+          portrait ? "w-fit max-w-full" : "w-full",
+        )}
+      >
+        {playable ? (
+          <video
+            src={draft.previewUrl}
+            autoPlay
+            loop
+            muted={muted}
+            playsInline
+            onLoadedMetadata={(e) => setPortrait(e.currentTarget.videoHeight > e.currentTarget.videoWidth)}
+            onError={() => setPlayable(false)}
+            aria-label={`Video: ${draft.name}`}
+            className={cn("block max-h-[26rem]", portrait ? "w-auto" : "w-full object-contain")}
+          />
+        ) : poster ? (
+          <img src={poster} alt="" className="block max-h-[26rem] w-full object-contain" />
+        ) : (
+          <div className="flex h-48 w-full flex-col items-center justify-center gap-2 px-6 text-center text-white/80">
+            <Video className="h-6 w-6" aria-hidden="true" />
+            <p className="max-w-full truncate text-sm">{draft.name}</p>
+            <p className="text-xs text-white/60">This browser can't preview it. It will play once it's posted.</p>
+          </div>
+        )}
+
         <button
           type="button"
           onClick={onRemove}
-          aria-label={draft.phase === "uploading" ? "Cancel the upload" : "Remove video"}
-          className="rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          aria-label={draft.phase === "uploading" ? "Cancel the upload and remove the video" : "Remove video"}
+          className="absolute right-2 top-2 rounded-full bg-black/60 p-1.5 text-white hover:bg-black/80"
         >
           <X className="h-4 w-4" aria-hidden="true" />
         </button>
+
+        {playable && (
+          <button
+            type="button"
+            onClick={() => setMuted((m) => !m)}
+            aria-label={muted ? "Turn sound on" : "Mute"}
+            className="absolute bottom-2 right-2 rounded-full bg-black/60 p-1.5 text-white hover:bg-black/80"
+          >
+            {muted ? <VolumeX className="h-4 w-4" aria-hidden="true" /> : <Volume2 className="h-4 w-4" aria-hidden="true" />}
+          </button>
+        )}
+
+        {/* Where the upload has got to: small, and in the corner, because
+            nothing has to wait for it. */}
+        {(draft.phase === "uploading" || draft.phase === "processing") && (
+          <span
+            className="absolute bottom-2 left-2 inline-flex items-center gap-1.5 rounded-full bg-black/60 px-2 py-1 text-[11px] font-medium tabular-nums text-white"
+            role="status"
+          >
+            <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+            {draft.phase === "uploading" ? (draft.id ? `Uploading ${Math.floor(draft.progress)}%` : "Starting…") : "Preparing…"}
+          </span>
+        )}
+        {draft.phase === "uploading" && (
+          <div className="absolute inset-x-0 bottom-0 h-1 bg-white/20" aria-hidden="true">
+            <div className="h-full bg-primary transition-[width]" style={{ width: `${Math.max(2, draft.progress)}%` }} />
+          </div>
+        )}
+
+        {draft.phase === "failed" && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/70 px-6 text-center" role="alert">
+            <AlertTriangle className="h-5 w-5 text-white" aria-hidden="true" />
+            <p className="text-sm text-white">{draft.error}</p>
+          </div>
+        )}
       </div>
     </div>
   );

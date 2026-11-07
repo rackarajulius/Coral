@@ -1,4 +1,4 @@
-import { IsIn, IsInt, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
+import { IsIn, IsInt, IsISO8601, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
 
 export class ListPostsQueryDto {
   /**
@@ -63,3 +63,8 @@ export class ListPostsQueryDto {
   hashtag?: string;
 }
 
+/** A slice of the feed, and the time of the newest post the reader already has. */
+export class NewPostsQueryDto extends ListPostsQueryDto {
+  @IsISO8601()
+  after!: string;
+}

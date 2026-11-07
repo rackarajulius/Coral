@@ -292,7 +292,7 @@ export interface CommunityComment {
   replies?: CommunityComment[];
 }
 
-interface Paged<T> {
+export interface Paged<T> {
   data: T[];
   meta: { page: number; limit: number; total: number; totalPages: number };
 }
@@ -349,6 +349,21 @@ export const listPosts = (
   if (params.query) search.set("query", params.query);
   const qs = search.toString();
   return req<Paged<CommunityPost>>(`/posts${qs ? `?${qs}` : ""}`);
+};
+
+/**
+ * How many posts a feed has gained since the newest one on screen — for the
+ * "New posts" button. Takes the same slice as listPosts.
+ */
+export const getNewPostsCount = (
+  params: { filter?: FeedFilter; section?: FeedSection; spaceId?: string },
+  after: string,
+) => {
+  const search = new URLSearchParams({ after });
+  if (params.filter) search.set("filter", params.filter);
+  if (params.section) search.set("section", params.section);
+  if (params.spaceId) search.set("spaceId", params.spaceId);
+  return req<{ data: { count: number } }>(`/posts/new-count?${search}`).then((r) => r.data.count);
 };
 
 export const getPost = (id: string) =>

@@ -19,7 +19,7 @@ import { Public } from '../../common/decorators/public.decorator';
 import { User } from '../../common/types/user.types';
 import { CreatePostDto } from './dto/create-post.dto';
 import { ResharePostDto } from './dto/reshare-post.dto';
-import { ListPostsQueryDto } from './dto/list-posts-query.dto';
+import { ListPostsQueryDto, NewPostsQueryDto } from './dto/list-posts-query.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { PostsService } from './posts.service';
@@ -62,6 +62,18 @@ export class PostsController {
       success: true,
       ...(await this.postsService.list(query, user?.id)),
     };
+  }
+
+  /**
+   * How many posts this feed has gained since the reader's newest — the
+   * "New posts" button. Declared above `:id`, which would otherwise read
+   * "new-count" as a post id.
+   */
+  @Public()
+  @Get('new-count')
+  async newCount(@Query() query: NewPostsQueryDto, @CurrentUser() user?: User) {
+    const { after, ...feed } = query;
+    return { success: true, data: await this.postsService.countNewer(feed, after, user?.id) };
   }
 
   /**
