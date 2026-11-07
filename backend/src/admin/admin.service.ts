@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { computeProfileCompletion } from '../common/profile-completion';
-import { CompanyMemberStatus, CompanyPlan, Prisma, ReportStatus, SubscriptionStatus } from '@prisma/client';
+import { CompanyMemberStatus, CompanyPlan, Prisma, ReportStatus, SubscriptionStatus, UserStatus } from '@prisma/client';
+import { JobseekersListQueryDto } from './dto/jobseekers-list-query.dto';
+import { ModerationRecordService } from './moderation-record.service';
 import { PLAN_LABELS } from '../billing/plan-entitlements';
 import { RESUME_BUCKET, StorageService } from '../storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -13,6 +15,21 @@ import type { AdminSettableJobStatus } from './dto/update-job-status.dto';
 import { MetricSnapshotService } from './metric-snapshot.service';
 import { AuditLogService } from './audit-log.service';
 import { SeekerPremiumService } from '../seeker-billing/seeker-premium.service';
+
+/** Account status as the admin jobseekers page names it, and back. */
+const STATUS_LABEL: Record<UserStatus, string> = {
+  ACTIVE: 'Active',
+  PENDING_ONBOARDING: 'Onboarding',
+  INACTIVE: 'Inactive',
+  SUSPENDED: 'Suspended',
+  BANNED: 'Banned',
+};
+const STATUS_FROM_LABEL: Record<string, UserStatus> = Object.fromEntries(
+  Object.entries(STATUS_LABEL).map(([status, label]) => [label, status as UserStatus]),
+);
+
+/** The last moment of a YYYY-MM-DD day, so a "to" date includes that day. */
+const endOfDay = (day: string) => new Date(`${day.slice(0, 10)}T23:59:59.999Z`);
 
 /** A KPI card's history: a sparkline and % change, or null change when there's none. */
 type KpiTrend = { trend: number[]; change: number | null };
@@ -31,6 +48,7 @@ export class AdminService {
     private readonly audit: AuditLogService,
     private readonly premium: SeekerPremiumService,
     private readonly storage: StorageService,
+    private readonly moderation: ModerationRecordService,
   ) {}
 
   /**
@@ -217,12 +235,13 @@ export class AdminService {
     const last7Days = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const last30Days = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    const [totalJobseekers, newSignups7d, active30d, suspended, flagged, premiumUsers] = await Promise.all([
+    const [totalJobseekers, newSignups7d, active30d, suspended, withOpenReports, premiumUsers] = await Promise.all([
       this.prisma.user.count({ where: { role: 'JOB_SEEKER' } }),
       this.prisma.user.count({ where: { role: 'JOB_SEEKER', createdAt: { gte: last7Days } } }),
       this.prisma.user.count({ where: { role: 'JOB_SEEKER', status: 'ACTIVE', lastLoginAt: { gte: last30Days } } }),
       this.prisma.user.count({ where: { role: 'JOB_SEEKER', status: 'SUSPENDED' } }),
-      this.prisma.user.count({ where: { role: 'JOB_SEEKER', status: 'SUSPENDED' } }),
+      // People, not reports: one person with three open reports counts once.
+      this.prisma.user.count({ where: { role: 'JOB_SEEKER', ...this.moderation.openReportsWhere() } }),
       this.prisma.user.count({ where: { role: 'JOB_SEEKER', subscriptionTier: 'premium' } }),
     ]);
 
@@ -231,7 +250,7 @@ export class AdminService {
       newSignups7d,
       active30d,
       suspended,
-      flagged,
+      withOpenReports,
       // Paid or complimentary — the same tier every feature checks.
       premiumUsers,
       // No trend figures: nothing records these counts over time, and a ratio
@@ -282,7 +301,7 @@ export class AdminService {
     });
   }
 
-  async getJobseekersList(query: AdminListQueryDto = {}) {
+  async getJobseekersList(query: JobseekersListQueryDto = {}) {
     const page = Math.max(query.page ?? 1, 1);
     const limit = Math.min(query.limit ?? 10, 100);
     const skip = (page - 1) * limit;
@@ -299,6 +318,31 @@ export class AdminService {
           { lastName: { contains: s, mode: 'insensitive' } },
         ],
       });
+    }
+
+    const statuses = (query.statuses || '')
+      .split(',')
+      .map((s) => STATUS_FROM_LABEL[s.trim()])
+      .filter((s): s is UserStatus => !!s);
+    // Unknown labels only → match nothing rather than silently showing everyone.
+    if (query.statuses?.trim()) and.push(statuses.length ? { status: { in: statuses } } : { id: { in: [] } });
+    if (query.hasOpenReports === 'true') and.push(this.moderation.openReportsWhere());
+    if (query.premiumOnly === 'true') and.push({ subscriptionTier: 'premium' });
+    if (query.signedUpFrom) and.push({ createdAt: { gte: new Date(query.signedUpFrom) } });
+    if (query.signedUpTo) and.push({ createdAt: { lte: endOfDay(query.signedUpTo) } });
+    // Someone who never signed in back is counted as last active at sign-up,
+    // as the list itself shows them.
+    if (query.activeFrom) {
+      const from = new Date(query.activeFrom);
+      and.push({ OR: [{ lastLoginAt: { gte: from } }, { lastLoginAt: null, createdAt: { gte: from } }] });
+    }
+    if (query.activeTo) {
+      const to = endOfDay(query.activeTo);
+      and.push({ OR: [{ lastLoginAt: { lte: to } }, { lastLoginAt: null, createdAt: { lte: to } }] });
+    }
+    // Profiles store a country code ("CA"), picked from getJobseekerCountries.
+    if (query.country?.trim()) {
+      and.push({ jobSeekerProfile: { country: { equals: query.country.trim(), mode: 'insensitive' } } });
     }
     const where: Prisma.UserWhereInput = { AND: and };
 
@@ -364,6 +408,8 @@ export class AdminService {
     // Interview has no relation to User (candidateId is a plain column), so
     // count for this page's people in one grouped query. Declined and
     // cancelled invitations are not interviews that happened or will.
+    const pageIds = jobseekers.map((u) => u.id);
+    const openReports = await this.moderation.openReportCounts(pageIds);
     const interviewCounts = new Map(
       (
         await this.prisma.interview.groupBy({
@@ -400,10 +446,11 @@ export class AdminService {
       profileCompletion: this.computeJobseekerCompletion(user),
       lastActive: user.lastLoginAt?.toISOString() || user.createdAt.toISOString(),
       signupDate: user.createdAt.toISOString(),
-      status: user.status === 'ACTIVE' ? 'Active' : user.status === 'SUSPENDED' ? 'Suspended' : 'Inactive',
-      // No risk model yet — keep it stable rather than random.
-      risk: 'Low' as const,
-      riskScore: 0,
+      // Each account status under its own name. Banned and mid-onboarding used
+      // to read as "Inactive".
+      status: STATUS_LABEL[user.status],
+      // A count of facts, not a score: see ModerationRecordService.
+      openReports: openReports.get(user.id) ?? 0,
       // Paid or complimentary, as the product itself sees it. A one-off payment
       // is not Premium.
       isPremium: user.subscriptionTier === 'premium',
@@ -822,6 +869,29 @@ export class AdminService {
       changeSummary: 'Jobseeker account deleted',
       before: { status: before.status, email: before.email },
     });
+  }
+
+  /**
+   * The countries on job seekers' profiles, with how many people each — the
+   * options for the list's country filter. Only what is actually stored, so
+   * every choice matches someone.
+   */
+  async getJobseekerCountries() {
+    const rows = await this.prisma.jobSeekerProfile.groupBy({
+      by: ['country'],
+      where: { user: { role: 'JOB_SEEKER' }, country: { not: null } },
+      _count: { _all: true },
+    });
+    return rows
+      .filter((r) => r.country && r.country.trim())
+      .map((r) => ({ code: r.country!.trim(), people: r._count._all }))
+      .sort((a, b) => b.people - a.people);
+  }
+
+  /** Reports about what they wrote, what moderators removed, and account actions. */
+  async getJobseekerModeration(userId: string) {
+    await this.assertJobseeker(userId);
+    return this.moderation.recordFor(userId);
   }
 
   /**

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ArrowUpDown, MoreHorizontal, CheckCircle2, ShieldOff, Trash2, Flag, Star, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Jobseeker, JobseekerStatus, RiskLevel } from "@/data/admin/jobseeker/jobs-data";
+import { Jobseeker, JobseekerStatus } from "@/data/admin/jobseeker/jobs-data";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -23,21 +23,18 @@ const statusStyles: Record<JobseekerStatus, string> = {
   Inactive:
     "bg-slate-100 text-slate-600 border border-slate-200 dark:bg-slate-800 dark:text-slate-400",
 
-  Suspended:
-    "bg-rose-500/10 text-rose-600 border border-rose-500/20 dark:bg-rose-500/20 dark:text-rose-400",
+  Onboarding:
+    "bg-blue-500/10 text-blue-600 border border-blue-500/20 dark:bg-blue-500/20 dark:text-blue-400",
 
-  Flagged:
+  Suspended:
     "bg-amber-500/10 text-amber-600 border border-amber-500/20 dark:bg-amber-500/20 dark:text-amber-400",
 
-  Deleted:
-    "bg-slate-100 text-slate-500 border border-slate-200 dark:bg-slate-800 dark:text-slate-400",
+  Banned:
+    "bg-rose-500/10 text-rose-600 border border-rose-500/20 dark:bg-rose-500/20 dark:text-rose-400",
 };
 
-const riskDot: Record<RiskLevel, string> = {
-  Low: "bg-emerald-500",
-  Medium: "bg-amber-500",
-  High: "bg-rose-500",
-};
+/** Suspended and banned accounts can be reinstated; the others can be suspended. */
+const isStopped = (s: JobseekerStatus) => s === "Suspended" || s === "Banned";
 
 interface JobseekersTableProps {
   jobseekers: Jobseeker[];
@@ -107,13 +104,9 @@ function SkeletonTableRow() {
       <td className="px-4">
         <Skeleton className="h-6 w-16 rounded-full" />
       </td>
-      {/* Risk */}
+      {/* Open reports */}
       <td className="hidden px-4 xl:table-cell">
-        <div className="flex items-center gap-1.5">
-          <Skeleton className="h-2 w-2 rounded-full" />
-          <Skeleton className="h-3 w-8" />
-          <Skeleton className="h-3 w-6" />
-        </div>
+        <Skeleton className="h-3 w-6" />
       </td>
       {/* Actions */}
       <td className="px-4">
@@ -159,7 +152,6 @@ export function JobseekersTable({
     if (target) {
       if (variant === "suspend") onSuspend?.(target);
       else if (variant === "delete") onDelete?.(target);
-      // "flag" has no backing model yet — no-op beyond closing.
     }
     setConfirmModal((s) => ({ ...s, open: false }));
   };
@@ -216,7 +208,7 @@ export function JobseekersTable({
               </th>
               <th className="px-4 py-3 text-left font-medium text-muted-foreground">Status</th>
               <th className="hidden px-4 py-3 text-left font-medium text-muted-foreground xl:table-cell">
-                Risk
+                Open reports
               </th>
               <th className="w-12 px-4 py-3" />
             </tr>
@@ -319,13 +311,16 @@ export function JobseekersTable({
                     {js.status}
                   </span>
                 </td>
-                {/* Risk */}
+                {/* Open reports: a count of facts, blank when there are none. */}
                 <td className="hidden px-4 xl:table-cell">
-                  <div className="flex items-center gap-1.5">
-                    <span className={cn("h-2 w-2 rounded-full", riskDot[js.risk])} />
-                    <span className="text-xs text-muted-foreground">{js.risk}</span>
-                    <span className="text-xs text-muted-foreground/60">({js.riskScore})</span>
-                  </div>
+                  {js.openReports > 0 ? (
+                    <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-400">
+                      <Flag className="h-3 w-3" aria-hidden="true" />
+                      {js.openReports}
+                    </span>
+                  ) : (
+                    <span className="sr-only">None</span>
+                  )}
                 </td>
                 {/* Actions */}
                 <td className="px-4">
@@ -345,18 +340,14 @@ export function JobseekersTable({
                           Make admin
                         </DropdownMenuItem>
                       )}
-                      {js.status === "Suspended" && (
+                      {isStopped(js.status) && (
                         <DropdownMenuItem onClick={() => onActivate?.(js)}>
                           <CheckCircle2 className="mr-2 h-3.5 w-3.5 text-status-active" />
                           Activate
                         </DropdownMenuItem>
                       )}
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={() => openConfirm("flag", js)}>
-                        <Flag className="mr-2 h-3.5 w-3.5 text-status-flagged" />
-                        Flag
-                      </DropdownMenuItem>
-                      {js.status !== "Suspended" && (
+                      {!isStopped(js.status) && (
                         <DropdownMenuItem onClick={() => openConfirm("suspend", js)}>
                           <ShieldOff className="mr-2 h-3.5 w-3.5 text-status-pending" />
                           Suspend

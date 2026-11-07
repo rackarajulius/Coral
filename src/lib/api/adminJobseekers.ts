@@ -26,6 +26,44 @@ export const activateJobseeker = (id: string) => send(`/admin/jobseekers/${id}/a
 export const banJobseeker = (id: string) => send(`/admin/jobseekers/${id}/ban`, "PATCH");
 export const deleteJobseeker = (id: string) => send(`/admin/jobseekers/${id}`, "DELETE");
 
+/** Where a report about someone's content came from. */
+export type ReportSource = "posts" | "comments" | "reviews" | "listings" | "requests";
+/** `reviewed`: the marketplace queues record that an admin looked, not what was decided. */
+export type ReportOutcome = "open" | "upheld" | "dismissed" | "reviewed";
+
+/** A person's moderation record — facts and counts, never a score. */
+export interface JobseekerModerationRecord {
+  reports: { source: ReportSource; open: number; upheld: number; dismissed: number; reviewed: number }[];
+  recent: { source: ReportSource; outcome: ReportOutcome; reason: string; createdAt: string }[];
+  removed: { posts: number; comments: number; reviews: number; listings: number };
+  accountActions: { summary: string; at: string; by: string }[];
+  identity: { status: "PENDING" | "APPROVED" | "REJECTED"; at: string } | null;
+}
+
+/** Countries stored on job-seeker profiles (codes like "CA"), with how many people each. */
+export async function getJobseekerCountries(): Promise<{ code: string; people: number }[]> {
+  const res = await fetch(`${API_BASE_URL}/admin/jobseekers/countries`, { headers: await authHeaders() });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.message || "Couldn't load countries");
+  return body.data;
+}
+
+/** "CA" → "Canada", via the browser — no country table to maintain. Falls back to the code. */
+export function countryName(code: string): string {
+  try {
+    return new Intl.DisplayNames(["en"], { type: "region" }).of(code.toUpperCase()) ?? code;
+  } catch {
+    return code;
+  }
+}
+
+export async function getJobseekerModeration(id: string): Promise<JobseekerModerationRecord> {
+  const res = await fetch(`${API_BASE_URL}/admin/jobseekers/${id}/moderation`, { headers: await authHeaders() });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.message || "Couldn't load the moderation record");
+  return body.data;
+}
+
 /**
  * A five-minute link to the person's stored résumé. The server writes an
  * audit entry on every call, so fetch it only when the admin asks to open it.

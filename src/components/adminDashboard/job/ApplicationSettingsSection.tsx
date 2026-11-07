@@ -7,6 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { ValidationErrors } from "@/data/admin/job/job-validation";
+import { BRAND_NAME } from "@/lib/brand";
 
 interface ApplicationSettingsSectionProps {
   applicationMethod: "platform" | "external" | "";
@@ -91,7 +92,7 @@ export function ApplicationSettingsSection({
                   Apply on Platform
                 </Label>
                 <p className="text-xs text-muted-foreground">
-                  Candidates apply through JobBoard.io
+                  Candidates apply through {BRAND_NAME}
                 </p>
               </div>
             </div>

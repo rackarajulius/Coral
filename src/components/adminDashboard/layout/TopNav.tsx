@@ -1,6 +1,8 @@
-import { Moon, Sun, LogOut } from "lucide-react";
+import { Briefcase, Moon, Sun, LogOut } from "lucide-react";
+import { Link } from "react-router-dom";
 import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { useEffect, useState } from "react";
+import { BRAND_NAME } from "@/lib/brand";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,15 +28,15 @@ export function TopNav() {
 
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border bg-card px-6">
-      {/* Left: Logo */}
-      <div className="flex items-center gap-2.5">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg gradient-hero text-primary-foreground text-xs font-bold">
-          JB
-        </div>
-        <span className="text-base font-semibold text-foreground hidden sm:inline">
-          JobBoard.io
+      {/* Left: the same wordmark as the main header, marked as the admin area.
+          The mobile sidebar trigger is fixed at top-left, so leave it room. */}
+      <Link to="/admin/dashboard" className="ml-10 flex items-center gap-2 md:ml-0">
+        <Briefcase className="h-5 w-5 text-coral" aria-hidden="true" />
+        <span className="font-display text-lg font-semibold tracking-tight text-primary">{BRAND_NAME}</span>
+        <span className="rounded-full border border-border px-2 py-0.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          Admin
         </span>
-      </div>
+      </Link>
 
       {/* Right: Actions */}
       <div className="flex items-center gap-1">

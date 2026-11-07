@@ -11,6 +11,7 @@ import {
 } from './settings.service';
 import { UpdateAuditRetentionDto } from './dto/update-audit-retention.dto';
 import { AdminListQueryDto } from './dto/admin-list-query.dto';
+import { JobseekersListQueryDto } from './dto/jobseekers-list-query.dto';
 import { JobsListQueryDto } from './dto/jobs-list-query.dto';
 import { UpdateJobStatusDto } from './dto/update-job-status.dto';
 import { UpdateApplicationStatusDto } from './dto/update-application-status.dto';
@@ -59,8 +60,14 @@ export class AdminController {
     return { success: true, message: 'Jobseeker metrics retrieved successfully', data: metrics };
   }
 
+  /** Countries present on job-seeker profiles, for the list's filter. */
+  @Get('jobseekers/countries')
+  async getJobseekerCountries() {
+    return { success: true, data: await this.adminService.getJobseekerCountries() };
+  }
+
   @Get('jobseekers/list')
-  async getJobseekersList(@Query() query: AdminListQueryDto) {
+  async getJobseekersList(@Query() query: JobseekersListQueryDto) {
     const result = await this.adminService.getJobseekersList(query);
     return { success: true, message: 'Jobseekers list retrieved successfully', ...result };
   }
@@ -135,6 +142,12 @@ export class AdminController {
   async banJobseeker(@CurrentUser('id') adminId: string, @Param('id', ParseUUIDPipe) id: string) {
     await this.adminService.setJobseekerStatus(adminId, id, 'BANNED');
     return { success: true, message: 'Jobseeker banned' };
+  }
+
+  /** Their moderation record: reports and outcomes, removals, account actions. */
+  @Get('jobseekers/:id/moderation')
+  async jobseekerModeration(@Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, data: await this.adminService.getJobseekerModeration(id) };
   }
 
   /** A five-minute link to a job seeker's stored résumé. Audited on every call. */

@@ -3,7 +3,8 @@ export interface JobseekerMetrics {
   newSignups7d: number;
   active30d: number;
   suspended: number;
-  flagged: number;
+  /** People with at least one open report about something they wrote. */
+  withOpenReports: number;
   /** Paid or complimentary Premium. */
   premiumUsers: number;
 }
@@ -25,7 +26,7 @@ export function JobseekerKPICards({ metrics }: JobseekerKPICardsProps) {
     { label: "New Signups (7d)", value: show(metrics?.newSignups7d) },
     { label: "Active (30d)", value: show(metrics?.active30d) },
     { label: "Suspended", value: show(metrics?.suspended) },
-    { label: "Flagged", value: show(metrics?.flagged) },
+    { label: "With open reports", value: show(metrics?.withOpenReports) },
     { label: "Premium Users", value: show(metrics?.premiumUsers) },
   ];
   return (

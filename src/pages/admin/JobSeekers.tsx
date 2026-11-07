@@ -22,7 +22,14 @@ import {
 import { toast } from "sonner";
 import { activateJobseeker, suspendJobseeker, banJobseeker, deleteJobseeker } from "@/lib/api/adminJobseekers";
 import supabase from "@/lib/supabase";
-import { useJobseekersMetrics, useJobseekersList, useJobseekerActions } from "@/hooks/admin/useAdminJobseekers";
+import {
+  countJobseekerFilters,
+  defaultJobseekerFilters,
+  useJobseekersMetrics,
+  useJobseekersList,
+  useJobseekerActions,
+  type JobseekerFilters,
+} from "@/hooks/admin/useAdminJobseekers";
 
 export default function Jobseekers() {
   const [search, setSearch] = useState("");
@@ -36,6 +43,8 @@ export default function Jobseekers() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [makeAdminTarget, setMakeAdminTarget] = useState<Jobseeker | null>(null);
   const [promoting, setPromoting] = useState(false);
+  const [filters, setFilters] = useState<JobseekerFilters>(defaultJobseekerFilters);
+  const activeFilterCount = countJobseekerFilters(filters);
 
   const { invalidateJobseekers } = useJobseekerActions();
   const { data: metricsData, isLoading: isLoadingMetrics } = useJobseekersMetrics();
@@ -45,6 +54,7 @@ export default function Jobseekers() {
     search: debouncedSearch,
     sortField,
     sortDir,
+    filters,
   });
 
   const jobseekers = listData?.data ?? [];
@@ -177,6 +187,11 @@ export default function Jobseekers() {
           >
             <SlidersHorizontal className=" h-4 w-4" />
             Filters
+            {activeFilterCount > 0 && (
+              <span className="rounded-full bg-primary px-1.5 text-[11px] font-semibold leading-5 text-primary-foreground">
+                {activeFilterCount}
+              </span>
+            )}
           </Button>
         </div>
         </div>
@@ -220,7 +235,15 @@ export default function Jobseekers() {
       </div>
 
       {/* Panels */}
-      <JobseekerFilterPanel open={filterOpen} onClose={() => setFilterOpen(false)} />
+      <JobseekerFilterPanel
+        open={filterOpen}
+        onClose={() => setFilterOpen(false)}
+        filters={filters}
+        onApply={(f) => {
+          setFilters(f);
+          setPage(1);
+        }}
+      />
       <JobseekerDetailDrawer
         jobseeker={openJobseeker}
         open={!!openJobseeker}

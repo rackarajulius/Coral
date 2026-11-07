@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/sheet";
 import { ConfirmModal, ConfirmModalVariant } from "@/components/ui/ConfirmModal";
 import { JobseekerPremiumPanel } from "./JobseekerPremiumPanel";
+import { JobseekerModerationRecord } from "./JobseekerModerationRecord";
 
 interface JobseekerDetailDrawerProps {
   jobseeker: Jobseeker | null;
@@ -48,14 +49,14 @@ const statusStyles: Record<string, string> = {
   Inactive:
     "bg-slate-100 text-slate-600 border border-slate-200 dark:bg-slate-800 dark:text-slate-400",
 
-  Suspended:
-    "bg-rose-500/10 text-rose-600 border border-rose-500/20 dark:bg-rose-500/20 dark:text-rose-400",
+  Onboarding:
+    "bg-blue-500/10 text-blue-600 border border-blue-500/20 dark:bg-blue-500/20 dark:text-blue-400",
 
-  Flagged:
+  Suspended:
     "bg-amber-500/10 text-amber-600 border border-amber-500/20 dark:bg-amber-500/20 dark:text-amber-400",
 
-  Deleted:
-    "bg-slate-100 text-slate-500 border border-slate-200 dark:bg-slate-800 dark:text-slate-400",
+  Banned:
+    "bg-rose-500/10 text-rose-600 border border-rose-500/20 dark:bg-rose-500/20 dark:text-rose-400",
 };
 
 const appStatusStyles: Record<string, string> = {
@@ -302,44 +303,8 @@ export function JobseekerDetailDrawer({ jobseeker, open, onClose, onActivate, on
             )}
           </section>
 
-          {/* ── Section 5: Risk & Reports ── */}
-          <section className="px-6 py-5">
-            <h3 className="mb-4 text-sm font-semibold text-foreground">Risk & Reports</h3>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <div className="rounded-lg border border-border p-3">
-                <p className="text-xs text-muted-foreground">Reports Received</p>
-                <p className="mt-1 text-2xl font-semibold text-foreground">{jobseeker.reportsReceived ?? 0}</p>
-              </div>
-              <div className="rounded-lg border border-border p-3">
-                <p className="text-xs text-muted-foreground">Suspicious Flags</p>
-                <p className="mt-1 text-2xl font-semibold text-foreground">{jobseeker.suspiciousFlags ?? 0}</p>
-              </div>
-              <div className="rounded-lg border border-border p-3 col-span-2 sm:col-span-1">
-                <p className="text-xs text-muted-foreground">Risk Score</p>
-                <div className="mt-1 flex items-baseline gap-1.5">
-                  <p className="text-2xl font-semibold text-foreground">{jobseeker.riskScore}</p>
-                  <span className="text-xs text-muted-foreground">/100</span>
-                </div>
-                <div className="mt-1.5">
-                  <span
-                    className={cn(
-                      "inline-flex items-center gap-1 text-xs font-medium",
-                      jobseeker.risk === "Low" && "text-status-active",
-                      jobseeker.risk === "Medium" && "text-status-pending",
-                      jobseeker.risk === "High" && "text-status-rejected",
-                    )}
-                  >
-                    <span className={cn("h-1.5 w-1.5 rounded-full",
-                      jobseeker.risk === "Low" && "bg-status-active",
-                      jobseeker.risk === "Medium" && "bg-status-pending",
-                      jobseeker.risk === "High" && "bg-status-rejected",
-                    )} />
-                    {jobseeker.risk} Risk
-                  </span>
-                </div>
-              </div>
-            </div>
-          </section>
+          {/* ── Section 5: Reports & moderation — facts, not a score ── */}
+          <JobseekerModerationRecord key={`moderation-${jobseeker.id}`} userId={jobseeker.id} />
 
           {/* ── Premium: paid plan, comp, and the controls to give or end a comp ── */}
           <JobseekerPremiumPanel key={jobseeker.id} userId={jobseeker.id} />
@@ -348,7 +313,7 @@ export function JobseekerDetailDrawer({ jobseeker, open, onClose, onActivate, on
           <section className="px-6 py-5">
             <h3 className="mb-4 text-sm font-semibold text-foreground">Admin Controls</h3>
             <div className="flex flex-wrap gap-2">
-              {jobseeker.status === "Suspended" ? (
+              {jobseeker.status === "Suspended" || jobseeker.status === "Banned" ? (
                 <Button size="sm" variant="default" disabled={busy} onClick={() => void run(onActivate)}>
                   <ShieldCheck className="mr-1.5 h-3.5 w-3.5" />
                   Activate Account
