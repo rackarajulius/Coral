@@ -353,7 +353,7 @@ export default function Employers() {
                       <TableCell className="font-medium">{emp.jobsPosted}</TableCell>
                       <TableCell><EmployerStatusBadge status={emp.status} /></TableCell>
                       <TableCell className="hidden lg:table-cell">
-                        <span className="text-xs font-medium text-muted-foreground">{emp.plan}</span>
+                        <span className="text-xs font-medium text-muted-foreground" title={emp.billingStatus}>{emp.plan ?? "—"}</span>
                       </TableCell>
                       <TableCell className="hidden xl:table-cell text-muted-foreground text-xs">
                         {new Date(emp.joinedDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}

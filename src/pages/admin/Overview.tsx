@@ -23,7 +23,7 @@ const iconMap = {
 function KPISkeletonGrid() {
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-      {Array.from({ length: 6 }).map((_, index) => (
+      {Array.from({ length: 7 }).map((_, index) => (
         <div key={index} className="rounded-xl border border-border bg-card p-5 shadow-card">
           <div className="flex items-start justify-between mb-2">
             <div className="space-y-2">

@@ -33,7 +33,8 @@ export function StatusBadge({ status }: { status: ApplicationStatus }) {
   );
 }
 
-export function ScreeningScoreBar({ score }: { score: number }) {
+/** How complete the applicant's profile is, 0–100. Not a screening result. */
+export function ProfileCompletionBar({ score }: { score: number }) {
   const color =
   score >= 80
     ? "bg-emerald-500"

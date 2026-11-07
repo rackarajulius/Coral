@@ -137,6 +137,12 @@ export class AdminController {
     return { success: true, message: 'Jobseeker banned' };
   }
 
+  /** A five-minute link to a job seeker's stored résumé. Audited on every call. */
+  @Get('jobseekers/:id/resume')
+  async jobseekerResume(@CurrentUser('id') adminId: string, @Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, data: await this.adminService.getJobseekerResume(adminId, id) };
+  }
+
   /** A job seeker's Premium: whether they pay, whether they're comped, and why. */
   @Get('jobseekers/:id/premium')
   async jobseekerPremium(@Param('id', ParseUUIDPipe) id: string) {
@@ -199,6 +205,12 @@ export class AdminController {
   async deleteApplication(@CurrentUser('id') adminId: string, @Param('id', ParseUUIDPipe) id: string) {
     await this.adminService.deleteApplication(adminId, id);
     return { success: true, message: 'Application deleted' };
+  }
+
+  /** Open items per moderation queue, for the Reports & Flags tabs. */
+  @Get('reports/summary')
+  async getReportsSummary() {
+    return { success: true, data: await this.adminService.getReportsSummary() };
   }
 
   @Get('audit-logs')

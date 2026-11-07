@@ -26,6 +26,17 @@ export const activateJobseeker = (id: string) => send(`/admin/jobseekers/${id}/a
 export const banJobseeker = (id: string) => send(`/admin/jobseekers/${id}/ban`, "PATCH");
 export const deleteJobseeker = (id: string) => send(`/admin/jobseekers/${id}`, "DELETE");
 
+/**
+ * A five-minute link to the person's stored résumé. The server writes an
+ * audit entry on every call, so fetch it only when the admin asks to open it.
+ */
+export async function getJobseekerResumeLink(id: string): Promise<{ url: string; fileName: string | null }> {
+  const res = await fetch(`${API_BASE_URL}/admin/jobseekers/${id}/resume`, { headers: await authHeaders() });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.message || "Couldn't open the résumé");
+  return body.data;
+}
+
 /* ------------------------------ Premium comps ------------------------------ */
 
 /** What the admin sees before granting or revoking. Dates are ISO strings. */

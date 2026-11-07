@@ -10,7 +10,8 @@ export interface Employer {
   expiredJobs: number;
   applicationsReceived: number;
   status: "verified" | "pending" | "suspended" | "banned" | "flagged";
-  plan: "Free" | "Pro" | "Enterprise";
+  /** Their company's plan (Starter, Pro, Enterprise); null with no active company seat. */
+  plan: string | null;
   joinedDate: string;
   lastActive: string;
   email: string;

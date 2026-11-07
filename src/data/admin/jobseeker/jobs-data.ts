@@ -21,9 +21,11 @@ export interface Jobseeker {
   isVerified: boolean;
   resumeFile?: string;
   // detail fields
+  /** Interviews proposed, confirmed or completed — not declined or cancelled. */
   interviews?: number;
   offers?: number;
-  resumeUploads?: number;
+  /** The résumé on file; null when there is none. Opened via getJobseekerResumeLink. */
+  resume?: { fileName: string | null; uploadedAt: string | null } | null;
   reportsReceived?: number;
   suspiciousFlags?: number;
   timeline?: { event: string; date: string }[];

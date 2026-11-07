@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Download, Trash2, Flag, FileText, Clock, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Application } from "@/data/admin/applications/applications";
-import { StatusBadge, ScreeningScoreBar } from "./StatusBadge";
+import { StatusBadge } from "./StatusBadge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -145,40 +145,37 @@ export function ApplicationDrawer({ application, open, onClose, onAction }: Appl
 
             <Separator />
 
-            {/* Section 4: Screening Questions */}
+            {/* Section 4: AI screen — what was asked and what was said. No
+                score: the scorer has an open defect, so it isn't shown here. */}
             <section>
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Screening Questions</h3>
-              <div className="flex items-center gap-3 mb-3">
-                <span className="text-sm text-muted-foreground">Score:</span>
-                <ScreeningScoreBar score={application.screeningScore} />
-              </div>
-              <div className="rounded-lg border border-border overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-secondary">
-                      <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Question</th>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Answer</th>
-                      <th className="px-3 py-2 text-center text-xs font-medium text-muted-foreground">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {application.screeningQuestions.map((q, i) => (
-                      <tr key={i} className="border-t border-border">
-                        <td className="px-3 py-2 text-card-foreground">{q.question}</td>
-                        <td className="px-3 py-2 text-card-foreground">{q.answer}</td>
-                        <td className="px-3 py-2 text-center">
-                          <span className={cn(
-                            "inline-flex h-5 w-5 items-center justify-center rounded-full text-xs",
-                            q.passed ? "bg-status-shortlisted/10 text-status-shortlisted" : "bg-status-rejected/10 text-status-rejected"
-                          )}>
-                            {q.passed ? "✓" : "✗"}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">AI screen</h3>
+              {!application.screening ? (
+                <p className="text-sm text-muted-foreground">No AI screen was sent for this application.</p>
+              ) : (
+                <>
+                  <p className="mb-3 text-sm text-muted-foreground">
+                    {application.screening.status === "completed"
+                      ? `Answered${application.screening.completedAt ? ` ${new Date(application.screening.completedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}` : ""}`
+                      : application.screening.status === "declined"
+                        ? "The candidate declined it."
+                        : `Sent ${new Date(application.screening.invitedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}, not answered yet.`}
+                    {" · "}
+                    <span className="capitalize">{application.screening.mode}</span>
+                  </p>
+                  {application.screening.items.length > 0 && (
+                    <ol className="space-y-3">
+                      {application.screening.items.map((q, i) => (
+                        <li key={i} className="rounded-lg border border-border p-3 text-sm">
+                          <p className="font-medium text-card-foreground">{q.question}</p>
+                          <p className={cn("mt-1 whitespace-pre-wrap", q.answer ? "text-card-foreground" : "text-muted-foreground")}>
+                            {q.answer ?? "No answer recorded."}
+                          </p>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </>
+              )}
             </section>
 
             <Separator />

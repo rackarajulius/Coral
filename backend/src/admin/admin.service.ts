@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { computeProfileCompletion } from '../common/profile-completion';
-import { Prisma } from '@prisma/client';
+import { CompanyMemberStatus, CompanyPlan, Prisma, ReportStatus, SubscriptionStatus } from '@prisma/client';
+import { PLAN_LABELS } from '../billing/plan-entitlements';
+import { RESUME_BUCKET, StorageService } from '../storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { User } from '../common/types/user.types';
 import { AdminListQueryDto } from './dto/admin-list-query.dto';
@@ -28,6 +30,7 @@ export class AdminService {
     private readonly snapshots: MetricSnapshotService,
     private readonly audit: AuditLogService,
     private readonly premium: SeekerPremiumService,
+    private readonly storage: StorageService,
   ) {}
 
   /**
@@ -172,17 +175,16 @@ export class AdminService {
 
     // Trends only from recorded daily snapshots; until there are two days of
     // them, a card shows its value and nothing else.
-    const [jobseekersTrend, employersTrend, listingsTrend, applicationsTrend, revenueTrend] = await Promise.all([
+    const [jobseekersTrend, employersTrend, listingsTrend, applicationsTrend, revenueTrend, reports] = await Promise.all([
       this.snapshotTrend('jobseekers.total'),
       this.snapshotTrend('employers.total'),
       this.snapshotTrend('listings.active'),
       // "Applications Today" is a flow metric — track daily-new, not the running total.
       this.snapshotDeltaTrend('applications.total'),
       this.snapshotTrend('revenue.mtd'),
+      this.getReportsSummary(),
     ]);
 
-    // No "Reports & Flags" card: it was a hardcoded 0. It comes back with the
-    // reports inbox, counted from the real report tables.
     return {
       kpis: [
         { label: "Total Jobseekers", value: totalJobseekers.toLocaleString(), icon: "Users", ...jobseekersTrend },
@@ -191,6 +193,8 @@ export class AdminService {
         { label: "Applications Today", value: applicationsToday.toLocaleString(), icon: "FileText", ...applicationsTrend },
         // Nothing snapshots signups yet, so no trend.
         { label: "New Signups (24h)", value: newSignups24h.toLocaleString(), icon: "UserPlus", ...NO_TREND },
+        // Everything waiting across the Reports & Flags queues. Not snapshotted, so no trend.
+        { label: "Reports & Flags", value: reports.total.toLocaleString(), icon: "Flag", ...NO_TREND },
         { label: "Revenue (MTD)", value: `$${(revenueMTD._sum.amount || 0).toLocaleString()}`, icon: "DollarSign", ...revenueTrend },
       ],
       summary: {
@@ -325,6 +329,12 @@ export class AdminService {
           summary: true,
           languages: true,
           skills: true,
+          // Whether a résumé is on file, and which. The file itself is only
+          // reached through getJobseekerResume, which leaves an audit entry.
+          resumePath: true,
+          resumeUrl: true,
+          resumeFileName: true,
+          resumeUploadedAt: true,
           _count: {
             select: {
               experiences: true,
@@ -351,6 +361,22 @@ export class AdminService {
       this.prisma.user.count({ where }),
     ]);
 
+    // Interview has no relation to User (candidateId is a plain column), so
+    // count for this page's people in one grouped query. Declined and
+    // cancelled invitations are not interviews that happened or will.
+    const interviewCounts = new Map(
+      (
+        await this.prisma.interview.groupBy({
+          by: ['candidateId'],
+          where: {
+            candidateId: { in: jobseekers.map((u) => u.id) },
+            status: { in: ['proposed', 'confirmed', 'completed'] },
+          },
+          _count: { _all: true },
+        })
+      ).map((g) => [g.candidateId, g._count._all]),
+    );
+
     const data = jobseekers.map((user) => ({
       id: user.id,
       name: user.displayName || `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email.split('@')[0],
@@ -362,6 +388,15 @@ export class AdminService {
       avatar: user.avatarUrl || (user.displayName || user.email).substring(0, 2).toUpperCase(),
       applications: user._count.applications,
       savedJobs: user._count.savedJobs,
+      interviews: interviewCounts.get(user.id) ?? 0,
+      resume: user.jobSeekerProfile?.resumePath
+        ? {
+            fileName: user.jobSeekerProfile.resumeFileName,
+            uploadedAt: user.jobSeekerProfile.resumeUploadedAt?.toISOString() ?? null,
+          }
+        : user.jobSeekerProfile?.resumeUrl
+          ? { fileName: null, uploadedAt: null }
+          : null,
       profileCompletion: this.computeJobseekerCompletion(user),
       lastActive: user.lastLoginAt?.toISOString() || user.createdAt.toISOString(),
       signupDate: user.createdAt.toISOString(),
@@ -471,8 +506,17 @@ export class AdminService {
         include: {
           employerProfile: true,
           postedJobs: { select: { id: true, status: true, applicationsCount: true, createdAt: true, applicationDeadline: true } },
-          // Billing signal: has at least one successful payment.
-          paymentTransactions: { where: { status: 'PAID' }, select: { id: true }, take: 1 },
+          // Their company's subscription, found the way billing finds it
+          // (CompanyContextService.membershipFor): first non-pending seat.
+          companyMemberships: {
+            where: { status: { not: 'PENDING' } },
+            orderBy: { createdAt: 'asc' },
+            take: 1,
+            select: {
+              status: true,
+              company: { select: { subscription: { select: { plan: true, status: true, cancelAtPeriodEnd: true } } } },
+            },
+          },
         },
         orderBy,
         skip,
@@ -514,8 +558,7 @@ export class AdminService {
         activeJobs,
         expiredJobs,
         applicationsReceived: totalApplications,
-        plan: 'Free' as const,
-        billingStatus: user.paymentTransactions.length > 0 ? 'Paid' : 'Free',
+        ...this.companyBilling(user.companyMemberships[0]),
         joinedDate: user.createdAt.toISOString(),
         lastActive: user.lastLoginAt?.toISOString() || user.createdAt.toISOString(),
         status,
@@ -524,6 +567,41 @@ export class AdminService {
     });
 
     return { data, meta: { page, limit, total, totalPages: Math.max(Math.ceil(total / limit), 1) } };
+  }
+
+  /**
+   * The plan and subscription state an employer's company is on, in words.
+   *
+   * Mirrors billing: no subscription row means Starter with nothing billed,
+   * and the webhook has already dropped a cancelled or unpaid subscription's
+   * plan back to Starter. Someone with no active seat has no company to bill,
+   * which is said rather than shown as a plan.
+   */
+  private companyBilling(
+    seat:
+      | {
+          status: CompanyMemberStatus;
+          company: { subscription: { plan: CompanyPlan; status: SubscriptionStatus; cancelAtPeriodEnd: boolean } | null };
+        }
+      | undefined,
+  ): { plan: string | null; billingStatus: string } {
+    if (!seat || seat.status !== 'ACTIVE') return { plan: null, billingStatus: 'Not in a company' };
+    const sub = seat.company.subscription;
+    const plan = PLAN_LABELS[sub?.plan ?? CompanyPlan.STARTER].name;
+    const status = sub?.status ?? SubscriptionStatus.NONE;
+    const billingStatus =
+      status === SubscriptionStatus.ACTIVE
+        ? sub?.cancelAtPeriodEnd
+          ? 'Active, cancels at period end'
+          : 'Active'
+        : status === SubscriptionStatus.TRIALING
+          ? 'Trial'
+          : status === SubscriptionStatus.PAST_DUE
+            ? 'Payment failed, Stripe is retrying'
+            : status === SubscriptionStatus.CANCELED
+              ? 'Cancelled'
+              : 'No subscription';
+    return { plan, billingStatus };
   }
 
   // --- Employer admin actions ---
@@ -746,6 +824,39 @@ export class AdminService {
     });
   }
 
+  /**
+   * A short-lived link to someone's stored résumé, for an admin.
+   *
+   * Same five-minute signed URL the owner gets from their own profile. Every
+   * call is written to the audit log: an admin opening a person's résumé is
+   * access to their personal data, and should be answerable afterwards.
+   */
+  async getJobseekerResume(adminId: string, userId: string) {
+    const subject = await this.assertJobseeker(userId);
+    const profile = await this.prisma.jobSeekerProfile.findUnique({
+      where: { userId },
+      select: { resumePath: true, resumeUrl: true, resumeFileName: true },
+    });
+    if (!profile?.resumePath && !profile?.resumeUrl) {
+      throw new NotFoundException('No résumé on file');
+    }
+
+    // A stored file gets a signed URL; a legacy manual link is returned as-is.
+    const url = profile.resumePath
+      ? await this.storage.createSignedUrl(profile.resumePath, RESUME_BUCKET, 300)
+      : profile.resumeUrl!;
+
+    await this.audit.record({
+      adminId,
+      action: 'Export',
+      entityType: 'Jobseeker',
+      entityId: userId,
+      entityName: subject.displayName || subject.email,
+      changeSummary: `Opened résumé${profile.resumeFileName ? ` · ${profile.resumeFileName}` : ''}`,
+    });
+    return { url, fileName: profile.resumeFileName };
+  }
+
   // --- Application admin actions ---
 
   /** Loads an application with the fields the audit trail needs, or 404s. */
@@ -802,6 +913,54 @@ export class AdminService {
       changeSummary: `Application deleted · ${before.job.title}`,
       before: { status: before.status },
     });
+  }
+
+  /**
+   * What is waiting in each moderation queue the Reports & Flags page shows.
+   *
+   * Counts only — each queue's own service decides what an item is and who
+   * may act on it. "Open" means what that queue means by it: an unanswered
+   * report, or a review the automated checks held back. `oldestAt` is when the
+   * longest-waiting item arrived, since that is the one most likely to have
+   * done harm while it waited.
+   */
+  async getReportsSummary() {
+    const oldest = { _min: { createdAt: true } } as const;
+    const [posts, comments, listings, requests, heldReviews, reportedReviews] = await Promise.all([
+      this.prisma.postReport.aggregate({ where: { status: ReportStatus.OPEN, postId: { not: null } }, _count: { _all: true }, ...oldest }),
+      this.prisma.postReport.aggregate({ where: { status: ReportStatus.OPEN, commentId: { not: null } }, _count: { _all: true }, ...oldest }),
+      this.prisma.marketplaceReport.aggregate({ where: { status: 'open' }, _count: { _all: true }, ...oldest }),
+      this.prisma.marketplaceRequestReport.aggregate({ where: { status: 'open' }, _count: { _all: true }, ...oldest }),
+      this.prisma.companyReview.aggregate({ where: { status: 'pending' }, _count: { _all: true }, ...oldest }),
+      // Counted per review, not per flag: the queue shows one card per review
+      // and one decision answers all of its flags.
+      this.prisma.companyReview.count({ where: { status: 'published', flags: { some: { resolvedAt: null } } } }),
+    ]);
+    const firstFlag = await this.prisma.reviewFlag.aggregate({
+      where: { resolvedAt: null, review: { status: 'published' } },
+      ...oldest,
+    });
+
+    const earliest = (...dates: (Date | null)[]) =>
+      dates.filter((d): d is Date => !!d).sort((a, b) => a.getTime() - b.getTime())[0] ?? null;
+
+    const queues = [
+      {
+        key: 'community' as const,
+        open: posts._count._all + comments._count._all,
+        detail: { posts: posts._count._all, comments: comments._count._all },
+        oldestAt: earliest(posts._min.createdAt, comments._min.createdAt),
+      },
+      { key: 'listings' as const, open: listings._count._all, oldestAt: listings._min.createdAt },
+      { key: 'requests' as const, open: requests._count._all, oldestAt: requests._min.createdAt },
+      {
+        key: 'reviews' as const,
+        open: heldReviews._count._all + reportedReviews,
+        detail: { held: heldReviews._count._all, reported: reportedReviews },
+        oldestAt: earliest(heldReviews._min.createdAt, firstFlag._min.createdAt),
+      },
+    ];
+    return { total: queues.reduce((sum, q) => sum + q.open, 0), queues };
   }
 
   /** Paginated audit-log feed for the admin UI. */
@@ -1015,6 +1174,39 @@ export class AdminService {
     };
   }
 
+  /**
+   * An application's AI screen in plain facts: sent, answered or declined,
+   * and what was asked and said. Video answers are noted, not linked — the
+   * recordings stay with the employer's own review flow.
+   */
+  private describeScreen(
+    screen:
+      | { mode: string; status: string; invitedAt: Date; completedAt: Date | null; questions: Prisma.JsonValue; answers: Prisma.JsonValue }
+      | undefined,
+  ) {
+    if (!screen) return null;
+    // Text and video screens store strings; live screens store { text, … }.
+    const questions = Array.isArray(screen.questions)
+      ? screen.questions
+          .map((q) => (typeof q === 'string' ? q : q && typeof q === 'object' && 'text' in q ? String(q.text) : ''))
+          .filter(Boolean)
+      : [];
+    const answers = Array.isArray(screen.answers) ? (screen.answers as Array<Record<string, unknown>>) : [];
+    const answerFor = (question: string, i: number) => {
+      const a = answers.find((x) => x?.question === question) ?? answers[i];
+      if (!a) return null;
+      if (typeof a.answer === 'string') return a.answer;
+      return a.videoPath ? '(answered on video)' : null;
+    };
+    return {
+      mode: screen.mode,
+      status: screen.status, // invited | completed | declined
+      invitedAt: screen.invitedAt.toISOString(),
+      completedAt: screen.completedAt?.toISOString() ?? null,
+      items: questions.map((question, i) => ({ question, answer: answerFor(question, i) })),
+    };
+  }
+
   async getApplicationsList(query: ApplicationsListQueryDto = {}) {
     const page = Math.max(query.page ?? 1, 1);
     const limit = Math.min(query.limit ?? 10, 100);
@@ -1066,7 +1258,7 @@ export class AdminService {
             select: {
               id: true,
               title: true,
-              postedBy: { select: { displayName: true, firstName: true, lastName: true } },
+              postedBy: { select: { displayName: true, firstName: true, lastName: true, employerProfile: { select: { companyName: true } } } },
               location: true,
               salaryMin: true,
               salaryMax: true,
@@ -1109,9 +1301,23 @@ export class AdminService {
       this.prisma.application.count({ where }),
     ]);
 
+    // The AI screen sent for each application, if any: the latest one, since a
+    // resend replaces the earlier invitation in practice. Its score is left
+    // out on purpose — the scorer has an open defect (rewards eloquence over
+    // evidence), and this view should not spread the number further.
+    const screens = await this.prisma.aiScreen.findMany({
+      where: { applicationId: { in: applications.map((a) => a.id) } },
+      orderBy: { createdAt: 'desc' },
+      select: { applicationId: true, mode: true, status: true, invitedAt: true, completedAt: true, questions: true, answers: true },
+    });
+    const screenFor = new Map<string, (typeof screens)[number]>();
+    for (const s of screens) if (s.applicationId && !screenFor.has(s.applicationId)) screenFor.set(s.applicationId, s);
+
     const data = applications.map((app) => {
       const profile = app.applicant.jobSeekerProfile;
       const profileCompletion = this.computeJobseekerCompletion(app.applicant);
+      const posterName =
+        app.job.postedBy.displayName || `${app.job.postedBy.firstName || ''} ${app.job.postedBy.lastName || ''}`.trim();
       return {
         id: app.id,
         applicant: {
@@ -1124,7 +1330,9 @@ export class AdminService {
         },
         job: {
           title: app.job.title,
-          employer: app.job.postedBy.displayName || `${app.job.postedBy.firstName || ''} ${app.job.postedBy.lastName || ''}`.trim() || 'Unknown',
+          // The company, as the Jobs list names it; the poster's own name only
+          // when they have no employer profile.
+          employer: app.job.postedBy.employerProfile?.companyName || posterName || 'Unknown',
           location: app.job.location || 'Remote',
           salary: app.job.salaryMin && app.job.salaryMax ? `$${app.job.salaryMin.toLocaleString()}-$${app.job.salaryMax.toLocaleString()}` : 'Salary not specified',
           type: app.job.employmentType || 'Full-time',
@@ -1141,11 +1349,9 @@ export class AdminService {
           app.status === 'flagged' ? 'Flagged' :
           'Submitted'
         ),
-        // No screening model behind this yet: it is profile completeness.
-        screeningScore: profileCompletion,
-        resume: !!app.resumeUrl,
+        resume: !!(app.resumePath || app.resumeUrl),
         coverLetter: app.coverLetter || 'No cover letter provided',
-        screeningQuestions: [],
+        screening: this.describeScreen(screenFor.get(app.id)),
         timeline: [{ event: 'Application submitted', date: app.appliedAt.toISOString() }],
       };
     });

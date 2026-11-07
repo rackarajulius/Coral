@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { REPORTS_SUMMARY_KEY } from "@/lib/api/adminReports";
 import {
   FLAG_REASONS,
   getModerationQueue,
@@ -25,6 +26,7 @@ function ReviewCard({ review }: { review: QueuedReview }) {
         description: "The author has been told.",
       });
       queryClient.invalidateQueries({ queryKey: ["review-moderation-queue"] });
+      queryClient.invalidateQueries({ queryKey: REPORTS_SUMMARY_KEY });
     },
     onError: (e) => toast.error((e as Error).message || "Couldn't update"),
   });
@@ -142,7 +144,7 @@ function ReviewCard({ review }: { review: QueuedReview }) {
  * judgement — the first is "should this go live", the second is "was letting
  * this go live wrong", and merging them invites treating a report as proof.
  */
-export default function ReviewModeration() {
+export default function ReviewQueue() {
   const { data, isLoading, isError } = useQuery({
     queryKey: ["review-moderation-queue"],
     queryFn: getModerationQueue,
@@ -151,7 +153,7 @@ export default function ReviewModeration() {
 
   if (isLoading) {
     return (
-      <div className="space-y-4 p-6">
+      <div className="space-y-4">
         {[0, 1].map((i) => (
           <Skeleton key={i} className="h-56 rounded-xl" />
         ))}
@@ -160,20 +162,17 @@ export default function ReviewModeration() {
   }
 
   if (isError || !data) {
-    return <p className="p-6 text-sm text-destructive">Couldn't load the moderation queue.</p>;
+    return <p className="text-sm text-destructive">Couldn't load the review queue.</p>;
   }
 
   const nothing = data.pending.length === 0 && data.flagged.length === 0;
 
   return (
-    <div className="mx-auto w-full max-w-[900px] space-y-6 p-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Review moderation</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Reviews of employers' hiring processes. Criticism is not a reason to remove — only
-          personal details, named individuals, abuse, or unverifiable allegations of illegality.
-        </p>
-      </div>
+    <div className="space-y-6">
+      <p className="text-sm text-muted-foreground">
+        Reviews of employers' hiring processes. Criticism is not a reason to remove — only
+        personal details, named individuals, abuse, or unverifiable allegations of illegality.
+      </p>
 
       {nothing ? (
         <p className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">

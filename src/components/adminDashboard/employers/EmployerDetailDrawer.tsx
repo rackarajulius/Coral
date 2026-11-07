@@ -182,7 +182,7 @@ export function EmployerDetailDrawer({ employer, open, onOpenChange, onChanged }
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Plan</span>
-                  <span className="font-medium text-foreground">{employer.plan}</span>
+                  <span className="font-medium text-foreground">{employer.plan ?? "—"}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Billing</span>

@@ -4,20 +4,26 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { getMarketplaceMetrics, getMarketplaceRequestReports, reviewMarketplaceRequestReport } from '@/lib/api/marketplaceActivity';
 import type { MarketplaceOwner } from '@/lib/api/marketplace';
+import { REPORTS_SUMMARY_KEY } from '@/lib/api/adminReports';
 
-export default function MarketplaceRequestReports() {
+/**
+ * `showActivity` adds the marketplace activity counts below the queue; the
+ * admin Reports & Flags tab leaves them out, since they are not reports.
+ */
+export default function MarketplaceRequestReports({ showActivity = true, className = 'mt-8 space-y-4 border-t pt-6' }: { showActivity?: boolean; className?: string } = {}) {
   const { user } = useAuth();
   const current = useRef(user?.id); current.current = user?.id;
   const client = useQueryClient();
   const [status, setStatus] = useState<'open' | 'reviewed'>('open');
   const active = !!user && !user.provisional && user.role === 'ADMIN' && user.status === 'ACTIVE';
   const reports = useQuery({ queryKey: ['marketplace-request-reports', user?.id, status], queryFn: ({ signal }) => getMarketplaceRequestReports(user!, status, signal), enabled: active, retry: false, staleTime: 0 });
-  const metrics = useQuery({ queryKey: ['marketplace-metrics', user?.id], queryFn: ({ signal }) => getMarketplaceMetrics(user!, signal), enabled: active, retry: false, staleTime: 0 });
+  const metrics = useQuery({ queryKey: ['marketplace-metrics', user?.id], queryFn: ({ signal }) => getMarketplaceMetrics(user!, signal), enabled: active && showActivity, retry: false, staleTime: 0 });
   const review = useMutation({ mutationFn: ({ id, owner }: { id: string; owner: MarketplaceOwner }) => reviewMarketplaceRequestReport(id, owner), onSuccess: (_, { owner }) => {
     if (current.current === owner.id) void client.invalidateQueries({ queryKey: ['marketplace-request-reports', owner.id] });
+    void client.invalidateQueries({ queryKey: REPORTS_SUMMARY_KEY });
   } });
   if (!active) return null;
-  return <section className="mt-8 space-y-4 border-t pt-6">
+  return <section className={className}>
     <div><h2 className="text-lg font-semibold">Marketplace request reports</h2><p className="mt-1 text-sm text-muted-foreground">Review the details participants chose to submit. This queue does not expose their private proposals or conversations.</p></div>
     <div className="flex gap-2"><Button variant={status === 'open' ? 'default' : 'outline'} onClick={() => setStatus('open')}>Open reports</Button><Button variant={status === 'reviewed' ? 'default' : 'outline'} onClick={() => setStatus('reviewed')}>Reviewed reports</Button></div>
     {reports.isPending && <p role="status">Loading request reports…</p>}
@@ -29,7 +35,7 @@ export default function MarketplaceRequestReports() {
       <p className="whitespace-pre-wrap break-words text-sm">{report.details || 'No additional details submitted.'}</p>
       {report.status === 'open' && <Button variant="outline" disabled={review.isPending} onClick={() => review.mutate({ id: report.id, owner: user! })}>Mark reviewed</Button>}
     </article>)}
-    <div className="rounded-xl border p-5"><h2 className="font-semibold">Marketplace activity: last 30 days</h2>
+    {showActivity && <div className="rounded-xl border p-5"><h2 className="font-semibold">Marketplace activity: last 30 days</h2>
       <p className="mt-1 text-xs text-muted-foreground">Raw activity counts support pilot review. A reply does not establish a hire, contract or completed project.</p>
       {metrics.isPending && <p className="mt-3 text-sm" role="status">Loading activity…</p>}
       {metrics.isError && <div className="mt-3" role="alert"><p className="text-sm">Activity could not be loaded.</p><Button variant="outline" onClick={() => void metrics.refetch()}>Try again</Button></div>}
@@ -39,6 +45,6 @@ export default function MarketplaceRequestReports() {
         <p className="mt-3 text-xs text-muted-foreground">{metrics.data.definitions.listing_view}</p>
         <p className="mt-2 text-sm">Notifications awaiting delivery: {metrics.data.pendingDeliveries}</p>
       </>}
-    </div>
+    </div>}
   </section>;
 }

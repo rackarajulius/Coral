@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { KpiCard } from "@/components/adminDashboard/applications/KpiCard";
-import { StatusBadge, ScreeningScoreBar } from "@/components/adminDashboard/applications/StatusBadge";
+import { StatusBadge, ProfileCompletionBar } from "@/components/adminDashboard/applications/StatusBadge";
 import { ApplicationDrawer } from "@/components/adminDashboard/applications/ApplicationDrawer";
 import { FilterPanel } from "@/components/adminDashboard/applications/FilterPanel";
 import { AdminPagination } from "@/components/adminDashboard/AdminPagination";
@@ -304,7 +304,7 @@ export default function ApplicationsPage() {
                       <span className="flex items-center gap-1">Applied <SortIcon field="appliedDate" /></span>
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Status</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Score</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Profile</th>
                     <th className="px-4 py-3 w-10"></th>
                   </tr>
                 </thead>
@@ -351,7 +351,7 @@ export default function ApplicationsPage() {
                         <td className="px-4 py-3 text-muted-foreground hidden xl:table-cell">{app.job.location}</td>
                         <td className="px-4 py-3 text-muted-foreground">{app.appliedDate}</td>
                         <td className="px-4 py-3"><StatusBadge status={app.status} /></td>
-                        <td className="px-4 py-3"><ScreeningScoreBar score={app.screeningScore} /></td>
+                        <td className="px-4 py-3"><ProfileCompletionBar score={app.applicant.profileCompletion} /></td>
                         <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
@@ -415,7 +415,7 @@ export default function ApplicationsPage() {
                 </div>
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <span>{app.appliedDate}</span>
-                  <ScreeningScoreBar score={app.screeningScore} />
+                  <ProfileCompletionBar score={app.applicant.profileCompletion} />
                 </div>
               </div>
             ))}

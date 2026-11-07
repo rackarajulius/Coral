@@ -109,7 +109,6 @@ import Jobs from "./pages/admin/Jobs.tsx";
 import CreateJob from "./pages/admin/CreateJob.tsx";
 import ApplicationsPage from "./pages/admin/ApplicationsPage.tsx";
 import Verifications from "./pages/admin/Verifications.tsx";
-import ReviewModeration from "./pages/admin/ReviewModeration.tsx";
 import ReportsPage from "./pages/admin/ReportsPage.tsx";
 import SystemHealthPage from "./pages/admin/SystemHealth.tsx";
 import AuditLogsPage from "./pages/admin/AuditLogs.tsx";
@@ -325,7 +324,8 @@ const App = () => (
               <Route path="jobs/create" element={<CreateJob />} />
               <Route path="applications" element={<ApplicationsPage />} />
               <Route path="verifications" element={<Verifications />} />
-              <Route path="reviews" element={<ReviewModeration />} />
+              {/* Review moderation is a tab of Reports & Flags now; old links land there. */}
+              <Route path="reviews" element={<Navigate to="/admin/reports?tab=reviews" replace />} />
               <Route path="reports" element={<ReportsPage />} />
               <Route path="system-health" element={<SystemHealthPage />} />
               <Route path="audit-logs" element={<AuditLogsPage />} />

@@ -16,7 +16,9 @@ import {
   BadgeCheck,
 } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { getJobseekerResumeLink } from "@/lib/api/adminJobseekers";
 import { Jobseeker } from "@/data/admin/jobseeker/jobs-data";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -74,6 +76,31 @@ const appStatusStyles: Record<string, string> = {
 export function JobseekerDetailDrawer({ jobseeker, open, onClose, onActivate, onSuspend, onDelete }: JobseekerDetailDrawerProps) {
   const [modal, setModal] = useState<ConfirmModalVariant | null>(null);
   const [busy, setBusy] = useState(false);
+  const [opening, setOpening] = useState(false);
+
+  // Fetched on click, never on open: each call leaves an audit entry, so the
+  // log should show who actually looked, not who opened the drawer.
+  const openResume = async () => {
+    if (!jobseeker) return;
+    // Open the tab now, inside the click, so popup blockers allow it; point it
+    // at the file once the link arrives.
+    const tab = window.open("", "_blank");
+    setOpening(true);
+    try {
+      const { url } = await getJobseekerResumeLink(jobseeker.id);
+      if (tab) {
+        tab.opener = null;
+        tab.location.href = url;
+      } else {
+        window.location.assign(url);
+      }
+    } catch (e) {
+      tab?.close();
+      toast.error((e as Error).message);
+    } finally {
+      setOpening(false);
+    }
+  };
 
   // The page reports success or failure; this only runs the call.
   const run = async (action?: (js: Jobseeker) => Promise<void>) => {
@@ -183,12 +210,12 @@ export function JobseekerDetailDrawer({ jobseeker, open, onClose, onActivate, on
           {/* ── Section 2: Activity Summary ── */}
           <section className="px-6 py-5">
             <h3 className="mb-4 text-sm font-semibold text-foreground">Activity Summary</h3>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="grid grid-cols-3 gap-3">
               {[
                 { label: "Applications", value: jobseeker.applications, icon: Briefcase },
-                { label: "Interviews", value: jobseeker.interviews ?? 0, icon: Calendar },
+                // Proposed, confirmed or completed; a dash if the server didn't say.
+                { label: "Interviews", value: jobseeker.interviews ?? "—", icon: Calendar },
                 { label: "Saved Jobs", value: jobseeker.savedJobs, icon: Bookmark },
-                { label: "Resume Uploads", value: jobseeker.resumeUploads ?? 0, icon: FileText },
               ].map((stat) => (
                 <div key={stat.label} className="rounded-lg bg-secondary/50 p-3">
                   <div className="flex items-center gap-2 mb-1">
@@ -245,22 +272,33 @@ export function JobseekerDetailDrawer({ jobseeker, open, onClose, onActivate, on
             </section>
           )}
 
-          {/* ── Section 4: Resume & Documents ── */}
+          {/* ── Section 4: Résumé ── */}
           <section className="px-6 py-5">
-            <h3 className="mb-4 text-sm font-semibold text-foreground">Resume & Documents</h3>
-            {(jobseeker.resumeUploads ?? 0) > 0 ? (
-              <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 px-4 py-3">
-                <div className="flex items-center gap-3">
-                  <FileText className="h-5 w-5 text-muted-foreground" />
-                  <div>
-                    <p className="text-sm font-medium text-foreground">resume_{jobseeker.name.replace(" ", "_").toLowerCase()}.pdf</p>
-                    <p className="text-xs text-muted-foreground">Latest upload</p>
+            <h3 className="mb-4 text-sm font-semibold text-foreground">Résumé</h3>
+            {jobseeker.resume ? (
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-secondary/30 px-4 py-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-foreground">
+                      {jobseeker.resume.fileName ?? "Linked résumé"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {jobseeker.resume.uploadedAt
+                        ? `Uploaded ${new Date(jobseeker.resume.uploadedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
+                        : "Added as a link"}
+                    </p>
                   </div>
                 </div>
-                <Button variant="outline" size="sm" className="h-8 text-xs">Download</Button>
+                <Button variant="outline" size="sm" className="h-8 shrink-0 text-xs" disabled={opening} onClick={() => void openResume()}>
+                  {opening ? "Opening…" : "Open"}
+                </Button>
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">No resume uploaded.</p>
+              <p className="text-sm text-muted-foreground">No résumé on file.</p>
+            )}
+            {jobseeker.resume && (
+              <p className="mt-2 text-[11px] text-muted-foreground">Opening it is recorded in the audit log.</p>
             )}
           </section>
 
