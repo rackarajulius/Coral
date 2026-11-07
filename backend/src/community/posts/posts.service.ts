@@ -24,6 +24,7 @@ import { publicImageUrl } from '../../common/public-image-url';
 import { commentAccess } from '../comment-policy';
 import { announceMentions, plainText, resolveMentions, withoutMentions } from '../mentions';
 import { followStateFor } from '../follow-state';
+import { isStreamUrl } from '../videos/stream-url';
 
 type AnnouncementCard = Awaited<ReturnType<MarketplaceService['projectAnnouncementReference']>>;
 
@@ -509,7 +510,7 @@ export class PostsService {
   async delete(postId: string, currentUser: User) {
     const existing = await this.prisma.post.findUnique({
       where: { id: postId },
-      select: { id: true, authorId: true, companyId: true },
+      select: { id: true, authorId: true, companyId: true, mediaUrls: true },
     });
 
     if (!existing) {
@@ -523,6 +524,17 @@ export class PostsService {
     }
 
     await this.prisma.post.delete({ where: { id: postId } });
+
+    /**
+     * Its video goes with it, at Mux, now. Left to the hourly sweep, a video
+     * posted today would stay reachable at its stream address for up to a
+     * day after the post that showed it was deleted. Never allowed to fail
+     * the delete: the post is already gone, and the sweep still catches a
+     * video this misses. Pictures keep their own sweep, as before.
+     */
+    const streams = existing.mediaUrls.filter(isStreamUrl);
+    if (streams.length > 0) await this.media.deleteForUrls(streams).catch(() => undefined);
+
     return {
       success: true,
       message: 'Post deleted successfully',

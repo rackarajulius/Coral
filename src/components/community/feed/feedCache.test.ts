@@ -60,3 +60,17 @@ test("never twice, and nothing is fetched — the rest is only marked out of dat
   assert.equal(rail.state.isInvalidated, true);
   assert.equal(rail.state.fetchStatus, "idle");
 });
+
+test("a deleted post leaves every list at once, and a refused delete puts them all back", async () => {
+  const { removePostFromFeeds, restoreFeeds } = await import("./feedCache.ts");
+  const qc = cache();
+  const snapshot = removePostFromFeeds(qc, "a");
+  assert.deepEqual(ids(qc.getQueryData(["community-posts", "feed", null])!), [["b"], ["c"]]);
+  assert.equal((qc.getQueryData(["community-posts", "feed", null]) as { pages: { meta: { total: number } }[] }).pages[0].meta.total, 1);
+  // Lists without it are left exactly as they were.
+  assert.deepEqual(ids(qc.getQueryData(["community-posts", "feed", "mine"])!), [["m1"]]);
+  removePostFromFeeds(qc, "x1");
+  assert.deepEqual((qc.getQueryData(["community-posts", "space", "space-1", 1]) as { data: { id: string }[] }).data.map((p) => p.id), []);
+  restoreFeeds(qc, snapshot);
+  assert.deepEqual(ids(qc.getQueryData(["community-posts", "feed", null])!), [["a", "b"], ["c"]]);
+});

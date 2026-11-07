@@ -37,6 +37,7 @@ import { PostSkeleton } from "./skeletons";
 import { FeedVideo } from "./FeedVideo";
 import { CompanyHoverCard, PersonHoverCard, SpaceHoverCard } from "./ProfileHoverCard";
 import { usePersonFollow } from "./usePersonFollow";
+import { removePostFromFeeds, restoreFeeds } from "./feedCache";
 import { TidePostCard } from "@/components/community/tides/TidePostCard";
 import { CommunityLinkedCard, postPurposeLabels } from "./CommunityLinkedCard";
 import {
@@ -202,12 +203,23 @@ export function FeedPost({
 
   const remove = useMutation({
     mutationFn: () => deletePost(post.id),
+    // Gone from every list the moment it is confirmed, rather than staying on
+    // screen while the feed downloads again; put back if the server refuses.
+    onMutate: async () => {
+      // A reload already on its way would otherwise bring it back.
+      await queryClient.cancelQueries({ queryKey: ["community-posts"] });
+      return { snapshot: removePostFromFeeds(queryClient, post.id) };
+    },
     onSuccess: () => {
       toast.success("Post deleted");
-      void queryClient.invalidateQueries({ queryKey: ["community-posts"] });
+      // Everything else catches up the next time it is shown; nothing reloads now.
+      void queryClient.invalidateQueries({ queryKey: ["community-posts"], refetchType: "none" });
       void queryClient.invalidateQueries({ queryKey: ["community-post", post.id] });
     },
-    onError: (e) => toast.error((e as Error).message),
+    onError: (e, _vars, ctx) => {
+      if (ctx) restoreFeeds(queryClient, ctx.snapshot);
+      toast.error((e as Error).message);
+    },
   });
 
   const copyLink = async () => {

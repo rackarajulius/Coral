@@ -66,3 +66,37 @@ export function addPostToFeeds(queryClient: QueryClient, post: CommunityPost): v
   }
   void queryClient.invalidateQueries({ queryKey: ["community-posts"], refetchType: "none" });
 }
+
+/** What every cached list of posts held, so a refused delete can put it all back. */
+export type FeedSnapshot = Array<[readonly unknown[], unknown]>;
+
+function withoutPost(page: Page, postId: string): Page {
+  const left = page.data.filter((p) => p.id !== postId);
+  return left.length === page.data.length
+    ? page
+    : { ...page, data: left, meta: { ...page.meta, total: Math.max(0, page.meta.total - 1) } };
+}
+
+/**
+ * Takes a post out of every cached list the moment its deletion is confirmed
+ * — the feed, its sections, people's and companies' pages, spaces, searches,
+ * the right rail — rather than leaving it on screen while the feed downloads
+ * again. Returns what was there, for `restoreFeeds` if the server refuses.
+ */
+export function removePostFromFeeds(queryClient: QueryClient, postId: string): FeedSnapshot {
+  const snapshot = queryClient.getQueriesData<unknown>({ queryKey: ["community-posts"] }) as FeedSnapshot;
+  for (const [key, data] of snapshot) {
+    if (isInfinite(data)) {
+      if (!data.pages.some((p) => p.data.some((x) => x.id === postId))) continue;
+      queryClient.setQueryData<InfiniteData<Page>>(key, { ...data, pages: data.pages.map((p) => withoutPost(p, postId)) });
+    } else if (isPage(data) && data.data.some((x) => x.id === postId)) {
+      queryClient.setQueryData<Page>(key, withoutPost(data, postId));
+    }
+  }
+  return snapshot;
+}
+
+/** Puts every list back as it was before an optimistic change. */
+export function restoreFeeds(queryClient: QueryClient, snapshot: FeedSnapshot): void {
+  for (const [key, data] of snapshot) queryClient.setQueryData(key, data);
+}
