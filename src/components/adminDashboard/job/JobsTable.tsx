@@ -55,12 +55,23 @@ interface JobsTableProps {
   onLimitChange: (limit: number) => void;
 }
 
+/**
+ * Compact amount for a narrow column: 85,000 → "85k", 1,500 → "1.5k", and
+ * anything under 1,000 as written. Dividing everything by 1,000 and rounding
+ * showed a C$600–800 job as "C$1k–C$1k".
+ */
+function compactAmount(n: number): string {
+  if (Math.abs(n) < 1000) return n.toLocaleString();
+  const k = n / 1000;
+  return `${Number.isInteger(k) ? k : k.toFixed(1).replace(/\.0$/, "")}k`;
+}
+
 function formatSalary(job: Job) {
   if (!job.salaryMin) return "—";
   if (job.salaryUnit) return `${job.currency}${job.salaryMin}${job.salaryUnit}`;
   if (job.salaryMax && job.salaryMax !== job.salaryMin)
-    return `${job.currency}${(job.salaryMin / 1000).toFixed(0)}k–${job.currency}${(job.salaryMax / 1000).toFixed(0)}k`;
-  return `${job.currency}${(job.salaryMin / 1000).toFixed(0)}k`;
+    return `${job.currency}${compactAmount(job.salaryMin)}–${job.currency}${compactAmount(job.salaryMax)}`;
+  return `${job.currency}${compactAmount(job.salaryMin)}`;
 }
 
 function formatDate(dateStr: string) {

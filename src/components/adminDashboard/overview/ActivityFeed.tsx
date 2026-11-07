@@ -84,7 +84,7 @@ export function ActivityFeed({ recentActivity = [] }: ActivityFeedProps) {
           <p className="text-sm text-muted-foreground">No recent activity yet</p>
         </div>
       ) : (
-      <div className="divide-y divide-gray-300">
+      <div className="divide-y divide-border">
         {activities.map((item, i) => (
           <div
             key={i}

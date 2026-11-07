@@ -1,11 +1,27 @@
+/**
+ * Application status as the admin shows it — the stage names employers see on
+ * their board (server: applicationStatusLabel), plus Flagged, which only the
+ * admin Flag action sets.
+ */
 export type ApplicationStatus =
-  | "Submitted"
-  | "Under Review"
-  | "Shortlisted"
+  | "Applied"
+  | "Screening"
   | "Interview"
+  | "Offer"
+  | "Hired"
   | "Rejected"
   | "Withdrawn"
   | "Flagged";
+
+/** "2026-10-13T09:32:13.112Z" → "Oct 13, 2026". The list used to print the raw timestamp. */
+export const formatAppliedDate = (iso: string): string => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+};
+
+export const APPLICATION_STATUSES: ApplicationStatus[] = ["Applied", "Screening", "Interview", "Offer", "Hired", "Rejected", "Withdrawn", "Flagged"];
 
 export interface Application {
   id: string;
@@ -13,7 +29,12 @@ export interface Application {
     name: string;
     email: string;
     phone: string;
-    avatar: string;
+    /** Their photo, if any. Drawn with ApplicantAvatar, which falls back to initials. */
+    avatarUrl: string | null;
+    /** Name parts for the initials fallback (personInitials). */
+    firstName: string | null;
+    lastName: string | null;
+    displayName: string | null;
     location: string;
     profileCompletion: number;
   };

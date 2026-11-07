@@ -24,15 +24,21 @@ async function send(path: string, method: "PATCH" | "DELETE", body?: unknown): P
   }
 }
 
-/** UI status label → stored application status. */
+/**
+ * Admin status label → stored application status. The labels are the
+ * pipeline stage names; Screening stores "reviewing", as an employer's move
+ * to that stage does. "Interview" used to store "interview", which no other
+ * part of the product reads.
+ */
 const STORED_STATUS: Record<string, string> = {
-  "Under Review": "pending",
-  Shortlisted: "shortlisted",
-  Interview: "interview",
+  Applied: "pending",
+  Screening: "reviewing",
+  Interview: "interviewing",
+  Offer: "offered",
+  Hired: "hired",
   Rejected: "rejected",
   Withdrawn: "withdrawn",
   Flagged: "flagged",
-  Submitted: "pending",
 };
 
 /** Sets an application's status from the admin UI vocabulary. */

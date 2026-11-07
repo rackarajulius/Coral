@@ -1,4 +1,4 @@
-import { ApplicationStatus } from "@/data/admin/applications/applications";
+import { APPLICATION_STATUSES, ApplicationStatus } from "@/data/admin/applications/applications";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -22,7 +22,7 @@ interface FilterPanelProps {
   onFiltersChange: (filters: FilterPanelProps["filters"]) => void;
 }
 
-const allStatuses: ApplicationStatus[] = ["Submitted", "Under Review", "Shortlisted", "Interview", "Rejected", "Withdrawn", "Flagged"];
+const allStatuses: ApplicationStatus[] = APPLICATION_STATUSES;
 
 export function FilterPanel({ open, onClose, filters, onFiltersChange }: FilterPanelProps) {
   const toggleStatus = (status: ApplicationStatus) => {

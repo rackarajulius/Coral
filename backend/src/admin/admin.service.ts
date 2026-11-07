@@ -3,6 +3,7 @@ import { computeProfileCompletion } from '../common/profile-completion';
 import { CompanyMemberStatus, CompanyPlan, Prisma, ReportStatus, SubscriptionStatus, UserStatus } from '@prisma/client';
 import { JobseekersListQueryDto } from './dto/jobseekers-list-query.dto';
 import { ModerationRecordService } from './moderation-record.service';
+import { PIPELINE_STAGE_LABELS, stageFromApplicationStatus } from '../common/pipeline-stage';
 import { PLAN_LABELS } from '../billing/plan-entitlements';
 import { RESUME_BUCKET, StorageService } from '../storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -27,6 +28,21 @@ const STATUS_LABEL: Record<UserStatus, string> = {
 const STATUS_FROM_LABEL: Record<string, UserStatus> = Object.fromEntries(
   Object.entries(STATUS_LABEL).map(([status, label]) => [label, status as UserStatus]),
 );
+
+/**
+ * Every application status that is stored: the product's own, plus 'flagged',
+ * which only the admin's Flag action writes.
+ */
+const APPLICATION_STATUSES = ['pending', 'reviewing', 'shortlisted', 'interviewing', 'offered', 'hired', 'rejected', 'withdrawn', 'flagged'];
+
+/**
+ * An application status as the admin shows it: the same stage names employers
+ * see on their board (common/pipeline-stage), so "hired" reads Hired rather
+ * than falling through to a catch-all. 'flagged' has no stage, so it is named
+ * on its own.
+ */
+const applicationStatusLabel = (status: string): string =>
+  status === 'flagged' ? 'Flagged' : PIPELINE_STAGE_LABELS[stageFromApplicationStatus(status)];
 
 /** The last moment of a YYYY-MM-DD day, so a "to" date includes that day. */
 const endOfDay = (day: string) => new Date(`${day.slice(0, 10)}T23:59:59.999Z`);
@@ -1227,7 +1243,9 @@ export class AdminService {
       this.prisma.application.count({ where: { status: 'pending' } }),
       this.prisma.application.count({ where: { status: 'flagged' } }),
       this.prisma.application.count({ where: { status: 'withdrawn' } }),
-      this.prisma.application.count({ where: { status: 'interview' } }),
+      // The product stores 'interviewing'; this counted 'interview', which
+      // nothing writes, so the card could never leave 0.
+      this.prisma.application.count({ where: { status: 'interviewing' } }),
     ]);
 
     return {
@@ -1238,7 +1256,7 @@ export class AdminService {
         { label: "Pending Review", value: pendingReview.toLocaleString() },
         { label: "Flagged", value: flagged.toLocaleString() },
         { label: "Withdrawn", value: withdrawn.toLocaleString() },
-        { label: "Interviews Scheduled", value: interviewsScheduled.toLocaleString() },
+        { label: "At Interview Stage", value: interviewsScheduled.toLocaleString() },
       ],
       summary: { totalApplications, applicationsToday, pendingReview, flagged, withdrawn, interviewsScheduled },
     };
@@ -1298,20 +1316,12 @@ export class AdminService {
       });
     }
 
-    // Status filter — reverse-map the UI vocabulary back to stored statuses.
-    const uiToStored: Record<string, string> = {
-      'Under Review': 'pending',
-      Submitted: 'pending',
-      Shortlisted: 'shortlisted',
-      Interview: 'interview',
-      Rejected: 'rejected',
-      Withdrawn: 'withdrawn',
-      Flagged: 'flagged',
-    };
-    const statuses = (query.statuses || '').split(',').map((x: string) => x.trim()).filter(Boolean);
-    if (statuses.length) {
-      const stored = [...new Set(statuses.map((s: string) => uiToStored[s]).filter(Boolean) as string[])];
-      if (stored.length) and.push({ status: { in: stored } });
+    // Status filter — every stored status whose label was asked for. Unknown
+    // labels only → match nothing rather than silently showing everything.
+    const labels = new Set((query.statuses || '').split(',').map((x: string) => x.trim()).filter(Boolean));
+    if (labels.size) {
+      const stored = APPLICATION_STATUSES.filter((s) => labels.has(applicationStatusLabel(s)));
+      and.push(stored.length ? { status: { in: stored } } : { id: { in: [] } });
     }
     if (query.flaggedOnly === 'true') and.push({ status: 'flagged' });
 
@@ -1394,7 +1404,14 @@ export class AdminService {
           name: app.applicant.displayName || `${app.applicant.firstName || ''} ${app.applicant.lastName || ''}`.trim() || 'Unknown',
           email: app.applicant.email,
           phone: profile?.phone || 'Unknown',
-          avatar: app.applicant.avatarUrl || (app.applicant.displayName || app.applicant.email).substring(0, 2).toUpperCase(),
+          // The photo and the name parts separately. One field used to hold the
+          // URL *or* two letters, and the page drew it as text — so people with
+          // a photo got a clipped fragment of its URL in the circle. Initials
+          // are derived on the page with the app's one rule (personInitials).
+          avatarUrl: app.applicant.avatarUrl || null,
+          firstName: app.applicant.firstName,
+          lastName: app.applicant.lastName,
+          displayName: app.applicant.displayName,
           location: [profile?.city, profile?.state, profile?.country].filter(Boolean).join(', ') || 'Unknown',
           profileCompletion,
         },
@@ -1410,15 +1427,7 @@ export class AdminService {
           status: app.job.status,
         },
         appliedDate: app.appliedAt.toISOString(),
-        status: (
-          app.status === 'pending' ? 'Under Review' :
-          app.status === 'shortlisted' ? 'Shortlisted' :
-          app.status === 'interview' ? 'Interview' :
-          app.status === 'rejected' ? 'Rejected' :
-          app.status === 'withdrawn' ? 'Withdrawn' :
-          app.status === 'flagged' ? 'Flagged' :
-          'Submitted'
-        ),
+        status: applicationStatusLabel(app.status),
         resume: !!(app.resumePath || app.resumeUrl),
         coverLetter: app.coverLetter || 'No cover letter provided',
         screening: this.describeScreen(screenFor.get(app.id)),

@@ -1,5 +1,5 @@
 import { ReactNode } from "react";
-import { TrendingUp, TrendingDown } from "lucide-react";
+import { Minus, TrendingUp, TrendingDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface KPICardProps {
@@ -9,14 +9,22 @@ interface KPICardProps {
   change?: number | null;
   icon: ReactNode;
   trend?: number[];
-  /** "negative" forces a red trend (for watch metrics like Suspended/Pending). */
+  /**
+   * "negative" is for watch metrics (Suspended, Pending) where a rise is bad:
+   * it flips which direction reads red. It used to force red and a falling
+   * arrow regardless, so "+0%" sat beside a down-arrow.
+   */
   tone?: "auto" | "negative";
 }
 
 export function KPICard({ label, value, change = null, icon, trend = [], tone = "auto" }: KPICardProps) {
   const hasChange = change != null;
+  // The arrow follows the number; the colour says whether that is good.
+  const direction = !hasChange || change === 0 ? "flat" : change > 0 ? "up" : "down";
   const isPositive = hasChange && change >= 0;
-  const negative = tone === "negative" || (hasChange && change < 0);
+  const bad = direction !== "flat" && (tone === "negative" ? direction === "up" : direction === "down");
+  const good = direction !== "flat" && !bad;
+  const DirectionIcon = direction === "up" ? TrendingUp : direction === "down" ? TrendingDown : Minus;
 
   // Mini sparkline (needs at least 2 points to draw a line)
   const hasTrend = trend.length > 1;
@@ -57,12 +65,12 @@ export function KPICard({ label, value, change = null, icon, trend = [], tone = 
           <div
             className={cn(
               "flex items-center gap-1 text-xs font-medium",
-              negative ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400"
+              bad ? "text-rose-600 dark:text-rose-400" : good ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"
             )}
           >
-            {negative ? <TrendingDown className="h-3.5 w-3.5" /> : <TrendingUp className="h-3.5 w-3.5" />}
+            <DirectionIcon className="h-3.5 w-3.5" aria-hidden="true" />
             <span>
-              {isPositive ? "+" : ""}
+              {isPositive && change !== 0 ? "+" : ""}
               {change}%
             </span>
             <span className="text-muted-foreground font-normal ml-1">vs last week</span>
@@ -75,7 +83,7 @@ export function KPICard({ label, value, change = null, icon, trend = [], tone = 
             <polyline
               points={points}
               fill="none"
-              stroke={negative ? "hsl(var(--destructive))" : "hsl(var(--success))"}
+              stroke={bad ? "hsl(var(--destructive))" : good ? "hsl(var(--success))" : "hsl(var(--muted-foreground))"}
               strokeWidth="1.5"
               strokeLinecap="round"
               strokeLinejoin="round"

@@ -68,7 +68,7 @@ function ActivityFeedSkeleton() {
       <div className="border-b border-border px-5 py-4">
         <Skeleton className="h-4 w-28" />
       </div>
-      <div className="divide-y divide-gray-300">
+      <div className="divide-y divide-border">
         {Array.from({ length: 6 }).map((_, index) => (
           <div key={index} className="flex items-center gap-3 px-5 py-3.5">
             <Skeleton className="h-8 w-8 rounded-full" />

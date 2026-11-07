@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { X } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { countryName, getJobseekerCountries } from "@/lib/api/adminJobseekers";
 import { Button } from "@/components/ui/button";
@@ -64,13 +63,9 @@ export function JobseekerFilterPanel({ open, onClose, filters, onApply }: Jobsee
   return (
     <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
       <SheetContent side="right" className="w-[360px] overflow-y-auto p-0">
+        {/* The sheet draws its own close button; a second one sat beside it. */}
         <SheetHeader className="border-b border-border px-6 py-4">
-          <div className="flex items-center justify-between">
-            <SheetTitle className="text-base font-semibold">Filters</SheetTitle>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onClose}>
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
+          <SheetTitle className="text-base font-semibold">Filters</SheetTitle>
         </SheetHeader>
 
         <div className="space-y-6 px-6 py-5">

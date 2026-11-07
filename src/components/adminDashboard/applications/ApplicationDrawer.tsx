@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { Download, Trash2, Flag, FileText, Clock, XCircle } from "lucide-react";
+import { Trash2, Flag, FileText, Clock, XCircle } from "lucide-react";
 import { toast } from "sonner";
-import { Application } from "@/data/admin/applications/applications";
+import { Application, formatAppliedDate } from "@/data/admin/applications/applications";
 import { StatusBadge } from "./StatusBadge";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { ApplicantAvatar } from "./ApplicantAvatar";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
@@ -80,9 +80,7 @@ export function ApplicationDrawer({ application, open, onClose, onAction }: Appl
             <section>
               <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Applicant</h3>
               <div className="flex items-start gap-4">
-                <Avatar className="h-14 w-14">
-                  <AvatarFallback className="bg-primary text-primary-foreground font-semibold">{applicant.avatar}</AvatarFallback>
-                </Avatar>
+                <ApplicantAvatar applicant={applicant} className="h-14 w-14" textClassName="text-base font-semibold" />
                 <div className="flex-1 space-y-1">
                   <p className="text-base font-semibold text-card-foreground">{applicant.name}</p>
                   <p className="text-sm text-muted-foreground">{applicant.email}</p>
@@ -125,11 +123,13 @@ export function ApplicationDrawer({ application, open, onClose, onAction }: Appl
               {application.resume ? (
                 <div className="flex items-center gap-3 p-3 rounded-lg bg-secondary border border-border">
                   <FileText className="h-5 w-5 text-muted-foreground" />
+                  {/* What is known: a résumé came with it, and when. The file
+                      name shown here used to be invented, beside a Download
+                      button that did nothing. */}
                   <div className="flex-1">
-                    <p className="text-sm font-medium text-card-foreground">resume_{applicant.name.toLowerCase().replace(" ", "_")}.pdf</p>
-                    <p className="text-xs text-muted-foreground">Uploaded {application.appliedDate}</p>
+                    <p className="text-sm font-medium text-card-foreground">Résumé attached</p>
+                    <p className="text-xs text-muted-foreground">Sent with the application, {formatAppliedDate(application.appliedDate)}</p>
                   </div>
-                  <Button variant="ghost" size="sm"><Download className="h-4 w-4" /></Button>
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground italic">No resume uploaded</p>

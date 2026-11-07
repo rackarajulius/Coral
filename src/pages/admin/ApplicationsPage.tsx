@@ -9,13 +9,13 @@ import { StatusBadge, ProfileCompletionBar } from "@/components/adminDashboard/a
 import { ApplicationDrawer } from "@/components/adminDashboard/applications/ApplicationDrawer";
 import { FilterPanel } from "@/components/adminDashboard/applications/FilterPanel";
 import { AdminPagination } from "@/components/adminDashboard/AdminPagination";
-import { Application, ApplicationStatus } from "@/data/admin/applications/applications";
+import { Application, ApplicationStatus, formatAppliedDate } from "@/data/admin/applications/applications";
 import { setApplicationStatus, deleteApplication } from "@/lib/api/adminApplications";
 import { useApplicationsList, useApplicationsMetrics, useApplicationActions } from "@/hooks/admin/useAdminApplications";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { ApplicantAvatar } from "@/components/adminDashboard/applications/ApplicantAvatar";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -47,7 +47,7 @@ interface ApplicationMetrics {
 }
 
 // Shown while the counts load: a dash, never a 0 or "0%" that reads as real.
-const kpis = ["Total Applications", "Today", "Pending Review", "Flagged", "Withdrawn", "Interviews Scheduled"].map(
+const kpis = ["Total Applications", "Today", "Pending Review", "Flagged", "Withdrawn", "At Interview Stage"].map(
   (label) => ({ label, value: "—" }),
 );
 
@@ -335,9 +335,7 @@ export default function ApplicationsPage() {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2.5">
-                            <Avatar className="h-8 w-8">
-                              <AvatarFallback className="bg-primary text-primary-foreground text-xs">{app.applicant.avatar}</AvatarFallback>
-                            </Avatar>
+                            <ApplicantAvatar applicant={app.applicant} />
                             <div className="leading-tight">
                               <p className="font-medium text-card-foreground">{app.applicant.name}</p>
                               {app.applicant.location !== "Unknown" && (
@@ -349,7 +347,7 @@ export default function ApplicationsPage() {
                         <td className="px-4 py-3 text-card-foreground">{app.job.title}</td>
                         <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{app.job.employer}</td>
                         <td className="px-4 py-3 text-muted-foreground hidden xl:table-cell">{app.job.location}</td>
-                        <td className="px-4 py-3 text-muted-foreground">{app.appliedDate}</td>
+                        <td className="px-4 py-3 text-muted-foreground whitespace-nowrap" title={app.appliedDate}>{formatAppliedDate(app.appliedDate)}</td>
                         <td className="px-4 py-3"><StatusBadge status={app.status} /></td>
                         <td className="px-4 py-3"><ProfileCompletionBar score={app.applicant.profileCompletion} /></td>
                         <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
@@ -403,9 +401,7 @@ export default function ApplicationsPage() {
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Avatar className="h-8 w-8">
-                      <AvatarFallback className="bg-primary text-primary-foreground text-xs">{app.applicant.avatar}</AvatarFallback>
-                    </Avatar>
+                    <ApplicantAvatar applicant={app.applicant} />
                     <div>
                       <p className="text-sm font-medium text-card-foreground">{app.applicant.name}</p>
                       <p className="text-xs text-muted-foreground">{app.job.title}</p>
@@ -414,7 +410,7 @@ export default function ApplicationsPage() {
                   <StatusBadge status={app.status} />
                 </div>
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>{app.appliedDate}</span>
+                  <span>{formatAppliedDate(app.appliedDate)}</span>
                   <ProfileCompletionBar score={app.applicant.profileCompletion} />
                 </div>
               </div>
