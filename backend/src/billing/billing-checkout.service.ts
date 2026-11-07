@@ -114,7 +114,7 @@ export class BillingCheckoutService {
        * deployment that has configured Stripe Tax turns it on with
        * STRIPE_AUTOMATIC_TAX=true.
        */
-      ...(this.automaticTaxEnabled() ? { 'automatic_tax[enabled]': 'true' } : {}),
+      ...(this.stripe.automaticTaxEnabled ? { 'automatic_tax[enabled]': 'true' } : {}),
     });
 
     if (!session.url) {
@@ -269,16 +269,6 @@ export class BillingCheckoutService {
       );
     }
     return priceId;
-  }
-
-  /**
-   * Whether to ask Stripe to calculate tax.
-   *
-   * Off unless explicitly enabled, because turning it on without an origin
-   * address in Stripe Tax does not degrade — it refuses every checkout.
-   */
-  private automaticTaxEnabled(): boolean {
-    return this.config.get<string>('STRIPE_AUTOMATIC_TAX') === 'true';
   }
 
   /** Canada-first. Stripe fixes this at the first payment and it cannot change. */

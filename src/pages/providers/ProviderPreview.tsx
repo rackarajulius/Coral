@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Eye, Loader2, Lock } from "lucide-react";
 import { Link } from "react-router-dom";
-import Header from "@/components/Header";
 import ProviderProfileContent from "@/components/providers/ProviderProfileContent";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
@@ -20,8 +19,7 @@ export default function ProviderPreview() {
 
   return (
     <>
-      <Header />
-      <main className="mx-auto w-full max-w-4xl px-4 pb-16 pt-24 sm:px-6">
+      <main className="mx-auto w-full max-w-4xl px-4 pb-16 pt-6 sm:px-6">
         <Link to="/provider" className="mb-5 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" aria-hidden="true" />Back to provider setup</Link>
         <div className="mb-5 flex items-start gap-3 rounded-xl border bg-muted/40 p-4 text-sm">
           {visible ? <Eye className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" /> : <Lock className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />}

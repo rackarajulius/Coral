@@ -61,14 +61,15 @@ export class SupabaseService implements OnModuleInit {
       const { data, error } = await this.client.auth.getUser(token);
 
       if (error) {
-        console.error('Token verification error:', error.message);
-        return null;
+        // Only an explicit authentication rejection means the session is bad.
+        // Network failures and provider outages must not log the client out.
+        if ([400, 401, 403, 404, 422].includes(error.status ?? 0)) return null;
+        throw new ServiceUnavailableException('Authentication is temporarily unavailable. Please try again.');
       }
 
       return data.user;
     } catch (error) {
-      console.error('Token verification failed:', error);
-      return null;
+      throw new ServiceUnavailableException('Authentication is temporarily unavailable. Please try again.');
     }
   }
 

@@ -17,6 +17,7 @@ import { ApplicationSettingsSection } from "@/components/adminDashboard/job/Appl
 import { PublishConfirmDialog } from "@/components/adminDashboard/job/PublishConfirmDialog";
 import supabase from "@/lib/supabase";
 import { WORK_ARRANGEMENTS, toRemoteFlags } from "@/lib/jobs/workArrangement";
+import { CityAutocomplete } from "@/components/location/CityAutocomplete";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api/v1';
 
@@ -475,12 +476,16 @@ export default function CreateJob() {
                   </Select>
                 </div>
                 <div>
-                  <Label className="text-sm">Location</Label>
-                  <Input
+                  <Label htmlFor="job-location" className="text-sm">Location</Label>
+                  <CityAutocomplete
+                    id="job-location"
+                    variant="field"
+                    className="mt-1.5"
+                    inputClassName="h-11 bg-card"
                     value={location}
-                    onChange={(e) => setLocation(e.target.value)}
-                    placeholder="e.g. Toronto, CA"
-                    className="mt-1.5 h-11 bg-card"
+                    onChange={setLocation}
+                    onSelect={(city) => setLocation(city.label)}
+                    placeholder="City, or “Remote”"
                   />
                 </div>
               </div>

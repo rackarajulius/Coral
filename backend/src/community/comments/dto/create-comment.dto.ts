@@ -1,8 +1,9 @@
-import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsOptional, IsString, IsUUID } from 'class-validator';
+import { MaxReadableLength } from '../../readable-length.validator';
 
 export class CreateCommentDto {
   @IsString()
-  @MaxLength(2000)
+  @MaxReadableLength(2000)
   content: string;
 
   @IsOptional()

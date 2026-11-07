@@ -19,13 +19,16 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import VerificationCard from "@/components/employer-dashboard/VerificationCard";
 import PublicFaceStep from "@/components/employer-dashboard/PublicFaceStep";
+import CompanyPagePreview from "@/components/employer-dashboard/CompanyPagePreview";
+import { COMPANY_TYPES, companySizeOptions } from "@/lib/companyFacts";
 import {
-  COMPANY_SIZES,
   INDUSTRIES,
+  checkPageAddress,
   completeOnboarding,
   getCompanyMatches,
   getOnboardingState,
   saveCompanyStep,
+  toPageSlug,
   type CompanyMatch,
 } from "@/lib/api/employerOnboarding";
 
@@ -59,8 +62,11 @@ export default function EmployerOnboarding() {
   });
 
   // Someone who has already finished setup and came back for one specific
-  // thing, rather than a new employer working through it.
-  const returning = stateQuery.data ? !stateQuery.data.needsOnboarding : false;
+  // thing, rather than someone new to the company side. "New" includes a job
+  // seeker creating their first company page from the account they have.
+  const returning = stateQuery.data
+    ? !stateQuery.data.needsOnboarding && !!stateQuery.data.hasCompany
+    : false;
 
   // Resumed from the server's derived state, so re-entering setup lands on the
   // step that's actually outstanding rather than always starting at the top.
@@ -76,7 +82,19 @@ export default function EmployerOnboarding() {
     isRecruiter: false,
     isHiringManager: false,
     isAdmin: false,
+    firstName: "",
+    lastName: "",
+    authorizedRepresentative: false,
+    pageSlug: "",
+    companyType: "",
   });
+  // The page address follows the company name, as on LinkedIn's form, until
+  // the person edits it themselves (or the page already has one).
+  const [slugTouched, setSlugTouched] = useState(false);
+  const [slugToCheck, setSlugToCheck] = useState("");
+  // Creating a company page, as opposed to editing one or asking to join one,
+  // asks for the person's name and their word that they may represent it.
+  const creating = !joining && !stateQuery.data?.hasCompany;
 
   // Seed from any profile that already exists, so re-entering setup doesn't
   // ask for details the employer has already given.
@@ -89,6 +107,16 @@ export default function EmployerOnboarding() {
   }, [stateQuery.data?.next, requested]);
 
   useEffect(() => {
+    const person = stateQuery.data?.person;
+    if (!person) return;
+    setForm((f) => ({
+      ...f,
+      firstName: f.firstName || person.firstName || "",
+      lastName: f.lastName || person.lastName || "",
+    }));
+  }, [stateQuery.data?.person]);
+
+  useEffect(() => {
     const p = stateQuery.data?.profile as Record<string, string | boolean | null> | null;
     if (!p) return;
     setForm((f) => ({
@@ -98,8 +126,27 @@ export default function EmployerOnboarding() {
       companySize: (p.companySize as string) ?? f.companySize,
       industry: (p.industry as string) ?? f.industry,
       headquarters: (p.headquarters as string) ?? f.headquarters,
+      pageSlug: (p.slug as string) ?? f.pageSlug,
+      companyType: (p.companyType as string) ?? f.companyType,
     }));
+    if (p.slug) setSlugTouched(true);
   }, [stateQuery.data]);
+
+  // Checked as they type, a beat after they stop.
+  useEffect(() => {
+    const timer = setTimeout(() => setSlugToCheck(toPageSlug(form.pageSlug)), 400);
+    return () => clearTimeout(timer);
+  }, [form.pageSlug]);
+  const slugQuery = useQuery({
+    queryKey: ["page-address", slugToCheck],
+    queryFn: () => checkPageAddress(slugToCheck),
+    enabled: !joining && slugToCheck.length > 0,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const slugNow = toPageSlug(form.pageSlug);
+  const slugChecked = slugQuery.data?.slug === slugNow ? slugQuery.data : undefined;
+  const slugRefused = !!slugChecked && !slugChecked.available;
 
   const save = useMutation({
     mutationFn: () =>
@@ -107,6 +154,9 @@ export default function EmployerOnboarding() {
         ...form,
         companyName: joining?.companyName ?? form.companyName,
         joinCompanyId: joining ? (joining.companyId ?? joining.profileId) : undefined,
+        pageSlug: joining || !form.pageSlug.trim() ? undefined : form.pageSlug,
+        // Blank is "not chosen", not a value; an older page keeps what it has.
+        companyType: form.companyType || undefined,
       }),
     onSuccess: (result) => {
       stateQuery.refetch();
@@ -144,7 +194,15 @@ export default function EmployerOnboarding() {
 
   const busy = save.isPending || finish.isPending;
   const canSubmit =
-    !!joining || (form.companyName.trim().length >= 2 && !!form.industry && !!form.companySize);
+    !!joining ||
+    (form.companyName.trim().length >= 2 &&
+      !!form.industry &&
+      !!form.companySize &&
+      // LinkedIn asks for it when a page is made; an older page may not have one yet.
+      (!creating || !!form.companyType) &&
+      !slugRefused &&
+      (!creating ||
+        (!!form.firstName.trim() && !!form.lastName.trim() && form.authorizedRepresentative)));
 
   if (stateQuery.isLoading) {
     return (
@@ -190,6 +248,30 @@ export default function EmployerOnboarding() {
     );
   }
 
+  // A seat that can't edit the company (a recruiter, a viewer) is shown who
+  // can, instead of a form whose save the server would refuse. Its details
+  // live on the company's page, which every member shares.
+  if (stateQuery.data?.canEditCompany === false && step !== "verify") {
+    const companyName = (stateQuery.data.profile?.companyName as string | undefined)?.trim();
+    return (
+      <div className="mx-auto max-w-lg space-y-4 p-6 py-16 text-center">
+        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary-soft">
+          <Building2 className="h-5 w-5 text-primary" aria-hidden="true" />
+        </div>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          {companyName ? `${companyName}'s page` : "Your company's page"}
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          Its details and public page are kept by your company's owners and admins. Ask one of
+          them to make a change.
+        </p>
+        <Button variant="outline" onClick={() => navigate("/employers/dashboard")}>
+          Back to dashboard
+        </Button>
+      </div>
+    );
+  }
+
   // Reached from the dashboard's finish-setup card, which is the only route to
   // verification once onboarding is behind you.
   if (step === "verify") {
@@ -226,11 +308,14 @@ export default function EmployerOnboarding() {
     );
   }
 
+  const page = stateQuery.data?.profile as Record<string, unknown> | null | undefined;
+
   return (
-    <div className="mx-auto max-w-2xl space-y-6 p-6 py-10">
+    <div className="mx-auto grid max-w-5xl gap-6 p-6 py-10 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start">
+      <div className="min-w-0 space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">
-          {returning ? "Company details" : "Set up your company"}
+          {returning ? "Company details" : creating ? "Create a company page" : "Set up your company"}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
           This is what candidates see when they find your jobs. You can change any of it later.
@@ -298,15 +383,87 @@ export default function EmployerOnboarding() {
 
       {!joining && (
         <div className="space-y-4 rounded-xl border border-border bg-card p-5">
+          {/* A page is created by a person, as on LinkedIn. Only the name is
+              asked for; it is what the team sees as the page's creator. */}
+          {creating && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="firstName">Your first name</Label>
+                <Input
+                  id="firstName"
+                  value={form.firstName}
+                  onChange={(e) => setForm({ ...form, firstName: e.target.value })}
+                  autoComplete="given-name"
+                  className="mt-1.5"
+                />
+              </div>
+              <div>
+                <Label htmlFor="lastName">Your last name</Label>
+                <Input
+                  id="lastName"
+                  value={form.lastName}
+                  onChange={(e) => setForm({ ...form, lastName: e.target.value })}
+                  autoComplete="family-name"
+                  className="mt-1.5"
+                />
+              </div>
+            </div>
+          )}
+
           <div>
             <Label htmlFor="companyName">Company name</Label>
             <Input
               id="companyName"
               value={form.companyName}
-              onChange={(e) => setForm({ ...form, companyName: e.target.value })}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  companyName: e.target.value,
+                  ...(slugTouched ? {} : { pageSlug: toPageSlug(e.target.value) }),
+                })
+              }
               placeholder="Acme Ltd"
               className="mt-1.5"
             />
+          </div>
+
+          {/* The page's own address, as on LinkedIn's creation form. */}
+          <div>
+            <Label htmlFor="pageSlug">Page address</Label>
+            <div className="mt-1.5 flex h-10 items-center rounded-md border border-gray-300 bg-background pl-3">
+              <span className="shrink-0 text-sm text-muted-foreground">{window.location.host}/company/</span>
+              <Input
+                id="pageSlug"
+                value={form.pageSlug}
+                onChange={(e) => {
+                  setSlugTouched(true);
+                  setForm({ ...form, pageSlug: e.target.value });
+                }}
+                onBlur={() => setForm((f) => ({ ...f, pageSlug: toPageSlug(f.pageSlug) }))}
+                placeholder="acme"
+                aria-describedby="pageSlugHelp"
+                autoCapitalize="none"
+                spellCheck={false}
+                className="h-full min-w-0 border-0 bg-transparent px-0.5"
+              />
+            </div>
+            <p
+              id="pageSlugHelp"
+              className={cn(
+                "mt-1 text-[11px]",
+                slugRefused
+                  ? "text-destructive"
+                  : slugChecked?.available
+                    ? "text-emerald-600 dark:text-emerald-400"
+                    : "text-muted-foreground",
+              )}
+            >
+              {slugRefused
+                ? slugChecked?.reason
+                : slugChecked?.available
+                  ? `Available — ${window.location.host}/company/${slugChecked.slug}`
+                  : "Letters, numbers and hyphens. You can change it later."}
+            </p>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -338,14 +495,33 @@ export default function EmployerOnboarding() {
                   <SelectValue placeholder="Select" />
                 </SelectTrigger>
                 <SelectContent>
-                  {COMPANY_SIZES.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {s} people
+                  {companySizeOptions(form.companySize).map((s) => (
+                    <SelectItem key={s.value} value={s.value}>
+                      {s.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          <div>
+            <Label htmlFor="companyType">Organization type</Label>
+            <Select
+              value={form.companyType}
+              onValueChange={(v) => setForm({ ...form, companyType: v })}
+            >
+              <SelectTrigger id="companyType" className="mt-1.5">
+                <SelectValue placeholder="Select" />
+              </SelectTrigger>
+              <SelectContent>
+                {COMPANY_TYPES.map((t) => (
+                  <SelectItem key={t.value} value={t.value}>
+                    {t.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -393,6 +569,20 @@ export default function EmployerOnboarding() {
               ))}
             </div>
           </div>
+
+          {creating && (
+            <label className="flex cursor-pointer items-start gap-2.5 border-t border-border pt-4 text-sm">
+              <Checkbox
+                className="mt-0.5"
+                checked={form.authorizedRepresentative}
+                onCheckedChange={(v) => setForm({ ...form, authorizedRepresentative: v === true })}
+              />
+              <span className="text-muted-foreground">
+                I'm an authorized representative of this organization, and I may create and manage
+                its page on Coral. Your team will see that you created it.
+              </span>
+            </label>
+          )}
         </div>
       )}
 
@@ -409,6 +599,25 @@ export default function EmployerOnboarding() {
           <p className="text-xs text-muted-foreground">One more optional step after this.</p>
         )}
       </div>
+      </div>
+
+      {/* The page as it will look, beside the form as on LinkedIn. Not while
+          asking to join: that company's page already exists. */}
+      {!joining && (
+        <aside className="lg:sticky lg:top-6">
+          <CompanyPagePreview
+            name={form.companyName}
+            slug={toPageSlug(form.pageSlug)}
+            industry={form.industry}
+            size={form.companySize}
+            type={form.companyType}
+            headquarters={form.headquarters}
+            website={form.companyWebsite}
+            logoUrl={(page?.companyLogo as string | null | undefined) ?? null}
+            tagline={(page?.tagline as string | null | undefined) ?? null}
+          />
+        </aside>
+      )}
     </div>
   );
 }

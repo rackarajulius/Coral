@@ -8,6 +8,7 @@ import { Prisma, UserRole } from '@prisma/client';
 import { User } from '../common/types/user.types';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
+import { profileShownFor } from '../company/company-page';
 import { CompanyAuditService } from '../company/company-audit.service';
 import { CandidateWatchersService } from '../company/candidate-watchers.service';
 import { PipelineLinkService } from '../company/pipeline-link.service';
@@ -87,10 +88,14 @@ export class ApplicationsService {
     const page = Math.max(query.page ?? 1, 1);
     const limit = Math.min(Math.max(query.limit ?? 50, 1), 100);
 
+    const colleagues = new Set(await this.companyContext.colleagueIds(actor.id));
     const where: Prisma.ApplicationWhereInput = {
       // Every job the company posted, not only this recruiter's. Scoping to
       // the caller would give a teammate an empty candidate board.
       job: { postedById: { in: await this.companyContext.memberUserIds(actor.id) } },
+      // Someone who applied to their own company is on its board for everyone
+      // but themselves.
+      applicantId: { not: actor.id },
       // Both arrive comma-separated so multi-select filters stay server-side.
       // Narrowing in the browser would re-introduce the original bug: you would
       // be filtering the current page rather than the whole pipeline.
@@ -187,6 +192,8 @@ export class ApplicationsService {
                 .catch(() => a.resumeUrl)
             : a.resumeUrl,
           job: { id: a.job.id, title: a.job.title },
+          /** An internal applicant: someone who works at this company. */
+          fromColleague: colleagues.has(a.applicant.id),
           matchScore,
           matchedSkills: jobSkills.length > 0 ? (p?.skills ?? []).filter((s) => jobSkills.some((js) => s.toLowerCase().includes(js) || js.includes(s.toLowerCase()))) : [],
           applicant: {
@@ -218,10 +225,9 @@ export class ApplicationsService {
     const limit = Math.min(query.limit ?? 20, 100);
     const skip = (page - 1) * limit;
 
-    const where = this.buildApplicationsWhere({
-      jobId,
-      query,
-    });
+    const where: Prisma.ApplicationWhereInput = {
+      AND: [this.buildApplicationsWhere({ jobId, query }), { applicantId: { not: actor.id } }],
+    };
 
     const [data, total] = await Promise.all([
       this.prisma.application.findMany({
@@ -252,11 +258,13 @@ export class ApplicationsService {
     const limit = Math.min(query.limit ?? 20, 100);
     const skip = (page - 1) * limit;
 
-    const filteredWhere = this.buildApplicationsWhere({
-      jobId,
-      query,
-    });
-    const fullJobWhere: Prisma.ApplicationWhereInput = { jobId };
+    // The caller's own application, if they applied to their own company, is
+    // left out of the lists and the counts alike.
+    const notSelf: Prisma.ApplicationWhereInput = { applicantId: { not: actor.id } };
+    const filteredWhere: Prisma.ApplicationWhereInput = {
+      AND: [this.buildApplicationsWhere({ jobId, query }), notSelf],
+    };
+    const fullJobWhere: Prisma.ApplicationWhereInput = { jobId, ...notSelf };
 
     const [data, filteredTotal, totalForJob, statusBreakdown] = await Promise.all([
       this.prisma.application.findMany({
@@ -321,7 +329,9 @@ export class ApplicationsService {
       ...application,
       permissions: {
         canWithdraw: isApplicant || isAdmin,
-        canUpdateStatus: isJobOwner || isAdmin,
+        // Someone who applied to their own company is on the team but not
+        // its decision-maker for this application.
+        canUpdateStatus: (isJobOwner && !isApplicant) || isAdmin,
       },
     };
   }
@@ -646,10 +656,8 @@ export class ApplicationsService {
     const role = application.job.title;
     let company = application.job.companyName?.trim();
     if (!company) {
-      const employer = await this.prisma.employerProfile.findUnique({
-        where: { userId: application.job.postedById },
-        select: { companyName: true },
-      });
+      // The company the job is shown under: the poster's company page.
+      const employer = await profileShownFor(this.prisma, application.job.postedById, { companyName: true });
       company = employer?.companyName?.trim() || 'the employer';
     }
 

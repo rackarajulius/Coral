@@ -271,9 +271,13 @@ export class CompanyMembersService {
     });
 
     // Only now does their profile belong to the company — onboarding leaves it
-    // detached precisely so a pending request grants nothing.
+    // detached precisely so a pending request grants nothing. Never a row
+    // that is another company's page: moving it would move that page.
     await this.prisma.employerProfile
-      .updateMany({ where: { userId: member.userId }, data: { companyId: context.companyId } })
+      .updateMany({
+        where: { userId: member.userId, pageOf: { is: null } },
+        data: { companyId: context.companyId },
+      })
       .catch(() => undefined);
 
     void this.audit.record({
@@ -342,9 +346,11 @@ export class CompanyMembersService {
 
     // Detach their profile so the company page no longer counts them, while the
     // membership row stays REMOVED so the company keeps their work.
+    // The company's page stays the company's, even when the person whose row
+    // it is leaves: its followers and reviews are the company's.
     if (status === CompanyMemberStatus.REMOVED) {
       await this.prisma.employerProfile
-        .updateMany({ where: { userId: member.userId }, data: { companyId: null } })
+        .updateMany({ where: { userId: member.userId, pageOf: { is: null } }, data: { companyId: null } })
         .catch(() => undefined);
     }
 

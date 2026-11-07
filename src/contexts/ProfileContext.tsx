@@ -4,6 +4,8 @@ import { useAuth } from './AuthContext';
 import { onAfterSignOut, onBeforeSignOut } from '@/lib/signOutHooks';
 import { personName } from '@/lib/personName';
 import { clearResumeImportStash } from '@/lib/resumeImportStash';
+import type { PublicProject } from '@/lib/api/profileProjects';
+import type { DoneWorkSummary } from '@/lib/api/marketplace';
 import {
   hasSession,
   getMyProfile,
@@ -156,7 +158,15 @@ export interface ProfileData {
   
   // Portfolio
   portfolioItems: PortfolioItem[];
-  
+
+  /**
+   * Only on someone else's profile, from the server's public view. Your own
+   * projects are kept apart, behind their own endpoint (MY_PROJECTS_KEY).
+   */
+  projects?: PublicProject[];
+  /** Likewise only on someone else's profile: work done through Coral, confirmed by both sides. */
+  doneWork?: DoneWorkSummary;
+
   // Profile Info
   name: string;
   headline: string;

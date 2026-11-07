@@ -6,6 +6,7 @@ import { AuthService } from '../../src/auth/auth.service';
 import { configureApp } from '../../src/bootstrap/configure-app';
 import { FreelancersController } from '../../src/freelancers/freelancers.controller';
 import { FreelancersService } from '../../src/freelancers/freelancers.service';
+import { CitiesService } from '../../src/locations/cities.service';
 import { GigsController } from '../../src/gigs/gigs.controller';
 import { GigsService } from '../../src/gigs/gigs.service';
 import { MarketplaceController, ServicesController } from '../../src/marketplace/marketplace.controller';
@@ -14,12 +15,16 @@ import { MarketplaceModerationController } from '../../src/marketplace/marketpla
 import { MarketplaceModerationService } from '../../src/marketplace/marketplace-moderation.service';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { SupabaseService } from '../../src/supabase/supabase.service';
+import { ModerationController } from '../../src/community/moderation.controller';
+import { ModerationService } from '../../src/community/moderation.service';
+import { CommunityMediaService } from '../../src/community/media.service';
 
 /** Real HTTP/validation/guards/database; only external identity verification is replaced. */
 export async function createMarketplaceApp(prisma: PrismaClient) {
   @Module({
-    controllers: [MarketplaceController, ServicesController, MarketplaceModerationController, GigsController, FreelancersController],
-    providers: [MarketplaceService, MarketplaceModerationService, GigsService, FreelancersService,
+    controllers: [MarketplaceController, ServicesController, MarketplaceModerationController, GigsController, FreelancersController, ModerationController],
+    providers: [MarketplaceService, MarketplaceModerationService, GigsService, FreelancersService, CitiesService, ModerationService,
+      { provide: CommunityMediaService, useValue: { deleteForUrls: async () => undefined } },
       { provide: PrismaService, useValue: prisma }, { provide: ConfigService, useValue: new ConfigService({ API_PREFIX: 'api/v1' }) },
       { provide: SupabaseService, useValue: { verifyTokenCached: async (token: string) => {
         const user = await prisma.user.findUnique({ where: { id: token } }); return user ? { id: user.supabaseId } : null;

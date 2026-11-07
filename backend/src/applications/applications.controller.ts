@@ -28,6 +28,7 @@ import { PipelineService } from './pipeline.service';
 import { UpdateApplicationPipelineDto } from './dto/update-application-pipeline.dto';
 import { UpdateApplicationStatusDto } from './dto/update-application-status.dto';
 import { CompanyCapabilityGuard, RequiresCapability } from '../company/company-capability.guard';
+import { AboutCandidate } from '../company/self-review.guard';
 
 @Controller('applications')
 @UseGuards(JwtAuthGuard, RolesGuard, CompanyCapabilityGuard)
@@ -118,6 +119,7 @@ export class ApplicationsController {
 
   @Roles(UserRole.EMPLOYER, UserRole.ADMIN)
   @RequiresCapability('candidates:write')
+  @AboutCandidate('application', 'body.applicationIds')
   @Post('pipeline/jobs/:jobId/bulk-update')
   bulkUpdatePipeline(
     @Param('jobId', ParseUUIDPipe) jobId: string,
@@ -137,6 +139,7 @@ export class ApplicationsController {
 
   @Roles(UserRole.EMPLOYER, UserRole.ADMIN)
   @RequiresCapability('candidates:write')
+  @AboutCandidate('application', 'params.id')
   @Patch(':id/pipeline')
   updatePipeline(
     @Param('id', ParseUUIDPipe) id: string,
@@ -150,6 +153,7 @@ export class ApplicationsController {
   // Viewer or Interviewer seat could reject an applicant through this path.
   @Roles(UserRole.EMPLOYER, UserRole.ADMIN)
   @RequiresCapability('candidates:write')
+  @AboutCandidate('application', 'params.id')
   @Patch(':id')
   updateStatus(
     @Param('id', ParseUUIDPipe) id: string,
@@ -162,6 +166,7 @@ export class ApplicationsController {
   // Backward-compatible alias.
   @Roles(UserRole.EMPLOYER, UserRole.ADMIN)
   @RequiresCapability('candidates:write')
+  @AboutCandidate('application', 'params.id')
   @Patch(':id/status')
   updateStatusAlias(
     @Param('id', ParseUUIDPipe) id: string,

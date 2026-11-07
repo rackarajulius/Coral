@@ -5,7 +5,7 @@ import type { FormData } from "./types";
 import { initialData } from "./constants";
 import { useAuth } from "@/contexts/AuthContext";
 import { getWorkEligibilityOption } from "@/lib/workEligibility";
-import { splitLocation } from "@/lib/api/jobSeekerProfile";
+import { countryNameOf, splitLocation } from "@/lib/location/places";
 import {
 } from "@/lib/api/jobSeekerProfile";
 
@@ -57,10 +57,17 @@ export function useOnboardingForm(): OnboardingForm {
       const headline = data.headline.trim() || data.parsed?.headline || "";
       if (headline) profileData.headline = headline;
       if (data.parsed?.summary) profileData.summary = data.parsed.summary;
-      // "Toronto, Ontario, Canada" is three columns, not a city. Step one
-      // fills this from IP geolocation in exactly that shape, so putting the
-      // whole string in `city` left every profile unfilterable by country.
-      if (data.location.trim()) Object.assign(profileData, splitLocation(data.location));
+      // A picked city brings its own columns. Typed text is split as written
+      // ("Toronto, Ontario, Canada" is three columns, not a city). With
+      // neither, the country the CDN reported is still a fact worth keeping —
+      // as the country: it used to be typed into the box, and "Uganda" alone
+      // was saved as the city.
+      if (data.locationParts) Object.assign(profileData, data.locationParts);
+      else if (data.location.trim()) Object.assign(profileData, splitLocation(data.location));
+      else if (data.countryHint) {
+        const country = countryNameOf(data.countryHint);
+        if (country) profileData.country = country;
+      }
       if (data.level) profileData.experienceLevel = data.level;
       if (data.email.trim()) profileData.contactEmail = data.email.trim();
 
@@ -83,8 +90,7 @@ export function useOnboardingForm(): OnboardingForm {
       const salary = [data.salaryMin.trim(), data.salaryMax.trim()].filter(Boolean).join(" - ");
       if (salary) profileData.salaryExpectation = salary;
 
-      const locs = data.locations.split(",").map((s) => s.trim()).filter(Boolean);
-      if (locs.length) profileData.preferredLocations = locs;
+      if (data.locations.length) profileData.preferredLocations = data.locations;
 
       if (data.industries.length) profileData.preferredIndustries = data.industries;
       if (data.parsed?.skills.length) profileData.skills = data.parsed.skills;

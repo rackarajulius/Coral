@@ -4,6 +4,7 @@ import { Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PIPELINE_STAGE_LABELS, stageFromApplicationStatus } from '../common/pipeline-stage';
 import { CompanyContextService } from '../company/company-context.service';
+import { profileShownFor, profilesShownFor } from '../company/company-page';
 import { AiService } from '../services/ai/ai.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SCREEN_VIDEO_BUCKET, StorageService } from '../storage/storage.service';
@@ -122,7 +123,8 @@ export class AiScreenService {
   async listForJob(actor: User, jobId: string) {
     await this.assertJobOwner(actor, jobId);
     const rows = await this.prisma.aiScreen.findMany({
-      where: { jobId },
+      // Not the caller's own screen, if they applied to their own company.
+      where: { jobId, candidateId: { not: actor.id } },
       orderBy: [{ overallScore: 'desc' }, { createdAt: 'desc' }],
       take: SCREEN_PER_JOB_MAX,
     });
@@ -142,7 +144,8 @@ export class AiScreenService {
 
     const [applications, screens] = await Promise.all([
       this.prisma.application.findMany({
-        where: { jobId },
+        // Not the caller's own application, if they applied to their own company.
+        where: { jobId, applicantId: { not: actor.id } },
         orderBy: { appliedAt: 'desc' },
         take: 500,
         select: {
@@ -307,6 +310,16 @@ export class AiScreenService {
         )
       : [];
 
+    // From the first scored screen on, AI assesses this job's applicants, so
+    // the posting says so (Ontario requires the statement in the posting).
+    // Video answers aren't scored — the employer watches them — so a video
+    // round changes nothing. Done before anyone is told about the screen, and
+    // reported back so the employer sees the posting changed.
+    const postingNowSaysAi = created.length > 0 && mode !== 'video' && !job.usesAi;
+    if (postingNowSaysAi) {
+      await this.prisma.job.update({ where: { id: job.id }, data: { usesAi: true } });
+    }
+
     if (created.length > 0) {
       const company = await this.employerCompany(actor.id);
       const kind = { text: 'AI', video: 'video', live: 'AI interview' }[mode] ?? 'AI';
@@ -336,6 +349,7 @@ export class AiScreenService {
       skipped,
       questionCount: questions.length,
       remaining: Math.max(0, SCREEN_PER_JOB_MAX - sentSoFar - created.length),
+      postingNowSaysAi,
     };
   }
 
@@ -398,7 +412,8 @@ export class AiScreenService {
         // same list, not an empty one.
         where: {
           employerId: { in: await this.companyContext.memberUserIds(employer.id) },
-          ...(candidateId ? { candidateId } : {}),
+          // Never the caller's own screen and its evaluation.
+          AND: [{ candidateId: { not: employer.id } }, ...(candidateId ? [{ candidateId }] : [])],
         },
         orderBy: { createdAt: 'desc' },
         take: 100,
@@ -1027,7 +1042,7 @@ export class AiScreenService {
       where: { id: jobId },
       select: {
         id: true, title: true, description: true, requirements: true, skills: true,
-        experienceLevel: true, postedById: true,
+        experienceLevel: true, postedById: true, usesAi: true,
         screeningQuestions: true, screeningGeneratedAt: true, screeningLanguage: true,
       },
     });
@@ -1042,16 +1057,14 @@ export class AiScreenService {
     return { strong_yes: 'Strong yes', yes: 'Yes', maybe: 'Maybe', no: 'No' }[r] ?? r;
   }
 
+  /** The company each employer screens for: its page's name. */
   private async companiesFor(employerIds: string[]): Promise<Map<string, string>> {
-    const profiles = await this.prisma.employerProfile.findMany({
-      where: { userId: { in: [...new Set(employerIds)] } },
-      select: { userId: true, companyName: true },
-    });
-    return new Map(profiles.map((p) => [p.userId, p.companyName?.trim() || 'An employer']));
+    const pages = await profilesShownFor(this.prisma, employerIds, { companyName: true });
+    return new Map([...pages].map(([userId, p]) => [userId, p.companyName?.trim() || 'An employer']));
   }
 
   private async employerCompany(userId: string): Promise<string> {
-    const emp = await this.prisma.employerProfile.findUnique({ where: { userId }, select: { companyName: true } });
-    return emp?.companyName?.trim() || 'An employer';
+    const page = await profileShownFor(this.prisma, userId, { companyName: true });
+    return page?.companyName?.trim() || 'An employer';
   }
 }

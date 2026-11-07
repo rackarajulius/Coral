@@ -154,7 +154,9 @@ export function VerificationCard({ compact = false }: { compact?: boolean }) {
           ? "Verified company"
           : verified
             ? "Email domain confirmed"
-            : "Verify your company"}
+            : data.canManage === false
+              ? "Your company isn't verified yet"
+              : "Verify your company"}
       </p>
 
       {!verified && (

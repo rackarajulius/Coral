@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { ExecutionContext, Logger, UnauthorizedException } from '@nestjs/common';
+import { ExecutionContext, Logger, UnauthorizedException, ServiceUnavailableException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { JwtAuthGuard } from '../../../src/auth/guards/jwt-auth.guard';
 import { AuthService } from '../../../src/auth/auth.service';
@@ -43,6 +43,15 @@ describe('JWT authentication boundary', () => {
     verify.mockResolvedValue(null);
     await expect(guard.canActivate(context('invalid').execution)).rejects.toThrow(UnauthorizedException);
     expect(findUser).not.toHaveBeenCalled();
+  });
+
+  it('preserves temporary provider unavailability without treating the session as invalid', async () => {
+    verify.mockRejectedValue(new ServiceUnavailableException('Authentication temporarily unavailable'));
+    await expect(guard.canActivate(context('valid').execution)).rejects.toThrow(ServiceUnavailableException);
+    expect(findUser).not.toHaveBeenCalled();
+    const publicRequest = context('valid', true);
+    await expect(guard.canActivate(publicRequest.execution)).resolves.toBe(true);
+    expect(publicRequest.request.user).toBeUndefined();
   });
 
   it.each(['BANNED', 'SUSPENDED'])('refuses a %s account even with a valid token', async (status) => {

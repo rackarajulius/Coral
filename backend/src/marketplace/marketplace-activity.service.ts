@@ -4,12 +4,14 @@ import { CronExpression } from '@nestjs/schedule';
 import { createHash } from 'node:crypto';
 import { ExclusiveCron } from '../common/scheduling/exclusive-cron';
 import { PrismaService } from '../prisma/prisma.service';
+import { WRITE_TRANSACTION } from '../common/database-transaction';
 import { MarketplaceService } from './marketplace.service';
 import { ListingKind } from './marketplace-policy';
 
 const EVENT_TYPES = ['listing_view', 'service_enquiry_submitted', 'project_response_submitted', 'marketplace_request_accepted',
   'marketplace_recipient_replied', 'marketplace_message_sent', 'marketplace_request_state_changed',
-  'marketplace_request_declined', 'marketplace_request_withdrawn', 'marketplace_request_blocked'] as const;
+  'marketplace_request_declined', 'marketplace_request_withdrawn', 'marketplace_request_blocked',
+  'marketplace_work_marked_done', 'marketplace_work_confirmed', 'marketplace_work_not_done'] as const;
 export interface MarketplaceActivityInput {
   type: string; entityType: string; entityId: string; actorId?: string | null; companyId?: string | null;
   requestId?: string | null; source?: string; postId?: string | null; sessionId?: string | null; dedupeKey: string;
@@ -96,7 +98,7 @@ export class MarketplaceActivityService {
             link: `/marketplace/inbox?request=${row.requestId}` } });
           await tx.marketplaceDelivery.update({ where: { id: row.id }, data: { status: 'delivered', deliveredAt: new Date(), attempts: { increment: 1 }, lastError: null } });
           return 'delivered';
-        });
+        }, WRITE_TRANSACTION);
         if (outcome === 'delivered') delivered++;
         if (outcome === 'cancelled') cancelled++;
       } catch {
@@ -148,7 +150,7 @@ export class MarketplaceActivityService {
       if (!report) throw new NotFoundException('Report not available');
       await tx.marketplaceRequestReport.updateMany({ where: { id, status: 'open' }, data: { status: 'reviewed', reviewedAt: new Date(), reviewedById: userId } });
       return { reviewed: true };
-    });
+    }, WRITE_TRANSACTION);
   }
 
   private async currentCompanySeat(tx: Prisma.TransactionClient, userId: string, companyId: string | null) {

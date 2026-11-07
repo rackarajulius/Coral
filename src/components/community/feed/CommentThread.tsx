@@ -1,18 +1,29 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, ArrowUpDown, ChevronDown, Loader2 } from "lucide-react";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { ArrowUp, ArrowUpDown, ChevronDown, Loader2, MessageCircleOff } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { IdentityLine } from "./IdentityLine";
+import { CommentListSkeleton } from "./skeletons";
+import { ReportDialog } from "./ReportDialog";
+import { MentionField } from "./MentionField";
+import { PostText } from "./PostText";
+import { toStored, type Mention } from "@/lib/mentions";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
+import { useAuthModal } from "@/contexts/AuthModalContext";
+import { personName } from "@/lib/personName";
 import {
-  addComment, authorName, deleteComment, listComments, timeAgo,
-  type CommentSort, type CommunityComment,
+  addComment, authorName, deleteComment, initials, listComments, personPath, timeAgo,
+  type CommentPolicy, type CommentSort, type CommunityComment,
 } from "@/lib/api/community";
 
 /**
@@ -31,26 +42,54 @@ const SORTS: { key: CommentSort; label: string }[] = [
 export function CommentThread({
   postId,
   postAuthorId,
+  commentPolicy = "ANYONE",
+  canComment = true,
+  followName,
 }: {
   postId: string;
   /** So the original poster's own replies can be marked. */
   postAuthorId: string;
+  /** Who may comment, as the author chose. */
+  commentPolicy?: CommentPolicy;
+  /** Whether this viewer may comment or reply — the server's own answer. */
+  canComment?: boolean;
+  /** Who to follow to join in when it is followers only: the author or the company. */
+  followName?: string;
 }) {
   const [sort, setSort] = useState<CommentSort>("newest");
   const [replyTo, setReplyTo] = useState<CommunityComment | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const comments = useQuery({
+  // Paged by the server (twenty at a time); "Show more" asks for the next
+  // page rather than leaving everything past the first twenty unreachable.
+  const comments = useInfiniteQuery({
     queryKey: ["community-comments", postId, sort],
-    queryFn: () => listComments(postId, sort),
+    queryFn: ({ pageParam }) => listComments(postId, sort, pageParam),
+    initialPageParam: 1,
+    getNextPageParam: (last) =>
+      last.meta.page < last.meta.totalPages ? last.meta.page + 1 : undefined,
     retry: false,
   });
 
+  // A comment written while paging can shift one across a page boundary.
+  const seen = new Set<string>();
+  const list = (comments.data?.pages.flatMap((p) => p.data) ?? []).filter((c) =>
+    seen.has(c.id) ? false : (seen.add(c.id), true),
+  );
+  const total = comments.data?.pages[0]?.meta.total ?? 0;
+
   const current = SORTS.find((s) => s.key === sort)!;
+
+  const startReply = (comment: CommunityComment) => {
+    setReplyTo(comment);
+    // The click that says "reply" should land the cursor where the reply goes.
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
 
   return (
     <div className="mt-4 border-t border-border pt-3">
       <div className="mb-2 flex items-center justify-between">
-        <DropdownMenu>
+        <DropdownMenu modal={false}>
           <DropdownMenuTrigger className="flex items-center gap-1 text-sm font-medium hover:opacity-80">
             <ArrowUpDown className="h-3.5 w-3.5" aria-hidden="true" />
             {current.label}
@@ -70,40 +109,70 @@ export function CommentThread({
         </DropdownMenu>
 
         <span className="text-xs text-muted-foreground">
-          {comments.data?.meta.total ?? 0}{" "}
-          {comments.data?.meta.total === 1 ? "reply" : "replies"}
+          {total} {total === 1 ? "comment" : "comments"}
         </span>
       </div>
 
-      <ReplyBox
-        postId={postId}
-        replyTo={replyTo}
-        onCancelReply={() => setReplyTo(null)}
-        sort={sort}
-      />
-
-      {comments.isLoading && (
-        <p className="py-4 text-sm text-muted-foreground">Loading…</p>
+      {canComment ? (
+        <ReplyBox
+          postId={postId}
+          replyTo={replyTo}
+          onCancelReply={() => setReplyTo(null)}
+          inputRef={inputRef}
+        />
+      ) : (
+        // Said instead of a box that would refuse, so nobody writes a comment
+        // only to be told afterwards. Existing comments stay readable below.
+        <p className="flex items-center gap-1.5 py-2 text-sm text-muted-foreground">
+          <MessageCircleOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          {commentPolicy === "OFF"
+            ? "Comments are turned off for this post."
+            : `Only people who follow ${followName ?? "the author"} can comment.`}
+        </p>
       )}
 
-      {comments.data?.data.length === 0 && (
+      {comments.isLoading && <CommentListSkeleton />}
+
+      {comments.isError && (
+        <p className="py-4 text-sm text-destructive">
+          Couldn't load comments.{" "}
+          <button type="button" onClick={() => void comments.refetch()} className="underline">
+            Try again
+          </button>
+        </p>
+      )}
+
+      {comments.isSuccess && list.length === 0 && (
         <p className="py-4 text-sm text-muted-foreground">
-          No replies yet. Say something useful.
+          {/* No invitation to start what the comment setting would refuse. */}
+          {canComment ? "No comments yet. Start the conversation." : "No comments yet."}
         </p>
       )}
 
       <div className="mt-3 space-y-3">
-        {comments.data?.data.map((comment) => (
+        {list.map((comment) => (
           <CommentRow
             key={comment.id}
             comment={comment}
             postId={postId}
             postAuthorId={postAuthorId}
-            sort={sort}
-            onReply={setReplyTo}
+            onReply={canComment ? startReply : undefined}
           />
         ))}
       </div>
+
+      {comments.hasNextPage && (
+        <button
+          type="button"
+          onClick={() => void comments.fetchNextPage()}
+          disabled={comments.isFetchingNextPage}
+          className="mt-3 flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground disabled:opacity-60"
+        >
+          {comments.isFetchingNextPage && <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />}
+          Show more comments
+        </button>
+      )}
+      <div className="h-2" />
     </div>
   );
 }
@@ -121,35 +190,44 @@ function ReplyBox({
   postId,
   replyTo,
   onCancelReply,
-  sort,
+  inputRef,
 }: {
   postId: string;
   replyTo: CommunityComment | null;
   onCancelReply: () => void;
-  sort: CommentSort;
+  inputRef: React.RefObject<HTMLInputElement>;
 }) {
   const { user } = useAuth();
+  const { openAuth } = useAuthModal();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState("");
+  const [mentions, setMentions] = useState<Mention[]>([]);
 
   const send = useMutation({
-    mutationFn: () => addComment(postId, draft.trim(), replyTo?.id),
+    mutationFn: () => addComment(postId, toStored(draft.trim(), mentions), replyTo?.id),
     onSuccess: () => {
       setDraft("");
+      setMentions([]);
       onCancelReply();
       void queryClient.invalidateQueries({ queryKey: ["community-comments", postId] });
       void queryClient.invalidateQueries({ queryKey: ["community-posts"] });
+      void queryClient.invalidateQueries({ queryKey: ["community-post", postId] });
     },
     onError: (e) => toast.error((e as Error).message),
   });
 
   if (!user) {
     return (
-      <p className="py-2 text-sm text-muted-foreground">Sign in to reply.</p>
+      <p className="py-2 text-sm text-muted-foreground">
+        <button type="button" onClick={() => openAuth()} className="text-link hover:underline">
+          Sign in
+        </button>{" "}
+        to join the conversation.
+      </p>
     );
   }
 
-  const name = user.displayName?.trim() || "You";
+  const name = personName(user) || "You";
   const ready = !!draft.trim();
 
   return (
@@ -168,7 +246,7 @@ function ReplyBox({
         </div>
       )}
 
-      <div className="flex items-center gap-2.5 rounded-full border border-border px-3 py-1.5">
+      <div className="flex items-center gap-2.5 rounded-full border border-border px-3 py-1.5 focus-within:border-foreground/30">
         <Avatar className="h-7 w-7 shrink-0">
           <AvatarImage src={user.avatarUrl ?? ""} alt="" />
           <AvatarFallback className="bg-primary/10 text-[10px] text-primary">
@@ -176,18 +254,24 @@ function ReplyBox({
           </AvatarFallback>
         </Avatar>
 
-        <input
+        <MentionField
+          fieldRef={inputRef}
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onValueChange={setDraft}
+          onMention={(m) => setMentions((all) => [...all, m])}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && ready && !send.isPending) send.mutate();
+            // isComposing: Enter that confirms an IME candidate is not a send.
+            if (e.key === "Enter" && !e.nativeEvent.isComposing && ready && !send.isPending) send.mutate();
             if (e.key === "Escape") onCancelReply();
           }}
           placeholder={
-            replyTo ? `Reply to ${authorName(replyTo.author)}…` : "Add a reply…"
+            replyTo ? `Reply to ${authorName(replyTo.author)}…` : "Add a comment…"
           }
-          maxLength={5000}
-          className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          aria-label={replyTo ? `Reply to ${authorName(replyTo.author)}` : "Add a comment"}
+          // The server's limit for a comment, counted as the words read.
+          maxLength={2000}
+          wrapperClassName="min-w-0 flex-1"
+          className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
         />
 
         {ready && (
@@ -195,7 +279,7 @@ function ReplyBox({
             type="button"
             onClick={() => send.mutate()}
             disabled={send.isPending}
-            aria-label="Send reply"
+            aria-label="Send"
             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-background disabled:opacity-50"
           >
             {send.isPending ? (
@@ -216,29 +300,44 @@ function CommentRow({
   comment,
   postId,
   postAuthorId,
-  sort,
   onReply,
   depth = 0,
 }: {
   comment: CommunityComment;
   postId: string;
   postAuthorId: string;
-  sort: CommentSort;
-  onReply: (comment: CommunityComment) => void;
+  /** Absent when the viewer may not reply — the post's comment setting. */
+  onReply?: (comment: CommunityComment) => void;
   depth?: number;
 }) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [showReplies, setShowReplies] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [reporting, setReporting] = useState(false);
 
   const remove = useMutation({
     mutationFn: () => deleteComment(postId, comment.id),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["community-comments", postId] }),
+    onSuccess: () => {
+      toast.success("Comment deleted");
+      void queryClient.invalidateQueries({ queryKey: ["community-comments", postId] });
+      // The count on the post's comment button moves with it.
+      void queryClient.invalidateQueries({ queryKey: ["community-posts"] });
+      void queryClient.invalidateQueries({ queryKey: ["community-post", postId] });
+    },
     onError: (e) => toast.error((e as Error).message),
   });
 
   const replies = comment.replies ?? [];
+  const mine = user?.id === comment.authorId;
+
+  // A reply you just wrote should be visible without hunting for the toggle.
+  const replyCount = replies.length;
+  const previousCount = useRef(replyCount);
+  useEffect(() => {
+    if (replyCount > previousCount.current) setShowReplies(true);
+    previousCount.current = replyCount;
+  }, [replyCount]);
 
   return (
     <div className={cn(depth > 0 && "ml-7 border-l border-border pl-3")}>
@@ -252,27 +351,33 @@ function CommentRow({
 
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-x-1.5 text-xs">
-            {comment.authorIdentity?.profileUrl ? (
-              <Link to={comment.authorIdentity.profileUrl} className="font-medium hover:underline">{authorName(comment.author)}</Link>
-            ) : <span className="font-medium">{authorName(comment.author)}</span>}
+            {/* Everyone who replies has a community page, so the name always
+                goes there; it links on to a public career profile. */}
+            <Link to={personPath(comment.author.id)} className="font-medium hover:underline">{authorName(comment.author)}</Link>
             {/* The backend has always resolved this for replies as well as
                 comments — a verified employer answering a question is exactly
                 what the badge is for — and nothing rendered it until now. */}
             <IdentityLine identity={comment.authorIdentity} compact />
-            <span className="text-muted-foreground">{timeAgo(comment.createdAt)}</span>
+            <time
+              dateTime={comment.createdAt}
+              title={new Date(comment.createdAt).toLocaleString()}
+              className="text-muted-foreground"
+            >
+              {timeAgo(comment.createdAt)}
+            </time>
             {/* Says who wrote the post you are reading, which changes how a
                 reply lands — the reference marks it for the same reason. */}
             {comment.authorId === postAuthorId && (
-              <span className="text-muted-foreground">· Author</span>
+              <span className="rounded bg-muted px-1 text-[10px] font-medium text-muted-foreground">Author</span>
             )}
           </p>
 
-          <p className="mt-0.5 whitespace-pre-wrap text-sm">{comment.content}</p>
+          <PostText text={comment.content} className="mt-0.5 leading-normal" />
 
           <div className="mt-1 flex items-center gap-3">
             {/* Only top level: the API returns one level of nesting, so a
                 reply to a reply would be stored and never shown. */}
-            {depth === 0 && (
+            {depth === 0 && onReply && (
               <button
                 type="button"
                 onClick={() => onReply(comment)}
@@ -281,14 +386,23 @@ function CommentRow({
                 Reply
               </button>
             )}
-            {user?.id === comment.authorId && (
+            {mine && (
               <button
                 type="button"
-                onClick={() => remove.mutate()}
+                onClick={() => setConfirmingDelete(true)}
                 disabled={remove.isPending}
                 className="text-xs text-muted-foreground hover:text-destructive"
               >
-                Delete
+                {remove.isPending ? "Deleting…" : "Delete"}
+              </button>
+            )}
+            {user && !mine && (
+              <button
+                type="button"
+                onClick={() => setReporting(true)}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                Report
               </button>
             )}
           </div>
@@ -325,7 +439,6 @@ function CommentRow({
               comment={reply}
               postId={postId}
               postAuthorId={postAuthorId}
-              sort={sort}
               onReply={onReply}
               depth={depth + 1}
             />
@@ -339,12 +452,36 @@ function CommentRow({
           </button>
         </div>
       )}
+
+      <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
+        <AlertDialogContent className="max-w-sm rounded-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this comment?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {replies.length > 0
+                ? "Its replies will be removed with it. This can't be undone."
+                : "This can't be undone."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => remove.mutate()}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <ReportDialog
+        open={reporting}
+        onClose={() => setReporting(false)}
+        target={{ kind: "comment", id: comment.id }}
+      />
     </div>
   );
-}
-
-function initials(name: string): string {
-  return name.split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase() ?? "").join("");
 }
 
 export default CommentThread;

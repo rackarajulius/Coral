@@ -1,21 +1,27 @@
 import { useEffect, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { AlertTriangle, Check, Crown, Loader2, Minus } from "lucide-react";
 import { toast } from "sonner";
 import Header from "@/components/Header";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useAuth } from "@/contexts/AuthContext";
+import { useAuthModal } from "@/contexts/AuthModalContext";
 import { cn } from "@/lib/utils";
 import {
+  cancelPremium,
   formatPrice,
   premiumSummary,
   getMySubscription,
   getPremiumPlans,
+  keepPremium,
   openBillingPortal,
+  syncPremium,
   startPremiumCheckout,
   type BillingInterval,
 } from "@/lib/api/premium";
+import { CancelPremiumDialog } from "@/components/premium/CancelPremiumDialog";
 
 const RETURN_PATH = "/premium";
 
@@ -26,10 +32,16 @@ const RETURN_PATH = "/premium";
  * and the comparison table from the same registry that meters usage. Nothing
  * is typed in here, so the page cannot advertise a price or a limit that isn't
  * the real one. Before Stripe prices exist it says Premium isn't on sale yet.
+ *
+ * Readable signed out, because this is where Premium is explained: the plans
+ * route is public, the subscription one isn't asked for without a session, and
+ * upgrading opens sign-in first and resumes checkout afterwards.
  */
 export default function Premium() {
   const queryClient = useQueryClient();
   const [params, setParams] = useSearchParams();
+  const { isAuthenticated } = useAuth();
+  const { requireAuth } = useAuthModal();
   const checkoutResult = params.get("checkout");
   const [billingInterval, setBillingInterval] = useState<BillingInterval>("MONTHLY");
   const [busy, setBusy] = useState(false);
@@ -46,6 +58,8 @@ export default function Premium() {
   const sub = useQuery({
     queryKey: ["my-subscription"],
     queryFn: getMySubscription,
+    // Nobody's subscription to ask about while signed out.
+    enabled: isAuthenticated,
     retry: false,
     refetchInterval: (q) => (confirming && q.state.data?.tier !== "premium" ? 2000 : false),
   });
@@ -55,6 +69,20 @@ export default function Premium() {
     const t = setTimeout(() => setGaveUp(true), 60_000);
     return () => clearTimeout(t);
   }, [confirming]);
+
+  /**
+   * And asks the server to check with Stripe straight away, rather than only
+   * wait for Stripe's webhook to reach it. Once on arrival; the button below
+   * asks again if Premium still isn't on.
+   */
+  const confirm = useMutation({
+    mutationFn: syncPremium,
+    onSuccess: (next) => queryClient.setQueryData(["my-subscription"], next),
+  });
+  const confirmOnce = confirm.mutate;
+  useEffect(() => {
+    if (confirming && isAuthenticated) confirmOnce();
+  }, [confirming, isAuthenticated, confirmOnce]);
 
   const isPremium = sub.data?.tier === "premium";
 
@@ -75,16 +103,51 @@ export default function Premium() {
   const chosen =
     plans.data?.prices.find((p) => p.interval === billingInterval) ?? plans.data?.prices[0];
 
-  const upgrade = async () => {
+  /**
+   * Signed out, this opens sign-in and starts checkout once that succeeds,
+   * rather than failing the request with an authentication error.
+   */
+  const upgrade = () => {
     if (!chosen) return;
-    setBusy(true);
-    try {
-      await startPremiumCheckout(chosen.interval, RETURN_PATH);
-    } catch (e) {
-      toast.error((e as Error).message);
-      setBusy(false);
-    }
+    requireAuth(async () => {
+      setBusy(true);
+      try {
+        await startPremiumCheckout(chosen.interval, RETURN_PATH);
+      } catch (e) {
+        toast.error((e as Error).message);
+        setBusy(false);
+      }
+    });
   };
+
+  const [cancelling, setCancelling] = useState(false);
+  const changed = (next: Awaited<ReturnType<typeof keepPremium>>) => {
+    queryClient.setQueryData(["my-subscription"], next);
+    void queryClient.invalidateQueries({ queryKey: ["entitlements"] });
+  };
+  /** Changing one's mind before the date: Premium renews as before. */
+  const keep = useMutation({
+    mutationFn: keepPremium,
+    onSuccess: (next) => {
+      changed(next);
+      toast.success("Premium will carry on", {
+        description: next.currentPeriodEnd
+          ? `It renews on ${new Date(next.currentPeriodEnd).toLocaleDateString(undefined, { day: "numeric", month: "long" })}.`
+          : undefined,
+      });
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+  /** An unpaid subscription has no period left to run out; this ends it now. */
+  const endUnpaid = useMutation({
+    mutationFn: () => cancelPremium(),
+    onSuccess: (next) => {
+      changed(next);
+      toast.success("Your subscription has ended", { description: "Nothing more will be charged." });
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+  const ending = !!sub.data?.paid && sub.data.cancelAtPeriodEnd;
 
   const manage = async () => {
     setBusy(true);
@@ -118,8 +181,20 @@ export default function Premium() {
           <Notice tone="neutral">
             {gaveUp ? (
               <>
-                Payment went through, but Premium hasn't switched on yet. It usually takes seconds —
-                refresh in a minute, and if it still says Free, contact support; you won't be charged twice.
+                <p>
+                  Payment went through, but Premium hasn't switched on yet. It usually takes seconds. If
+                  checking again doesn't help, contact support; you won't be charged twice.
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-3"
+                  onClick={() => confirm.mutate()}
+                  disabled={confirm.isPending}
+                >
+                  {confirm.isPending && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+                  Check again
+                </Button>
               </>
             ) : (
               <span className="inline-flex items-center gap-2">
@@ -130,10 +205,31 @@ export default function Premium() {
           </Notice>
         )}
 
-        {sub.data && sub.data.status === "PAST_DUE" && (
+        {sub.data && sub.data.status === "PAST_DUE" && sub.data.paid && (
           <Notice tone="warn">
             Your last payment didn't go through. Premium stays on while Stripe retries — update your
             card in Manage billing to keep it.
+          </Notice>
+        )}
+        {/* Stripe has stopped retrying but kept the subscription: Premium is off
+            until the open invoice is paid, or it can be ended for good. */}
+        {sub.data && sub.data.status === "PAST_DUE" && !sub.data.paid && (
+          <Notice tone="warn">
+            <p>
+              Your payment didn't go through and Stripe has stopped retrying, so Premium is off for now.
+              Pay the open invoice in Manage billing to turn it back on.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {sub.data.hasBillingAccount && (
+                <Button size="sm" variant="outline" onClick={manage} disabled={busy}>
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Manage billing"}
+                </Button>
+              )}
+              <Button size="sm" variant="ghost" onClick={() => endUnpaid.mutate()} disabled={endUnpaid.isPending}>
+                {endUnpaid.isPending && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+                End my subscription
+              </Button>
+            </div>
           </Notice>
         )}
 
@@ -150,13 +246,34 @@ export default function Premium() {
                   and you can subscribe here to keep Premium.
                 </p>
               )}
+              {ending && (
+                <p className="mt-1 text-sm text-muted-foreground">
+                  You've cancelled, so you won't be charged again. Everything stays on until then.
+                </p>
+              )}
             </div>
-            {sub.data.hasBillingAccount && (
-              <Button variant="outline" onClick={manage} disabled={busy}>
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Manage billing"}
-              </Button>
-            )}
+            <div className="flex flex-wrap gap-2">
+              {ending && (
+                <Button variant="coral" onClick={() => keep.mutate()} disabled={keep.isPending}>
+                  {keep.isPending && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+                  Keep Premium
+                </Button>
+              )}
+              {sub.data.hasBillingAccount && (
+                <Button variant="outline" onClick={manage} disabled={busy}>
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Manage billing"}
+                </Button>
+              )}
+              {sub.data.paid && !ending && (
+                <Button variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => setCancelling(true)}>
+                  Cancel Premium
+                </Button>
+              )}
+            </div>
           </div>
+        )}
+        {sub.data?.paid && (
+          <CancelPremiumDialog open={cancelling} onOpenChange={setCancelling} subscription={sub.data} plans={plans.data} />
         )}
 
         {plans.isLoading && <Skeleton className="h-80 rounded-2xl" />}
@@ -214,7 +331,7 @@ export default function Premium() {
                     </span>
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    Paid securely through Stripe. Cancel any time — Premium stays until the period ends.
+                    Paid securely through Stripe. Cancel any time, right here — Premium stays until the period ends.
                   </p>
                 </div>
               ) : (

@@ -110,8 +110,8 @@ export class AdminController {
 
   @Delete('employers/:id')
   async deleteEmployer(@CurrentUser('id') adminId: string, @Param('id', ParseUUIDPipe) id: string) {
-    await this.adminService.deleteEmployer(adminId, id);
-    return { success: true, message: 'Employer deleted' };
+    const companies = await this.adminService.deleteEmployer(adminId, id);
+    return { success: true, message: 'Employer deleted', data: { companies } };
   }
 
   @Get('jobs/metrics')
@@ -180,8 +180,8 @@ export class AdminController {
 
   @Delete('jobseekers/:id')
   async deleteJobseeker(@CurrentUser('id') adminId: string, @Param('id', ParseUUIDPipe) id: string) {
-    await this.adminService.deleteJobseeker(adminId, id);
-    return { success: true, message: 'Jobseeker deleted' };
+    const companies = await this.adminService.deleteJobseeker(adminId, id);
+    return { success: true, message: 'Jobseeker deleted', data: { companies } };
   }
 
   @Patch('jobs/:id/status')

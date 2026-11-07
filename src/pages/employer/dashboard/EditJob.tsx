@@ -35,6 +35,8 @@ import SkillsSection from "@/components/employer-dashboard/job-edit/SkillsSectio
 import SalarySection from "@/components/employer-dashboard/job-edit/SalarySection";
 import BenefitsSection from "@/components/employer-dashboard/job-edit/BenefitsSection";
 import ApplicationSettingsSection from "@/components/employer-dashboard/job-edit/ApplicationSettings";
+import PostingStatementsSection from "@/components/employer-dashboard/job-edit/PostingStatementsSection";
+import { vacancyForJob, vacancyFromJob } from "@/lib/jobs/postingStatements";
 import LivePreview from "@/components/employer-dashboard/job-edit/LivePreview";
 
 function formatPostedDate(dateStr: string): string {
@@ -65,6 +67,8 @@ const emptyFormDefaults: EditJobForm = {
   applicationUrl: "",
   applicationEmail: "",
   status: "draft",
+  existingVacancy: "",
+  usesAi: false,
 };
 
 /**
@@ -98,6 +102,9 @@ function mapJobToForm(job: FullJob): EditJobForm {
       job.status === "draft" ? "draft"
       : job.status === "closed" || job.status === "archived" ? "closed"
       : "open",
+    existingVacancy: vacancyFromJob(job.existingVacancy),
+    // Screened by Coral's AI means the posting says so, whatever is stored.
+    usesAi: (job.usesAi ?? false) || job.aiScreened === true,
   };
 }
 
@@ -121,6 +128,9 @@ function formToPatch(data: EditJobForm, status?: BackendJobStatus): PatchJobPayl
     applicationMethod: data.applicationMethod,
     applicationUrl: data.applicationUrl || undefined,
     applicationEmail: data.applicationEmail || undefined,
+    // Null clears an answer back to "not stated", so it's always sent.
+    existingVacancy: vacancyForJob(data.existingVacancy),
+    usesAi: data.usesAi,
     ...(status ? { status } : {}),
   };
 }
@@ -154,6 +164,8 @@ const EditJob = () => {
   }, [loaded, fetchJobs]);
 
   const [loadError, setLoadError] = useState<string | null>(null);
+  /** Coral's AI has screened this job's applicants: the AI statement stays on. */
+  const [aiLocked, setAiLocked] = useState(false);
 
   const {
     fields: skillFields,
@@ -184,6 +196,7 @@ const EditJob = () => {
       .then((full) => {
         if (cancelled) return;
         const values = mapJobToForm(full);
+        setAiLocked(full.aiScreened === true);
         originalValuesRef.current = values;
         form.reset(values);
         formInitializedRef.current = true;
@@ -550,6 +563,7 @@ const EditJob = () => {
                   form={form}
                   watchedApplicationMethod={watchedValues.applicationMethod}
                 />
+                <PostingStatementsSection form={form} aiLocked={aiLocked} />
               </div>
 
               {/* ── Right: Live Preview ── */}

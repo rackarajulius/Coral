@@ -30,6 +30,25 @@ export function FinishSetupCard() {
 
   if (!state) return null;
 
+  // A seat that can't edit the company has nothing here to do but wait for
+  // verification, which is what stops them posting — so say only that, rather
+  // than listing steps whose saves would be refused.
+  if (state.canEditCompany === false) {
+    if (!verification || verification.canReachCandidates) return null;
+    return (
+      <section
+        aria-label="Company verification"
+        className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-5"
+      >
+        <h2 className="text-sm font-semibold text-foreground">Your company isn't verified yet</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {verification.reason ??
+            "Jobs can't be posted until it is. An owner or admin can verify it."}
+        </p>
+      </section>
+    );
+  }
+
   const items = [
     {
       id: "company",

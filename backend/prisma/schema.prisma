@@ -109,6 +109,7 @@ model User {
   postedJobs         Job[]              @relation("PostedJobs")
   applications       Application[]      @relation("UserApplications")
   externalApplications ExternalApplication[]
+  dismissedMatches     DismissedMatch[]
   savedJobs          SavedJob[]         @relation("UserSavedJobs")
   jobAlerts          JobAlert[]         @relation("UserJobAlerts")
   jobRecommendations JobRecommendation[] @relation("UserJobRecommendations")
@@ -116,6 +117,9 @@ model User {
   postComments       PostComment[]
   postLikes          PostLike[]
   postBookmarks      PostBookmark[]
+  scheduledPosts     ScheduledPost[]
+  communityVideos    CommunityVideo[]
+  postViews          PostView[]
   interviewPrepSessions InterviewPrepSession[]
   interviewPrepFeedback InterviewPrepFeedback[]
   paymentTransactions PaymentTransaction[]
@@ -125,6 +129,7 @@ model User {
   candidateReactions  CandidateReaction[] @relation("CandidateReactions")
   givenReactions      CandidateReaction[] @relation("CandidateReactionAuthor")
   spaceMemberships    SpaceMember[]   @relation("SpaceMemberships")
+  spaceSuggestionDismissals SpaceSuggestionDismissal[] @relation("SpaceSuggestionDismissals")
   /// How this person appears to someone whose profile they viewed:
   /// 'named' | 'company' | 'private'. Null means the role's default —
   /// employers are attributed to their company, everyone else is private.
@@ -144,6 +149,12 @@ model User {
   auditLogs          AuditLog[]         @relation("AdminAuditLogs")
   notifications      Notification[]     @relation("UserNotifications")
   companyFollows     CompanyFollow[]    @relation("UserCompanyFollows")
+  /// People this user follows, and people who follow this user.
+  following          UserFollow[]       @relation("UserFollowing")
+  followers          UserFollow[]       @relation("UserFollowers")
+  /// Professionals this user saved to come back to, and who saved this user.
+  savedProfessionals SavedProfessional[] @relation("SavedProfessionals")
+  savedBy            SavedProfessional[] @relation("SavedBy")
   companyReviews     CompanyReview[]
   companyMemberships CompanyMember[]    @relation("UserCompanyMemberships")
   companyAuditLogs   CompanyAuditLog[]  @relation("CompanyAuditActor")
@@ -152,6 +163,8 @@ model User {
   marketplaceReports MarketplaceReport[]
   marketplaceRequestsMade MarketplaceRequest[] @relation("MarketplaceRequester")
   marketplaceRequestsReceived MarketplaceRequest[] @relation("MarketplaceRecipient")
+  completedWorkDone     CompletedWork[] @relation("CompletedWorkProvider")
+  completedWorkReceived CompletedWork[] @relation("CompletedWorkClient")
   marketplaceMessages MarketplaceMessage[]
   marketplaceBlocksMade MarketplaceBlock[] @relation("MarketplaceBlocker")
   marketplaceBlocksReceived MarketplaceBlock[] @relation("MarketplaceBlocked")
@@ -682,11 +695,47 @@ model JobSeekerProfile {
   certifications  Certification[]
   portfolioItems  PortfolioItem[]
   recommendations Recommendation[]
+  projects        ProfileProject[]
 
   @@index([userId])
   @@index([createdAt])
   @@index([skillsNormalized], type: Gin)
   @@map("job_seeker_profiles")
+}
+
+/// A project on a job seeker's profile: what they made, when, with which
+/// skills, and where — during one of their jobs, or as one of their
+/// services. Self-described like the rest of the profile; what Coral checks
+/// is that the pictures and video were uploaded here, by them, and that a
+/// linked job or service is theirs.
+model ProfileProject {
+  id               String    @id @default(uuid())
+  profileId        String    @map("profile_id")
+  title            String    @db.VarChar(120)
+  description      String    @default("") @db.Text
+  /// Month precision, kept as the first of the month.
+  startDate        DateTime? @map("start_date") @db.Date
+  endDate          DateTime? @map("end_date") @db.Date
+  current          Boolean   @default(false)
+  skills           String[]  @default([])
+  projectUrl       String?   @map("project_url") @db.VarChar(2048)
+  /// Up to 8 pictures and one short video, uploaded by the owner through the
+  /// community media upload; the hourly clean-up keeps them while used.
+  mediaUrls        String[]  @default([]) @map("media_urls")
+  /// At most one of these two: the job it was done in, or the service it was
+  /// done as. Unlinked, not deleted, when the job or service goes.
+  experienceId     String?   @map("experience_id")
+  serviceListingId String?   @map("service_listing_id")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  profile        JobSeekerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  experience     Experience?      @relation(fields: [experienceId], references: [id], onDelete: SetNull)
+  serviceListing ServiceListing?  @relation(fields: [serviceListingId], references: [id], onDelete: SetNull)
+
+  @@index([profileId])
+  @@index([serviceListingId])
+  @@map("profile_projects")
 }
 
 // Work Experience
@@ -718,6 +767,7 @@ model Experience {
 
   profile         JobSeekerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
   workEmailVerifications WorkEmailVerification[]
+  projects        ProfileProject[]
 
   @@map("experiences")
 }
@@ -999,9 +1049,37 @@ enum CompanyInvitationStatus {
 model Company {
   id        String   @id @default(uuid())
   name      String
-  /// Work-email domain, when the company has one. Used to *suggest* joining.
-  /// Never grants access on its own — see CompanyMemberStatus.PENDING.
+  /// The company's own domain — set only once an owner or admin has proven
+  /// control of it (CompanyDomainService), and never from a typed website.
+  /// One company per domain, as on LinkedIn. It admits colleagues at that
+  /// domain through the join link and earns members the community's
+  /// verified badge; an address at it is never, by itself, membership.
   domain    String?  @unique @db.VarChar(255)
+  /// When, how ("sign-in" | "dns" | "email") and by whom `domain` was proven.
+  /// Set together with `domain`, cleared together with it.
+  domainVerifiedAt     DateTime? @map("domain_verified_at")
+  domainVerifiedMethod String?   @map("domain_verified_method")
+  domainVerifiedById   String?   @map("domain_verified_by_id")
+
+  /// The company's one public page, as on LinkedIn: the profile everyone sees
+  /// and follows, that every owner and admin edits, and that every member's
+  /// jobs, messages and interviews are shown under. A member's own
+  /// EmployerProfile, if they have one, is personal (their job title) and is
+  /// never shown as the company. Resolved by CompanyPageService.
+  pageId    String?  @unique @map("page_id")
+  page      EmployerProfile? @relation("CompanyPage", fields: [pageId], references: [id], onDelete: SetNull)
+
+  /// Set while the page is taken down (LinkedIn's "Deactivate page"): it 404s,
+  /// leaves search and the directory, and nobody posts for the company until
+  /// an owner reactivates it. Nothing is deleted. Null by-id means the system
+  /// did it, when the last member's account was deleted (company-departure.ts).
+  deactivatedAt   DateTime? @map("deactivated_at")
+  deactivatedById String?   @map("deactivated_by_id")
+  /// Set when the owner asks for the deactivated page to be deleted for good:
+  /// it is deleted once this passes (30 days on). Until then the owner can
+  /// cancel, or reactivate, which cancels it.
+  deletesAt             DateTime? @map("deletes_at")
+  deletionRequestedById String?   @map("deletion_requested_by_id")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -1012,7 +1090,9 @@ model Company {
   scheduledTasks ScheduledTask[]
   auditLogs      CompanyAuditLog[]
   joinLinks   CompanyJoinLink[]
-  profiles    EmployerProfile[]
+  domainClaims CompanyDomainClaim[]
+  /// Every profile linked to the company, one per person. Only `page` is shown.
+  profiles    EmployerProfile[] @relation("CompanyProfiles")
   subscription CompanySubscription?
   usage        CompanyUsage[]
   candidateNotes CandidateNote[]
@@ -1020,6 +1100,7 @@ model Company {
   candidateTags  CandidateTag[]
   candidateReactions CandidateReaction[]
   posts          Post[]
+  scheduledPosts ScheduledPost[]
   tides          Tide[]
   offers         Offer[]
   emailTemplates EmailTemplate[]
@@ -1032,6 +1113,7 @@ model Company {
   marketplaceRequestsReceived MarketplaceRequest[] @relation("MarketplaceRecipientCompany")
   marketplaceEvents MarketplaceEvent[]
 
+  @@index([deletesAt])
   @@map("companies")
 }
 
@@ -1051,6 +1133,33 @@ model Company {
 /// The token is stored in the clear here, unlike an emailed invitation. That is
 /// deliberate: a link that cannot be shown again is not a shareable link, and
 /// the containment comes from the domain lock rather than from secrecy.
+/// A domain an owner or admin is proving, before it becomes the company's.
+///
+/// "dns": publish `dnsToken` as a TXT record on the domain — the token is
+/// meant to be public, so it is stored as it is. "email": a six-digit code
+/// sent to an address at the domain, stored only as its SHA-256. Proving by
+/// signing in with an address at the domain needs no claim row.
+model CompanyDomainClaim {
+  id          String    @id @default(uuid())
+  companyId   String    @map("company_id")
+  domain      String    @db.VarChar(255)
+  method      String
+  dnsToken    String?   @map("dns_token")
+  email       String?
+  codeHash    String?   @map("code_hash")
+  attempts    Int       @default(0)
+  expiresAt   DateTime  @map("expires_at")
+  /// Who started it. Not a relation: a claim outliving its author is harmless.
+  createdById String    @map("created_by_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  consumedAt  DateTime? @map("consumed_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@map("company_domain_claims")
+}
+
 model CompanyJoinLink {
   id           String      @id @default(uuid())
   companyId    String      @map("company_id")
@@ -1133,6 +1242,8 @@ enum ScheduledTaskType {
   /// Watches one saved search; configKey holds the shortlist id, so several
   /// may run at once while the unique index still forbids duplicates.
   SAVED_SEARCH_MATCHES
+  /// People the team saved or sourced and never wrote to.
+  SAVED_NOT_CONTACTED
 }
 
 /// Deliberately not cron syntax. These three cover every task on offer, each
@@ -1199,11 +1310,21 @@ model EmployerProfile {
   // Now a real foreign key. It used to hold a loose domain string, which meant
   // "same company" was a guess rather than a membership.
   companyId       String?   @map("company_id")
-  company         Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  company         Company?  @relation("CompanyProfiles", fields: [companyId], references: [id], onDelete: SetNull)
+  /// Present when this profile is its company's page (Company.pageId).
+  pageOf          Company?  @relation("CompanyPage")
+  /// The page's own address, /company/<slug>, as on LinkedIn: chosen when the
+  /// page is created and changeable by its owners and admins. Pages only;
+  /// lowercase letters, digits and single hyphens (company/page-slug.ts).
+  slug            String?   @unique @db.VarChar(100)
   companyName     String    @map("company_name")
   companyLogo     String?   @map("company_logo")
   companyWebsite   String?   @map("company_website")
-  companySize     String?   @map("company_size") // 1-10, 11-50, 51-200, 201-500, 501-1000, 1000+
+  /// LinkedIn's size bands (company/company-facts.ts). Older pages may still
+  /// hold a range that spans two bands ("1-10", "1000+") until an owner re-picks.
+  companySize     String?   @map("company_size")
+  /// Organization type, a key from company/company-facts.ts COMPANY_TYPES.
+  companyType     String?   @map("company_type") @db.VarChar(40)
   industry        String?
   
   // User's role in company
@@ -1293,6 +1414,42 @@ model CompanyFollow {
   @@map("company_follows")
 }
 
+/// One person following another, as companies are followed in CompanyFollow.
+/// A user can never follow themselves (enforced by a check constraint in the
+/// migration as well as by the service).
+model UserFollow {
+  id          String   @id @default(uuid())
+  followerId  String   @map("follower_id")
+  followingId String   @map("following_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  follower  User @relation("UserFollowing", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("UserFollowers", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@index([followingId])
+  @@map("user_follows")
+}
+
+/// A professional someone saved to come back to. Private to them: the
+/// professional isn't told and no count of it is shown, so unlike a follow it
+/// says nothing in public. Never yourself (a check constraint in the migration,
+/// as well as the service).
+model SavedProfessional {
+  id             String   @id @default(uuid())
+  userId         String   @map("user_id")
+  professionalId String   @map("professional_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  user         User @relation("SavedProfessionals", fields: [userId], references: [id], onDelete: Cascade)
+  professional User @relation("SavedBy", fields: [professionalId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, professionalId])
+  @@index([userId, createdAt])
+  @@index([professionalId])
+  @@map("saved_professionals")
+}
+
 // Freelancer Profile (for gig workers)
 model FreelancerProfile {
   id              String    @id @default(uuid())
@@ -1320,7 +1477,14 @@ model FreelancerProfile {
   city            String?
   timezone        String?
   availableForRemote Boolean @default(true) @map("available_for_remote")
-  
+  // Where they're based, as Coral's city list reads `city` and `country` when
+  // the profile is saved: "toronto" → Toronto, Ontario, CA. The directory's
+  // location filter matches these, so "Ontario" finds someone who wrote
+  // "Toronto" and "Montreal" finds "Montréal". Null when it couldn't be read.
+  placeCountryCode String?  @map("place_country_code")
+  placeRegion     String?   @map("place_region")
+  placeCity       String?   @map("place_city")
+
   // Availability
   availability    String?   // full-time, part-time, not-available
   hoursPerWeek    Int?      @map("hours_per_week")
@@ -1345,6 +1509,7 @@ model FreelancerProfile {
   @@index([userId])
   @@index([createdAt])
   @@index([providerEnabled, publicPreviewEnabled, category, id], map: "freelancer_provider_public_category_id_idx")
+  @@index([placeCountryCode, placeRegion, placeCity], map: "freelancer_profiles_place_idx")
   @@map("freelancer_profiles")
 }
 
@@ -1368,6 +1533,15 @@ model Job {
   salaryMax            Int?     @map("salary_max")
   salaryCurrency       String   @default("USD") @map("salary_currency")
   salaryPeriod         String?  @map("salary_period")
+  /// Whether the role is open now (true), or the posting gathers candidates
+  /// for future openings (false). Null: not stated. Ontario has required
+  /// this statement in public postings since 2026-01-01, and candidates
+  /// everywhere want to know a role is real.
+  existingVacancy      Boolean? @map("existing_vacancy")
+  /// The posting says AI is used to screen, assess or select applicants
+  /// (Ontario, 2026-01-01). Turned on the first time Coral's AI screens this
+  /// job's applicants, and can't be turned off after that.
+  usesAi               Boolean  @default(false) @map("uses_ai")
   responsibilities     String[] @default([])
   requirements         String[] @default([])
   benefits             String[] @default([])
@@ -1470,6 +1644,41 @@ model Application {
 
 /// A seeker's private record of an application handled outside Coral.
 /// Opening a link only saves the opportunity; the seeker confirms submission.
+/// A job match the seeker said they are not interested in. The matcher leaves
+/// it out of later results: by its id, and by title and company, because the
+/// same job arrives from more than one source under different ids.
+model DismissedMatch {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  jobId     String   @map("job_id")
+  title     String
+  company   String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, jobId])
+  @@index([userId, createdAt])
+  @@map("dismissed_matches")
+}
+
+/// A job title as job ads in another language write it ("nurse" → German
+/// "Pflegefachkraft"), so the matcher also finds ads in the local language.
+/// Asked of the AI once per title and language, and kept.
+model RoleTranslation {
+  id        String   @id @default(uuid())
+  /// The title as searched, lower case with single spaces.
+  role      String
+  /// ISO 639-1: "de".
+  language  String
+  /// The local title. The same as `role` when ads there use it unchanged.
+  title     String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([role, language])
+  @@map("role_translations")
+}
+
 model ExternalApplication {
   id         String    @id @default(uuid())
   userId     String    @map("user_id")
@@ -1523,15 +1732,50 @@ model JobAlert {
   frequency       String   @default("daily")
   isActive        Boolean  @default(true) @map("is_active")
   lastSentAt      DateTime? @map("last_sent_at")
+  /// When the web was last searched for this alert. Daily at most (weekly
+  /// for weekly alerts), whatever the frequency: web searches are metered.
+  webCheckedAt    DateTime? @map("web_checked_at")
+  /// Whether that search used JSearch, which has a daily allowance for alerts.
+  webUsedJSearch  Boolean  @default(false) @map("web_used_jsearch")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
   user            User     @relation("UserJobAlerts", fields: [userId], references: [id], onDelete: Cascade)
+  webMatches      JobAlertWebMatch[]
 
   @@index([userId, createdAt])
   @@index([userId, isActive])
   @@index([isActive, frequency, lastSentAt])
   @@map("job_alerts")
+}
+
+/// A job from the web that a saved alert found. Kept so the alert can show
+/// it (the notification opens these, not a new search), and so the same job
+/// is never announced twice.
+model JobAlertWebMatch {
+  id        String    @id @default(uuid())
+  alertId   String    @map("alert_id")
+  userId    String    @map("user_id")
+  /// Title and employer, normalised: one posting from two sources, or relisted under a new id, is one job.
+  jobKey    String    @map("job_key")
+  /// The matcher's id for it ("jsearch:…"), as "not interested" records it.
+  jobId     String    @map("job_id")
+  source    String
+  title     String
+  company   String
+  location  String
+  url       String?
+  publisher String?
+  logoUrl   String?   @map("logo_url")
+  salary    String?
+  postedAt  DateTime? @map("posted_at")
+  foundAt   DateTime  @default(now()) @map("found_at")
+
+  alert JobAlert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+
+  @@unique([alertId, jobKey])
+  @@index([userId, foundAt])
+  @@map("job_alert_web_matches")
 }
 
 /// One job put in front of one job seeker by Coral's matching.
@@ -1602,12 +1846,125 @@ model JobBoost {
   @@map("job_boosts")
 }
 
+/// Who may comment on a post. FOLLOWERS means the people who follow its
+/// author — or, on a company post, the company's page — plus the author and
+/// the company's own team.
+enum CommentPolicy {
+  ANYONE
+  FOLLOWERS
+  OFF
+}
+
+enum CommunityVideoStatus {
+  /// Waiting for the browser to finish sending it to Mux.
+  UPLOADING
+  /// Received; Mux is preparing it for streaming.
+  PROCESSING
+  /// Streams, and can be attached to a post.
+  READY
+  /// Will never stream; `failureReason` says why.
+  FAILED
+}
+
+/// A video for a community post, uploaded by the browser straight to Mux and
+/// streamed from there: never through our servers, and never in our storage.
+///
+/// A post names it by its stream URL (https://stream.mux.com/<playbackId>.m3u8)
+/// in `mediaUrls`, which is accepted only for the post's author's own READY
+/// video. Unused ones are deleted from Mux by the hourly sweep.
+model CommunityVideo {
+  id              String               @id @default(uuid())
+  /// Who uploaded it. Null once their account is gone, which the sweep reads
+  /// as "delete it".
+  ownerId         String?              @map("owner_id")
+  muxUploadId     String               @unique @map("mux_upload_id")
+  muxAssetId      String?              @unique @map("mux_asset_id")
+  playbackId      String?              @unique @map("playback_id")
+  status          CommunityVideoStatus @default(UPLOADING)
+  durationSeconds Float?               @map("duration_seconds")
+  /// "16:9", "9:16" — as Mux reports it.
+  aspectRatio     String?              @map("aspect_ratio") @db.VarChar(20)
+  failureReason   String?              @map("failure_reason") @db.Text
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+
+  owner User? @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+
+  @@index([ownerId, createdAt])
+  @@index([status, createdAt])
+  @@map("community_videos")
+}
+
+enum ScheduledPostStatus {
+  SCHEDULED
+  /// Taken by the publishing job. Only ever seen if a run died mid-way.
+  PUBLISHING
+  PUBLISHED
+  /// Could not be published when its time came; `failureReason` says why.
+  FAILED
+}
+
+/// A company post written now and published at a set time.
+///
+/// Kept apart from Post until it goes out, so nothing that reads posts — the
+/// feeds, search, counts, a permalink — has to know about posts that do not
+/// exist yet. When its time comes the publishing job creates the post the
+/// ordinary way, with every check a post written then would get, including
+/// whether the person who scheduled it still speaks for the company.
+model ScheduledPost {
+  id            String              @id @default(uuid())
+  /// The company it goes out as; null for a post in the author's own name.
+  companyId     String?             @map("company_id")
+  /// Who scheduled it. The post is published as theirs, in the company's name when there is one.
+  authorId      String              @map("author_id")
+  publishAt     DateTime            @map("publish_at")
+  /// What POST /community/posts would take: words, pictures or a document,
+  /// space, comment setting, purpose, poll. Checked when scheduled and again
+  /// when published.
+  payload       Json
+  status        ScheduledPostStatus @default(SCHEDULED)
+  postId        String?             @unique @map("post_id")
+  failureReason String?             @map("failure_reason") @db.Text
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+
+  company Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  author  User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  post    Post?    @relation(fields: [postId], references: [id], onDelete: SetNull)
+
+  @@index([status, publishAt])
+  @@index([companyId, status, publishAt])
+  @@index([authorId, status, publishAt])
+  @@map("scheduled_posts")
+}
+
+/// Someone had a post on screen, once per person per post per UTC day.
+///
+/// Only counts leave this table — never who. Signed-in readers only, and
+/// never the author or, for a company post, the company's own team. Rows
+/// older than the stats window are pruned; Post.viewsCount keeps the total.
+model PostView {
+  postId   String   @map("post_id")
+  viewerId String   @map("viewer_id")
+  day      DateTime @db.Date
+
+  post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  viewer User @relation(fields: [viewerId], references: [id], onDelete: Cascade)
+
+  @@id([postId, viewerId, day])
+  @@index([postId, day])
+  @@index([day])
+  @@map("post_views")
+}
+
 // Community post
 model Post {
   id             String     @id @default(uuid())
   authorId       String     @map("author_id")
-  /// Nullable only for posts written before spaces existed. Every new post is
-  /// given one by the service.
+  /// The space a post is for, when it is for one. Null means everyone: Home,
+  /// the author's followers, their profile or the company's page (and also
+  /// the posts written before spaces existed). Posting in a space joins the
+  /// author to it.
   spaceId        String?    @map("space_id")
   /// Set when the post speaks for a company rather than for its author.
   ///
@@ -1622,6 +1979,13 @@ model Post {
   linkedGigId     String? @map("linked_gig_id")
   linkedJobId     String? @map("linked_job_id")
   mediaUrls      String[]   @default([]) @map("media_urls")
+  /// A PDF shared as the post itself, read page by page in the feed. The
+  /// file is in the community bucket; its page count was read from the file
+  /// on upload, never taken from the writer. Kept apart from mediaUrls, which
+  /// are pictures and video and are drawn as such everywhere.
+  documentUrl    String?    @map("document_url")
+  documentTitle  String?    @map("document_title") @db.VarChar(150)
+  documentPages  Int?       @map("document_pages")
   hashtags       String[]   @default([])
   /// Frozen at posting time: title, description, image and site for the first
   /// link in the text. Stored rather than fetched on read so every reader and
@@ -1642,7 +2006,15 @@ model Post {
   /// Set on TIDE posts. The tide is the record; the post is one announcement
   /// of it, and there may be several.
   tideId         String?    @map("tide_id")
+  /// Who may comment, chosen by the author: anyone, the author's (or for a
+  /// company post, the company page's) followers, or nobody. Existing
+  /// comments stay visible whichever is chosen; this governs new ones.
+  commentPolicy  CommentPolicy @default(ANYONE) @map("comment_policy")
   likesCount     Int        @default(0) @map("likes_count")
+  /// Times someone other than the author (or, for a company post, its team)
+  /// had it on screen, counted once per person per day — see PostView. Shown
+  /// only to whoever may manage the post.
+  viewsCount     Int        @default(0) @map("views_count")
   commentsCount  Int        @default(0) @map("comments_count")
   bookmarksCount Int        @default(0) @map("bookmarks_count")
   resharesCount  Int        @default(0) @map("reshares_count")
@@ -1666,6 +2038,8 @@ model Post {
   poll       Poll?
   likes      PostLike[]
   bookmarks  PostBookmark[]
+  views      PostView[]
+  scheduledFrom ScheduledPost?
 
   @@index([authorId, createdAt])
   @@index([createdAt])
@@ -1694,6 +2068,10 @@ model ServiceListing {
   normalizedSkills String[] @default([]) @map("normalized_skills")
   deliverables String[] @default([])
   workSamples Json @default("[]") @map("work_samples")
+  /// Pictures (up to 8) and at most one short video of the work, uploaded by
+  /// the owner through the community media upload. The first picture is the
+  /// cover on /services.
+  mediaUrls String[] @default([]) @map("media_urls")
   availability String @default("available")
   workMode String @default("remote") @map("work_mode")
   country String @default("Canada")
@@ -1712,6 +2090,7 @@ model ServiceListing {
   announcements Post[]
   reports MarketplaceReport[]
   requests MarketplaceRequest[]
+  projects ProfileProject[]
   @@index([ownerUserId, createdAt])
   @@index([companyId, createdAt])
   @@index([status, category, createdAt])
@@ -1797,6 +2176,10 @@ model MarketplaceRequest {
   postId String? @map("post_id")
   acceptedAt DateTime? @map("accepted_at")
   firstRecipientReplyAt DateTime? @map("first_recipient_reply_at")
+  /// When the recipient first answered — accepted, declined or replied —
+  /// written once. How quickly a provider replies is measured from this,
+  /// never from updatedAt (the last change, not the first answer).
+  recipientRespondedAt DateTime? @map("recipient_responded_at")
   requesterLastReadAt DateTime? @map("requester_last_read_at")
   recipientLastReadAt DateTime? @map("recipient_last_read_at")
   createdAt DateTime @default(now()) @map("created_at")
@@ -1810,6 +2193,7 @@ model MarketplaceRequest {
   messages MarketplaceMessage[]
   reports MarketplaceRequestReport[]
   deliveries MarketplaceDelivery[]
+  completedWork CompletedWork?
   @@unique([requesterId, idempotencyKey])
   @@unique([requesterId, serviceListingId])
   @@unique([requesterId, projectBriefId])
@@ -1817,6 +2201,34 @@ model MarketplaceRequest {
   @@index([recipientId, createdAt])
   @@index([requesterId, recipientId])
   @@map("marketplace_requests")
+}
+
+/// Work done through Coral: a marketplace request both sides say was
+/// finished. One side marks it done and the other confirms; nothing shows
+/// until both have. Shown on the provider's profile and pages unless they
+/// turn it off; the client's name only if the client turns it on.
+model CompletedWork {
+  id              String    @id @default(uuid())
+  requestId       String    @unique @map("request_id")
+  /// Who did the work: the recipient of a service enquiry, the requester of a
+  /// project response. Always a person, never a company page.
+  providerId      String    @map("provider_id")
+  clientId        String    @map("client_id")
+  proposedById    String    @map("proposed_by_id")
+  proposedAt      DateTime  @default(now()) @map("proposed_at")
+  /// When the other side confirmed. Until then this is only a proposal.
+  confirmedAt     DateTime? @map("confirmed_at")
+  shownByProvider Boolean   @default(true) @map("shown_by_provider")
+  clientNamed     Boolean   @default(false) @map("client_named")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  request  MarketplaceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  provider User               @relation("CompletedWorkProvider", fields: [providerId], references: [id], onDelete: Cascade)
+  client   User               @relation("CompletedWorkClient", fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([providerId, confirmedAt])
+  @@map("completed_work")
 }
 
 model MarketplaceMessage {
@@ -2811,6 +3223,7 @@ model Space {
   company Company?      @relation(fields: [companyId], references: [id], onDelete: SetNull)
   members SpaceMember[]
   posts   Post[]
+  suggestionDismissals SpaceSuggestionDismissal[]
 
   @@index([kind, archivedAt])
   @@map("spaces")
@@ -2829,6 +3242,24 @@ model SpaceMember {
   @@unique([spaceId, userId])
   @@index([userId])
   @@map("space_members")
+}
+
+/// A space someone closed in "Suggested spaces", so it is not offered again.
+///
+/// Kept rather than remembered in the browser: a suggestion you dismissed on
+/// your laptop coming back on your phone reads as not having been listened to.
+model SpaceSuggestionDismissal {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  spaceId   String   @map("space_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user  User  @relation("SpaceSuggestionDismissals", fields: [userId], references: [id], onDelete: Cascade)
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, spaceId])
+  @@index([spaceId])
+  @@map("space_suggestion_dismissals")
 }
 
 enum ReportStatus {

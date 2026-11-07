@@ -164,3 +164,68 @@ export const ASSIGNABLE_ROLES: CompanyRole[] = [
   "INTERVIEWER",
   "VIEWER",
 ];
+
+/* --------------------------------- domain --------------------------------- */
+
+/** How a domain was shown to be the company's. */
+export type DomainMethod = "sign-in" | "dns" | "email";
+
+/** The company's domain, and any proof of one under way. */
+export interface CompanyDomainStatus {
+  /** Set only once proven. Null: the company is unclaimed. */
+  domain: string | null;
+  verifiedAt: string | null;
+  method: DomainMethod | null;
+  /** Owners and admins prove and remove; everyone else can only look. */
+  canManage: boolean;
+  /** The domain of their own confirmed sign-in email: claimable in one click. */
+  signInDomain: string | null;
+  /** A starting point for the box, from the website or their email. Not a claim. */
+  suggestion: string | null;
+  /** Whether Coral can send email right now; the code route needs it. */
+  emailAvailable: boolean;
+  pending:
+    | { method: "dns"; domain: string; expiresAt: string; record: { type: "TXT"; host: string; value: string } }
+    | { method: "email"; domain: string; expiresAt: string; sentTo: string }
+    | null;
+}
+
+export const getCompanyDomain = () => req<CompanyDomainStatus>("domain");
+export const claimDomainBySignIn = (domain: string) =>
+  req<CompanyDomainStatus>("domain/sign-in", { method: "POST", body: JSON.stringify({ domain }) });
+export const startDomainDns = (domain: string) =>
+  req<CompanyDomainStatus>("domain/dns", { method: "POST", body: JSON.stringify({ domain }) });
+export const checkDomainDns = () =>
+  req<CompanyDomainStatus & { found: boolean }>("domain/dns/check", { method: "POST" });
+export const startDomainEmail = (email: string) =>
+  req<CompanyDomainStatus>("domain/email", { method: "POST", body: JSON.stringify({ email }) });
+export const confirmDomainEmail = (code: string) =>
+  req<CompanyDomainStatus>("domain/email/confirm", { method: "POST", body: JSON.stringify({ code }) });
+export const releaseCompanyDomain = () => req<CompanyDomainStatus>("domain", { method: "DELETE" });
+
+/* ── Taking the company page down and bringing it back (owner only) ── */
+
+export interface CompanyPageStatus {
+  companyName: string;
+  /** ISO time it was deactivated; null while the page is live. */
+  deactivatedAt: string | null;
+  /** ISO time the page will be deleted for good; null unless the owner asked. */
+  deletesAt: string | null;
+  /** Only the owner may deactivate or reactivate, as LinkedIn keeps it to super admins. */
+  canManage: boolean;
+}
+
+export const getCompanyPageStatus = () => req<CompanyPageStatus>("page");
+
+export const deactivateCompanyPage = () =>
+  req<CompanyPageStatus & { jobsClosed: number }>("page/deactivate", { method: "POST" });
+
+export const reactivateCompanyPage = () =>
+  req<CompanyPageStatus>("page/reactivate", { method: "POST" });
+
+/** Delete the deactivated page for good, 30 days from now. Confirmed by typing its name. */
+export const scheduleCompanyDeletion = (confirmName: string) =>
+  req<CompanyPageStatus>("page/delete", { method: "POST", body: JSON.stringify({ confirmName }) });
+
+export const cancelCompanyDeletion = () =>
+  req<CompanyPageStatus>("page/delete/cancel", { method: "POST" });

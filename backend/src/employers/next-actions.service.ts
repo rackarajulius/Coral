@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
+import { profileShownFor } from '../company/company-page';
 import { User } from '../common/types/user.types';
 
 /**
@@ -275,14 +276,12 @@ export class NextActionsService {
   }
 
   private async incompleteProfile(employer: User, memberIds: string[]): Promise<NextAction | null> {
-    const p = await this.prisma.employerProfile.findUnique({
-      where: { userId: employer.id },
-      select: {
-        companyLogo: true,
-        companyDescription: true,
-        companyBenefits: true,
-        companyLocations: true,
-      },
+    // The company's page, which is what candidates see.
+    const p = await profileShownFor(this.prisma, employer.id, {
+      companyLogo: true,
+      companyDescription: true,
+      companyBenefits: true,
+      companyLocations: true,
     });
     if (!p) return null;
 

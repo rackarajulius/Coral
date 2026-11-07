@@ -12,6 +12,11 @@ import { EmailModule } from '../services/email/email.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { CandidateWatchersService } from './candidate-watchers.service';
 import { PipelineLinkService } from './pipeline-link.service';
+import { CompanyDomainService } from './company-domain.service';
+import { CompanyDomainController } from './company-domain.controller';
+import { DomainTxtLookup } from './domain-txt-lookup';
+import { CompanyStatusService } from './company-status.service';
+import { CompanyStatusController } from './company-status.controller';
 
 /**
  * Global because company scoping is needed almost everywhere an employer is
@@ -22,7 +27,7 @@ import { PipelineLinkService } from './pipeline-link.service';
 @Global()
 @Module({
   imports: [EmailModule, NotificationsModule],
-  controllers: [CompanyMembersController, CompanyJoinLinkController, CompanyJoinController, CompanyAuditController],
+  controllers: [CompanyMembersController, CompanyJoinLinkController, CompanyJoinController, CompanyAuditController, CompanyDomainController, CompanyStatusController],
   providers: [
     CompanyContextService,
     CompanyCapabilityGuard,
@@ -30,6 +35,11 @@ import { PipelineLinkService } from './pipeline-link.service';
     CompanyJoinLinkService,
     CompanyEnrolmentService,
     CompanyAuditService,
+    // Owning a domain decides who joins straight away (the join link).
+    CompanyDomainService,
+    DomainTxtLookup,
+    // Taking the page down and bringing it back (the owner only).
+    CompanyStatusService,
     // Here, beside company scoping, because notes, stage moves and shortlists
     // all live in different modules and all need the same answer to
     // "who is working this candidate".

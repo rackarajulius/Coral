@@ -1,5 +1,5 @@
-import { Search, MapPin } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { ArrowRight, Search, MapPin, Sparkles } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
 import { useAppDispatch } from "@/hooks/useAppDispatch";
 import { setKeywords, setLocation } from "@/store/jobsSlice";
 import { useState } from "react";
@@ -71,7 +71,20 @@ const Hero = () => {
                 <Search className="h-4 w-4" />
               </button>
             </div>
-          
+
+          <Link
+            to="/resume-matcher"
+            className="group mx-auto mt-6 flex max-w-2xl items-center gap-4 rounded-2xl border border-coral/25 bg-coral/5 p-5 text-left transition-colors hover:border-coral/50 hover:bg-coral/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral focus-visible:ring-offset-2"
+          >
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-coral/10 text-coral-dark">
+              <Sparkles className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <span className="flex-1">
+              <span className="block font-semibold text-foreground">Find jobs matched to your resume</span>
+              <span className="mt-1 block text-sm text-muted-foreground">Discover roles ranked for your skills and experience with AI Job Match.</span>
+            </span>
+            <ArrowRight className="h-5 w-5 shrink-0 text-coral-dark transition-transform group-hover:translate-x-1" aria-hidden="true" />
+          </Link>
 
           {/* Stats */}
           <div className="flex flex-wrap justify-center gap-2 mt-6 animate-fade-in-up" style={{ animationDelay: "0.3s" }}>

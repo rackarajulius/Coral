@@ -60,9 +60,15 @@ export interface EmployerAnalytics {
   recentApplications: unknown[];
 }
 
-/** Dashboard counters for the signed-in employer. */
+/**
+ * Dashboard counters for the company the signed-in person acts for.
+ *
+ * `side=company` because one account can both look for work and act for a
+ * company: without it the server answered by account role, and a job seeker
+ * with a company seat got job-seeker figures the dashboard can't read.
+ */
 export async function getMyAnalytics(): Promise<EmployerAnalytics> {
-  const res = await fetch(`${API_BASE_URL}/analytics/me`, { headers: await authHeaders() });
+  const res = await fetch(`${API_BASE_URL}/analytics/me?side=company`, { headers: await authHeaders() });
   if (!res.ok) throw new Error("Failed to load analytics");
   return (await res.json()).data as EmployerAnalytics;
 }

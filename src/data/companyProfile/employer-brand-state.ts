@@ -25,6 +25,7 @@ export function companyToEmployerBrand(company: EmployerCompany): EmployerBrand 
     banner: company.companyBanner ?? undefined,
     website: company.companyWebsite ?? "",
     companySize: company.companySize ?? "",
+    companyType: company.companyType ?? "",
     foundedYear: company.foundedYear ? String(company.foundedYear) : "",
     industries: company.industries?.length ? company.industries : company.industry ? [company.industry] : [],
     headquarters: company.headquarters ?? "",
@@ -118,12 +119,16 @@ function isStoredUrl(url?: string): url is string {
 export function brandToCompanyPayload(brand: EmployerBrand): UpdateEmployerCompanyPayload {
   const foundedYear = parseInt(brand.foundedYear, 10);
   return {
-    companyName: brand.displayName,
+    // Omitted when blank, like every other field here. A company still called
+    // "New Company" hydrates to an empty display name on purpose (see
+    // hydrateEmployerBrand), and sending that through would clear the name.
+    companyName: brand.displayName.trim() || undefined,
     tagline: brand.tagline || undefined,
     companyLogo: brand.logo || undefined,
     companyBanner: brand.banner || undefined,
     companyWebsite: brand.website || undefined,
     companySize: brand.companySize || undefined,
+    companyType: brand.companyType || undefined,
     foundedYear: Number.isFinite(foundedYear) ? foundedYear : undefined,
     industries: brand.industries,
     headquarters: brand.headquarters || undefined,

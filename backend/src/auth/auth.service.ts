@@ -6,6 +6,7 @@ import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
 import { UpdateFreelancerProfileDto } from '../freelancers/dto/update-freelancer-profile.dto';
 import { User } from '../common/types/user.types';
+import { ProviderAvatarService } from './provider-avatar.service';
 
 /** Every new account starts as this role, awaiting onboarding. */
 const DEFAULT_NEW_ACCOUNT_ROLE: UserRole = 'JOB_SEEKER';
@@ -23,6 +24,7 @@ export class AuthService {
   constructor(
     private prisma: PrismaService,
     private configService: ConfigService,
+    private providerAvatars?: ProviderAvatarService,
   ) {}
 
   /**
@@ -80,6 +82,9 @@ export class AuthService {
           ...(isDefaultAdmin ? { role: 'ADMIN', status: 'ACTIVE' } : {}),
         },
       });
+      // Riding the same few-minutes cadence copies the photos of accounts
+      // made before copying existed, and retries one that failed.
+      this.providerAvatars?.mirrorInBackground(user.id, user.avatarUrl);
       return user as User;
     }
 
@@ -113,8 +118,10 @@ export class AuthService {
           ...(user.lastName ? {} : {
             lastName: metadata.full_name?.split(' ').slice(1).join(' ') || metadata.last_name
           }),
-          ...(user.displayName ? {} : {
-            displayName: metadata.full_name || metadata.name || email.split('@')[0]
+          // Only a name they gave. Never the email's local part: it is not a
+          // name, and the community and provider pages show it to strangers.
+          ...(user.displayName || !(metadata.full_name || metadata.name) ? {} : {
+            displayName: metadata.full_name || metadata.name
           }),
           ...(user.avatarUrl ? {} : {
             avatarUrl: metadata.avatar_url || metadata.picture
@@ -126,6 +133,7 @@ export class AuthService {
       });
 
       this.logger.log(`Linked Supabase account to existing user: ${user.id} (${email})`);
+      this.providerAvatars?.mirrorInBackground(user.id, user.avatarUrl);
       return user as User;
     }
 
@@ -143,7 +151,9 @@ export class AuthService {
         emailVerified: supabaseUser.email_confirmed_at != null,
         firstName: metadata.full_name?.split(' ')[0] || metadata.first_name,
         lastName: metadata.full_name?.split(' ').slice(1).join(' ') || metadata.last_name,
-        displayName: metadata.full_name || metadata.name || email.split('@')[0],
+        // A name they gave, or none until onboarding asks; never the email's
+        // local part, which other people would see as this person's name.
+        displayName: metadata.full_name || metadata.name || null,
         avatarUrl: metadata.avatar_url || metadata.picture,
         provider,
         status: createStatus,
@@ -152,6 +162,7 @@ export class AuthService {
     });
 
     this.logger.log(`Created new user via ${provider}: ${user.id} (${email})`);
+    this.providerAvatars?.mirrorInBackground(user.id, user.avatarUrl);
 
     return user as User;
   }

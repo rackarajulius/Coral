@@ -59,7 +59,7 @@ export class SeekerBillingWebhookService {
 
   async handle(type: string, object: Record<string, unknown>): Promise<void> {
     if (type.startsWith('customer.subscription.')) {
-      await this.applySubscription(object, type === 'customer.subscription.deleted');
+      await this.apply(object, type === 'customer.subscription.deleted');
       return;
     }
     // Invoices never change Premium: Stripe retries a failed payment itself and
@@ -70,15 +70,27 @@ export class SeekerBillingWebhookService {
     else if (type === 'invoice.payment_failed') await this.premium.paymentFailed(object);
   }
 
-  private async applySubscription(sub: Record<string, unknown>, deleted: boolean): Promise<void> {
+  /**
+   * Writes a Stripe subscription onto the person's Premium.
+   *
+   * The webhook's job, and also what the app's own Cancel and Keep Premium do
+   * with the subscription Stripe hands back, so the page is right at once
+   * rather than when the event arrives. Applying the same subscription twice
+   * changes nothing. Returns the resulting tier, or null when the subscription
+   * is no job seeker's.
+   */
+  async apply(sub: Record<string, unknown>, deleted = sub.status === 'canceled'): Promise<'free' | 'premium' | null> {
     const userId = await this.resolveUserId(sub);
     if (!userId) {
       this.logger.warn(`Stripe subscription ${String(sub.id)} has no matching job seeker; ignoring.`);
-      return;
+      return null;
     }
 
     const subscriptionId = this.str(sub.id);
-    const before = await this.prisma.userSubscription.findUnique({ where: { userId } });
+    const [before, person] = await Promise.all([
+      this.prisma.userSubscription.findUnique({ where: { userId } }),
+      this.prisma.user.findUnique({ where: { id: userId }, select: { subscriptionTier: true } }),
+    ]);
 
     const status = deleted
       ? SubscriptionStatus.CANCELED
@@ -95,7 +107,7 @@ export class SeekerBillingWebhookService {
       this.logger.log(
         `Ignoring ${status} for replaced subscription ${subscriptionId}; current is ${before.stripeSubscriptionId}.`,
       );
-      return;
+      return person?.subscriptionTier === 'premium' ? 'premium' : 'free';
     }
 
     const recognised = this.priceRecognised(sub);
@@ -113,8 +125,14 @@ export class SeekerBillingWebhookService {
      *   card, not a decision to stop paying, and matches the employer rule that
      *   past_due never locks anyone out. If every retry fails, Stripe cancels
      *   the subscription and that event ends Premium.
+     * - **Unpaid does not.** If the account is set to keep a subscription
+     *   whose retries all failed rather than cancel it, Stripe calls it
+     *   `unpaid`: nothing more will be collected. The shared status table
+     *   files it with past_due for the employer side, so it is told apart
+     *   here. Premium ends, and comes back if the open invoice is paid.
      */
-    const entitled = live || status === SubscriptionStatus.PAST_DUE;
+    const unpaid = String(sub.status ?? '') === 'unpaid';
+    const entitled = !unpaid && (live || status === SubscriptionStatus.PAST_DUE);
     const stripeEntitled = entitled && recognised;
 
     const interval = this.intervalOf(sub);
@@ -146,6 +164,12 @@ export class SeekerBillingWebhookService {
     if (before?.status !== status) {
       this.logger.log(`Job seeker ${userId}: ${before?.status ?? 'NONE'} → ${status} (tier ${tier})`);
     }
+    // Told once, when a paid Premium switches off — not on a repeat of the
+    // same event, and not while a comp keeps Premium on.
+    if (person?.subscriptionTier === 'premium' && tier === 'free') {
+      await this.premium.paidPremiumEnded(userId, unpaid ? 'unpaid' : 'ended');
+    }
+    return tier;
   }
 
   /** Metadata first — it was set at checkout and is exact — then the customer. */

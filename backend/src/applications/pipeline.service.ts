@@ -107,6 +107,8 @@ export class PipelineService {
     });
     const sourcedWhere = this.sourcedConditions({ memberIds, stages, search });
 
+    // Both halves leave out the caller's own candidacy: someone who applied to
+    // their own company is on its board for everyone but themselves.
     const union = Prisma.join(
       [
         ...(wantApplied
@@ -120,7 +122,8 @@ export class PipelineService {
                        0 AS stage_rank
                   FROM applications a
                   JOIN jobs j ON j.id = a.job_id
-                 WHERE ${appliedWhere}`,
+                 WHERE ${appliedWhere}
+                   AND a.applicant_id::text <> ${actor.id}`,
             ]
           : []),
         ...(wantSourced
@@ -134,7 +137,8 @@ export class PipelineService {
                        ${this.ladderRankSql()} AS stage_rank
                   FROM shortlist_items si
                   JOIN shortlists sl ON sl.id = si.shortlist_id
-                 WHERE ${sourcedWhere}`,
+                 WHERE ${sourcedWhere}
+                   AND si.candidate_id::text <> ${actor.id}`,
             ]
           : []),
       ],

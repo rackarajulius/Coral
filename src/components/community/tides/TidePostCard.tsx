@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Skeleton } from "@/components/ui/skeleton";
+import { TideEmbedSkeleton } from "@/components/community/feed/skeletons";
 import { getTide } from "@/lib/api/tides";
 import { TideCard } from "./TideCard";
 
@@ -22,7 +22,7 @@ export function TidePostCard({ tideId }: { tideId: string }) {
     retry: false,
   });
 
-  if (tide.isLoading) return <Skeleton className="mt-3 h-40 rounded-xl" />;
+  if (tide.isLoading) return <TideEmbedSkeleton />;
 
   // A deleted tide leaves the post that announced it standing; the post is
   // still someone's words.

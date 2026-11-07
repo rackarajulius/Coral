@@ -8,6 +8,7 @@ import { EmployerAnalyticsService } from './employer-analytics.service';
 import { BrandScoreService } from './brand-score.service';
 import { InsightsService } from './insights.service';
 import { HiringStatsService } from './hiring-stats.service';
+import { HiringCommitmentsService } from './hiring-commitments.service';
 import { CompetitorInsightsService } from './competitor-insights.service';
 
 @Module({
@@ -18,10 +19,10 @@ import { CompetitorInsightsService } from './competitor-insights.service';
   ],
   providers: [
     AnalyticsService, AnalyticsEventsService, EmployerAnalyticsService, InsightsService, BrandScoreService,
-    HiringStatsService, CompetitorInsightsService,
+    HiringStatsService, HiringCommitmentsService, CompetitorInsightsService,
   ],
   // Exported so server-side call sites (job page reads) can record directly,
   // without a round trip through the browser.
-  exports: [AnalyticsService, AnalyticsEventsService, HiringStatsService],
+  exports: [AnalyticsService, AnalyticsEventsService, HiringStatsService, HiringCommitmentsService],
 })
 export class AnalyticsModule {}

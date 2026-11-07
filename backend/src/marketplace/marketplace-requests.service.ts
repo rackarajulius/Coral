@@ -2,18 +2,19 @@ import { BadRequestException, ConflictException, ForbiddenException, HttpExcepti
 import { Prisma } from '@prisma/client';
 import { createHash } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { WRITE_TRANSACTION } from '../common/database-transaction';
 import { MarketplaceService } from './marketplace.service';
 import { MarketplaceActivityService } from './marketplace-activity.service';
 import { ListingKind, safeWorkUrl } from './marketplace-policy';
-import { CreateMarketplaceRequestDto, MarketplaceMessageDto, MarketplaceMessageQueryDto, MarketplaceRequestQueryDto, MarketplaceRequestReportDto, REQUEST_REPORT_REASONS } from './dto/marketplace-requests.dto';
+import { CompletedWorkSettingsDto, CreateMarketplaceRequestDto, MarketplaceMessageDto, MarketplaceMessageQueryDto, MarketplaceRequestQueryDto, MarketplaceRequestReportDto, REQUEST_REPORT_REASONS } from './dto/marketplace-requests.dto';
+import { personName } from '../common/person-name';
 
 type Database = Prisma.TransactionClient | PrismaService;
 const PERSON = { id: true, displayName: true, firstName: true, lastName: true, status: true } satisfies Prisma.UserSelect;
 const COMPANY = { id: true, name: true } satisfies Prisma.CompanySelect;
-const REQUEST_INCLUDE = { requester: { select: PERSON }, recipient: { select: PERSON }, requesterCompany: { select: COMPANY }, recipientCompany: { select: COMPANY } } satisfies Prisma.MarketplaceRequestInclude;
+const REQUEST_INCLUDE = { requester: { select: PERSON }, recipient: { select: PERSON }, requesterCompany: { select: COMPANY }, recipientCompany: { select: COMPANY }, completedWork: true } satisfies Prisma.MarketplaceRequestInclude;
 type RequestRecord = Prisma.MarketplaceRequestGetPayload<{ include: typeof REQUEST_INCLUDE }>;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const WRITE_TRANSACTION = { maxWait: 10000, timeout: 30000 };
 
 @Injectable()
 export class MarketplaceRequestsService {
@@ -130,18 +131,26 @@ export class MarketplaceRequestsService {
     const readAt = requester ? record.requesterLastReadAt : record.recipientLastReadAt;
     const unreadMessages = await database.marketplaceMessage.count({ where: { requestId: record.id, senderId: { not: userId }, ...(readAt ? { createdAt: { gt: readAt } } : {}) } });
     const initialUnread = !requester && (!readAt || readAt < record.createdAt) ? 1 : 0;
-    const person = (value: RequestRecord['requester']) => ({ id: value.id, displayName: value.displayName?.trim() || [value.firstName, value.lastName].filter(Boolean).join(' ') || 'Coral member' });
+    const person = (value: RequestRecord['requester']) => ({ id: value.id, displayName: personName(value, 'Coral member') });
+    const work = record.completedWork, sides = this.sides(record);
+    const completable = record.status === 'accepted' && !sides.providerCompanyId && communication;
     return {
       id: record.id, kind, status: record.status, createdAt: record.createdAt, updatedAt: record.updatedAt,
       acceptedAt: record.acceptedAt, firstRecipientReplyAt: record.firstRecipientReplyAt,
       requester: person(record.requester), recipient: person(record.recipient), requesterCompany: record.requesterCompany, recipientCompany: record.recipientCompany,
       listing: { kind, id: this.listingId(record), title: canonical?.title ?? 'Listing unavailable', url: kind === 'service' ? `/services/${this.listingId(record)}` : `/projects/${this.listingId(record)}`, available: !!canonical },
       viewerSide: requester ? 'requester' : 'recipient', unreadCount: unreadMessages + initialUnread,
+      // Work done through Coral: who did it, and how far both sides have agreed it is done.
+      workRole: sides.providerCompanyId ? null : userId === sides.providerId ? 'provider' : 'client',
+      work: work ? { proposedBySelf: work.proposedById === userId, proposedAt: work.proposedAt, confirmedAt: work.confirmedAt, shown: work.shownByProvider, clientNamed: work.clientNamed } : null,
       permissions: {
         canAccept: !requester && pendingEligible && communication && this.enquiriesEnabled(),
         canDecline: !requester && record.status === 'pending', canWithdraw: requester && open,
         canBlock: record.status !== 'blocked', canReport: true,
         canSend: communication && this.enquiriesEnabled() && (record.status === 'accepted' || (!requester && pendingEligible)),
+        // Saying it is done: first to propose, then (the other side) to confirm.
+        canMarkDone: completable && !work?.confirmedAt && work?.proposedById !== userId,
+        canUnmarkDone: !!work && !work.confirmedAt,
       }, ...(detail ? { body: record.body, workSamples: record.workSamples } : {}),
     };
   }
@@ -201,7 +210,9 @@ export class MarketplaceRequestsService {
     return { data: await Promise.all(records.map(record => this.serialize(this.prisma, record, userId, false))), meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };
   }
   private async accepted(tx: Prisma.TransactionClient, record: RequestRecord, actorId: string, notify: boolean) {
-    const updated = await tx.marketplaceRequest.update({ where: { id: record.id }, data: { status: 'accepted', acceptedAt: new Date() }, include: REQUEST_INCLUDE });
+    // Only the recipient accepts, so accepting is their first answer unless they already gave one.
+    const now = new Date();
+    const updated = await tx.marketplaceRequest.update({ where: { id: record.id }, data: { status: 'accepted', acceptedAt: now, recipientRespondedAt: record.recipientRespondedAt ?? now }, include: REQUEST_INCLUDE });
     const eventId = await this.activity.record(tx, { type: 'marketplace_request_accepted', entityType: this.entityType(record.kind), entityId: this.listingId(record), actorId, companyId: record.recipientCompanyId ?? undefined, requestId: record.id, source: record.source, postId: record.postId ?? undefined, dedupeKey: `request:${record.id}:accepted` });
     if (notify) await this.activity.notify(tx, eventId, record.id, record.requesterId);
     return updated;
@@ -223,7 +234,9 @@ export class MarketplaceRequestsService {
       if (record.status === next) return this.serialize(tx, record, userId, true);
       if (action !== 'block' && (action === 'decline' ? record.status !== 'pending' : !['pending', 'accepted'].includes(record.status))) throw new ConflictException('This request cannot change to that state');
       if (action === 'block') await tx.marketplaceBlock.upsert({ where: { blockerId_blockedId: { blockerId: userId, blockedId: requester ? record.recipientId : record.requesterId } }, create: { blockerId: userId, blockedId: requester ? record.recipientId : record.requesterId }, update: {} });
-      const updated = await tx.marketplaceRequest.update({ where: { id }, data: { status: next }, include: REQUEST_INCLUDE });
+      // Declining is an answer; withdrawing or blocking is not.
+      const answered = action === 'decline' && !record.recipientRespondedAt ? { recipientRespondedAt: new Date() } : {};
+      const updated = await tx.marketplaceRequest.update({ where: { id }, data: { status: next, ...answered }, include: REQUEST_INCLUDE });
       const eventId = await this.activity.record(tx, { type: `marketplace_request_${next}`, entityType: this.entityType(record.kind), entityId: this.listingId(record), actorId: userId, requestId: id, source: record.source, dedupeKey: `request:${id}:${next}` });
       if (action !== 'block') await this.activity.notify(tx, eventId, id, requester ? record.recipientId : record.requesterId);
       return this.serialize(tx, updated, userId, true);
@@ -247,7 +260,8 @@ export class MarketplaceRequestsService {
       if (record.status === 'pending') record = await this.accepted(tx, record, userId, false);
       const sent = await tx.marketplaceMessage.create({ data: { requestId: id, senderId: userId, body, idempotencyKey: dto.idempotencyKey, payloadHash } });
       const firstRecipientReply = userId === record.recipientId && !record.firstRecipientReplyAt;
-      await tx.marketplaceRequest.update({ where: { id }, data: { ...(firstRecipientReply ? { firstRecipientReplyAt: sent.createdAt } : {}), [userId === record.requesterId ? 'requesterLastReadAt' : 'recipientLastReadAt']: sent.createdAt } });
+      const firstAnswer = userId === record.recipientId && !record.recipientRespondedAt;
+      await tx.marketplaceRequest.update({ where: { id }, data: { ...(firstRecipientReply ? { firstRecipientReplyAt: sent.createdAt } : {}), ...(firstAnswer ? { recipientRespondedAt: sent.createdAt } : {}), [userId === record.requesterId ? 'requesterLastReadAt' : 'recipientLastReadAt']: sent.createdAt } });
       if (firstRecipientReply) await this.activity.record(tx, { type: 'marketplace_recipient_replied', entityType: this.entityType(record.kind), entityId: this.listingId(record), actorId: userId, companyId: record.recipientCompanyId ?? undefined, requestId: id, source: record.source, postId: record.postId ?? undefined, dedupeKey: `request:${id}:first-recipient-reply` });
       const eventId = await this.activity.record(tx, { type: 'marketplace_message_sent', entityType: this.entityType(record.kind), entityId: this.listingId(record), actorId: userId, companyId: userId === record.requesterId ? record.requesterCompanyId ?? undefined : record.recipientCompanyId ?? undefined, requestId: id, source: record.source, dedupeKey: `message:${sent.id}` });
       await this.activity.notify(tx, eventId, id, userId === record.requesterId ? record.recipientId : record.requesterId);
@@ -263,6 +277,80 @@ export class MarketplaceRequestsService {
   async read(userId: string, id: string) {
     this.assertUuid(id);
     return this.prisma.$transaction(async tx => { const record = await this.lockRequest(tx, userId, id), readAt = new Date(); await tx.marketplaceRequest.update({ where: { id }, data: { [userId === record.requesterId ? 'requesterLastReadAt' : 'recipientLastReadAt']: readAt } }); return { readAt }; }, WRITE_TRANSACTION);
+  }
+  /**
+   * Who did the work and who it was for: the recipient of a service enquiry
+   * provides; on a project response the responder does. Work done as a
+   * company page is not recorded — it would sit on a personal profile.
+   */
+  private sides(record: RequestRecord) {
+    const service = record.kind === 'service';
+    return {
+      providerId: service ? record.recipientId : record.requesterId,
+      clientId: service ? record.requesterId : record.recipientId,
+      providerCompanyId: service ? record.recipientCompanyId : record.requesterCompanyId,
+    };
+  }
+  private async workEvent(tx: Prisma.TransactionClient, record: RequestRecord, actorId: string, type: string, key: string, notifyId: string) {
+    const eventId = await this.activity.record(tx, { type, entityType: this.entityType(record.kind), entityId: this.listingId(record), actorId, requestId: record.id, source: record.source, dedupeKey: key });
+    await this.activity.notify(tx, eventId, record.id, notifyId);
+  }
+  /**
+   * "The work is done." The first side to say so proposes it; the other side
+   * saying it too confirms it, and only then does it show anywhere. Only in an
+   * open conversation where a person, not a company page, did the work.
+   */
+  async markDone(userId: string, id: string) {
+    this.assertUuid(id);
+    return this.prisma.$transaction(async tx => {
+      const record = await this.lockRequest(tx, userId, id), work = record.completedWork;
+      if (work?.confirmedAt || work?.proposedById === userId) return this.serialize(tx, record, userId, true);
+      if (record.status !== 'accepted') throw new ConflictException('Only an open conversation can be marked done');
+      const { providerId, clientId, providerCompanyId } = this.sides(record);
+      if (providerCompanyId) throw new ForbiddenException('Work done as a company page is not recorded on a personal profile');
+      if (!await this.communicable(tx, record)) throw new ForbiddenException('This conversation is no longer available');
+      const other = userId === record.requesterId ? record.recipientId : record.requesterId;
+      if (work) {
+        await tx.completedWork.update({ where: { id: work.id }, data: { confirmedAt: new Date() } });
+        await this.workEvent(tx, record, userId, 'marketplace_work_confirmed', `work:${work.id}:confirmed`, other);
+      } else {
+        const proposed = await tx.completedWork.create({ data: { requestId: id, providerId, clientId, proposedById: userId } });
+        await this.workEvent(tx, record, userId, 'marketplace_work_marked_done', `work:${proposed.id}:marked`, other);
+      }
+      return this.serialize(tx, (await this.find(tx, id))!, userId, true);
+    }, WRITE_TRANSACTION);
+  }
+  /** "Not done yet": takes back your own proposal, or turns down theirs. Confirmed work stays; it can be hidden. */
+  async unmarkDone(userId: string, id: string) {
+    this.assertUuid(id);
+    return this.prisma.$transaction(async tx => {
+      const record = await this.lockRequest(tx, userId, id), work = record.completedWork;
+      if (!work) return this.serialize(tx, record, userId, true);
+      if (work.confirmedAt) throw new ConflictException('You both confirmed this work. It can be hidden, not undone');
+      await tx.completedWork.delete({ where: { id: work.id } });
+      // The one who proposed hears that the other side said not yet.
+      if (work.proposedById !== userId) await this.workEvent(tx, record, userId, 'marketplace_work_not_done', `work:${work.id}:not-done`, work.proposedById);
+      return this.serialize(tx, (await this.find(tx, id))!, userId, true);
+    }, WRITE_TRANSACTION);
+  }
+  /** Once confirmed: the provider shows it on their profile or not; the client has their name beside it or not. */
+  async workSettings(userId: string, id: string, dto: CompletedWorkSettingsDto) {
+    this.assertUuid(id);
+    return this.prisma.$transaction(async tx => {
+      const record = await this.lockRequest(tx, userId, id), work = record.completedWork;
+      if (!work?.confirmedAt) throw new ConflictException('Only work you both confirmed has these choices');
+      const { providerId, clientId } = this.sides(record), data: { shownByProvider?: boolean; clientNamed?: boolean } = {};
+      if (dto.shown !== undefined) {
+        if (userId !== providerId) throw new ForbiddenException('Only the person who did the work chooses whether it shows');
+        data.shownByProvider = dto.shown;
+      }
+      if (dto.named !== undefined) {
+        if (userId !== clientId) throw new ForbiddenException('Only the client chooses whether their name shows');
+        data.clientNamed = dto.named;
+      }
+      if (Object.keys(data).length) await tx.completedWork.update({ where: { id: work.id }, data });
+      return this.serialize(tx, (await this.find(tx, id))!, userId, true);
+    }, WRITE_TRANSACTION);
   }
   async report(userId: string, id: string, dto: MarketplaceRequestReportDto) {
     this.assertUuid(id); if (!REQUEST_REPORT_REASONS.includes(dto.reason as any) || (dto.details !== undefined && (typeof dto.details !== 'string' || dto.details.length > 1000))) throw new BadRequestException('Invalid request report');

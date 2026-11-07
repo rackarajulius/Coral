@@ -12,6 +12,7 @@ const tabs = [
   { id: "benefits", label: "Benefits" },
   { id: "tides", label: "Coming up" },
   { id: "hiring", label: "Hiring" },
+  { id: "commitments", label: "Commitments" },
   { id: "jobs", label: "Jobs" },
   { id: "reviews", label: "Reviews" },
 ];

@@ -29,8 +29,28 @@ interface BackendJobAlert {
   frequency: string;
   isActive: boolean;
   lastSentAt: string | null;
+  /** When the web was last searched for this alert (once a day at most). */
+  webCheckedAt?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** A job from across the web that an alert found. Opens on the site that lists it. */
+export interface AlertWebMatch {
+  id: string;
+  alertId: string;
+  jobId: string;
+  source: string;
+  title: string;
+  company: string;
+  location: string;
+  url: string | null;
+  /** Where it was published ("LinkedIn"), when known. */
+  publisher: string | null;
+  logoUrl: string | null;
+  salary: string | null;
+  postedAt: string | null;
+  foundAt: string;
 }
 
 /** The editable fields the UI collects, in frontend vocabulary. */
@@ -115,6 +135,7 @@ function toJobAlert(a: BackendJobAlert): JobAlert {
     salary: formatSalaryFromMin(a.salaryMin),
     frequency: mapFrequency(a.frequency),
     active: a.isActive,
+    webCheckedAt: a.webCheckedAt ?? undefined,
     // remote / channels / newMatches / matches are not stored server-side — omit.
   };
 }
@@ -167,6 +188,16 @@ export async function updateAlert(id: string, input: Partial<AlertInput>): Promi
   if (!res.ok) throw new Error("Failed to update alert");
   const json = await res.json();
   return toJobAlert(json.data as BackendJobAlert);
+}
+
+/** Web jobs the person's alerts found in the last 60 days, newest first. */
+export async function getAlertWebMatches(): Promise<AlertWebMatch[]> {
+  const res = await fetch(`${API_BASE_URL}/job-alerts/web-matches`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to load jobs your alerts found");
+  const json = await res.json();
+  return (json.data ?? []) as AlertWebMatch[];
 }
 
 export async function deleteAlert(id: string): Promise<void> {

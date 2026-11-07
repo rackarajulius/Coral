@@ -53,7 +53,12 @@ export class OffersService {
   async list(user: User, status?: OfferStatus) {
     const context = await this.companyContext.requireForUser(user.id);
     const offers = await this.prisma.offer.findMany({
-      where: { companyId: context.companyId, ...(status ? { status } : {}) },
+      where: {
+        companyId: context.companyId,
+        ...(status ? { status } : {}),
+        // Not the caller's own offer, if they applied to their own company.
+        application: { applicantId: { not: user.id } },
+      },
       orderBy: { createdAt: 'desc' },
       take: 200,
       include: {

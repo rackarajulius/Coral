@@ -44,6 +44,17 @@ export class PostsController {
     return { success: true, data: await this.media.upload(user, file) };
   }
 
+  /**
+   * Uploads one PDF to share as a document post, and returns its URL, its page
+   * count and a suggested title. Apart from pictures and video because a
+   * document is never drawn as one.
+   */
+  @Post('documents')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadDocument(@CurrentUser() user: User, @UploadedFile() file: Express.Multer.File) {
+    return { success: true, data: await this.media.uploadDocument(user, file) };
+  }
+
   @Public()
   @Get()
   async list(@Query() query: ListPostsQueryDto, @CurrentUser() user?: User) {
@@ -62,7 +73,7 @@ export class PostsController {
    */
   @Get('company-voice')
   async companyVoice(@CurrentUser() user: User) {
-    return { success: true, data: { company: await this.postsService.companyVoiceFor(user.id) } };
+    return { success: true, data: { company: await this.postsService.companyVoiceCardFor(user.id) } };
   }
 
   @Get('announcement-options')

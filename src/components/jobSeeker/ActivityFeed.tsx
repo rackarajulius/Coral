@@ -6,7 +6,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAuth } from '@/contexts/AuthContext';
 import { PostText } from '@/components/community/feed/PostText';
-import { isVideoUrl, listPosts, timeAgo, type CommunityPost } from '@/lib/api/community';
+import { isVideoUrl, listPosts, streamPosterUrl, timeAgo, type CommunityPost } from '@/lib/api/community';
 
 /** How many of the most recent posts the profile shows before "View all". */
 const SHOWN = 3;
@@ -125,7 +125,12 @@ function ActivityItem({ post }: { post: CommunityPost }) {
             <div className="relative">
               {/* Metadata only: a profile should not pull down a video nobody
                   has asked to watch. */}
-              <video src={media} preload="metadata" className="h-40 w-full bg-muted object-cover" />
+              {/* A streamed video has a still of its own; a clip shows its first frame. */}
+              {streamPosterUrl(media, 640) ? (
+                <img src={streamPosterUrl(media, 640)!} alt="" loading="lazy" className="h-40 w-full bg-muted object-cover" />
+              ) : (
+                <video src={media} preload="metadata" className="h-40 w-full bg-muted object-cover" />
+              )}
               <span className="absolute inset-0 flex items-center justify-center">
                 <PlayCircle className="h-8 w-8 text-white drop-shadow" aria-hidden="true" />
               </span>

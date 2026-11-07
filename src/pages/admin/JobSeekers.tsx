@@ -20,7 +20,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { activateJobseeker, suspendJobseeker, banJobseeker, deleteJobseeker } from "@/lib/api/adminJobseekers";
+import { activateJobseeker, suspendJobseeker, banJobseeker, deleteJobseeker, deleteJobseekerAccount } from "@/lib/api/adminJobseekers";
+import { departureNote } from "@/lib/api/accountDeletion";
 import supabase from "@/lib/supabase";
 import {
   countJobseekerFilters,
@@ -130,8 +131,8 @@ export default function Jobseekers() {
 
   const handleDelete = async (js: Jobseeker) => {
     try {
-      await deleteJobseeker(js.id);
-      toast.success(`${js.name} deleted`);
+      const companies = await deleteJobseekerAccount(js.id);
+      toast.success(`${js.name} deleted`, { description: departureNote(companies) });
       // Don't leave the drawer open on an account that no longer exists.
       setSelectedJobseeker((cur) => (cur?.id === js.id ? null : cur));
       invalidateJobseekers();

@@ -1,7 +1,14 @@
-import type { User } from "@/lib/api";
-
-/** The fields any name derivation needs. Keeps callers free of the whole User. */
-type Named = Pick<User, "firstName" | "lastName" | "displayName" | "email">;
+/**
+ * The fields any name derivation needs. Keeps callers free of the whole User,
+ * and takes other people too: their email is never sent, so only the
+ * signed-in person's own display name can be checked against one.
+ */
+type Named = {
+  firstName?: string | null;
+  lastName?: string | null;
+  displayName?: string | null;
+  email?: string | null;
+};
 
 /**
  * The signed-in person's name, or nothing.

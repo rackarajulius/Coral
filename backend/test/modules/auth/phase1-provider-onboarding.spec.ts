@@ -99,7 +99,7 @@ describe('Phase 1 legacy provider onboarding', () => {
     );
     // The production whitelist must retain the contents of the nested object.
     expect(dto).toEqual({ role: 'JOB_SEEKER', profileData });
-    const controller = new AuthController(service, {} as AccountClosureService);
+    const controller = new AuthController(service, {} as AccountClosureService, {} as never);
     const result = await controller.completeOnboarding(dto, { id: 'member' } as User);
     expect(tx.jobSeekerProfile.upsert).toHaveBeenCalledWith({
       where: { userId: 'member' }, create: { ...profileData, userId: 'member' }, update: profileData,

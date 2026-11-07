@@ -43,8 +43,8 @@ function postsHarness() {
   // Even an old context that still claims authority cannot replace the live seat.
   const context = { forUser: jest.fn().mockResolvedValue({ companyId: 'company-a', role: CompanyRole.OWNER }) };
   const service = new PostsService(
-    collaborator(prisma), collaborator({ assertPostable: jest.fn() }), collaborator({ resolve: jest.fn().mockResolvedValue(new Map()) }),
-    collaborator({ assertOwnMedia: jest.fn() }), collaborator({}), collaborator({ firstUrl: jest.fn().mockReturnValue(null) }),
+    collaborator(prisma), collaborator({ assertPostable: jest.fn(), joinOnPost: jest.fn() }), collaborator({ resolve: jest.fn().mockResolvedValue(new Map()) }),
+    collaborator({ assertOwnMedia: jest.fn(), assertPostMedia: jest.fn() }), collaborator({}), collaborator({ firstUrl: jest.fn().mockReturnValue(null) }),
     collaborator(context), collaborator({}),
   );
   return { service, prisma, post, context };

@@ -5,6 +5,7 @@ import { FeedController } from './feed/feed.controller';
 import { FeedService } from './feed/feed.service';
 import { SpacesController } from './spaces/spaces.controller';
 import { SpacesService } from './spaces/spaces.service';
+import { SpaceSuggestionsService } from './spaces/space-suggestions.service';
 import { CommunityIdentityService } from './identity.service';
 import { ModerationService } from './moderation.service';
 import { CommunityMediaService } from './media.service';
@@ -20,11 +21,21 @@ import { PostsService } from './posts/posts.service';
 import { TidesController } from './tides/tides.controller';
 import { TidesService } from './tides/tides.service';
 import { MarketplaceModule } from '../marketplace/marketplace.module';
+import { PeopleController } from './people.controller';
+import { PeopleFollowService } from './people-follow.service';
+import { MentionsController } from './mentions.controller';
+import { ScheduledPostsController } from './scheduled-posts/scheduled-posts.controller';
+import { ScheduledPostsService } from './scheduled-posts/scheduled-posts.service';
+import { PostStatsController } from './post-stats/post-stats.controller';
+import { PostStatsService } from './post-stats/post-stats.service';
+import { CommunityVideosController } from './videos/community-videos.controller';
+import { CommunityVideosService } from './videos/community-videos.service';
+import { MuxClient } from './videos/mux.client';
 
 @Module({
   imports: [StorageModule, NotificationsModule, MarketplaceModule],
-  controllers: [PostsController, CommentsController, FeedController, SpacesController, ModerationController, PollsController, TidesController],
-  providers: [PostsService, CommentsService, FeedService, SpacesService, CommunityIdentityService, ModerationService, CommunityMediaService, PollsService, GifsService, LinkPreviewService, TidesService],
+  controllers: [PostsController, CommentsController, FeedController, SpacesController, ModerationController, PollsController, TidesController, PeopleController, MentionsController, ScheduledPostsController, PostStatsController, CommunityVideosController],
+  providers: [PostsService, CommentsService, FeedService, SpacesService, SpaceSuggestionsService, CommunityIdentityService, ModerationService, CommunityMediaService, PollsService, GifsService, LinkPreviewService, TidesService, PeopleFollowService, ScheduledPostsService, PostStatsService, CommunityVideosService, MuxClient],
   exports: [PostsService, CommentsService, FeedService],
 })
 export class CommunityModule {}

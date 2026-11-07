@@ -17,6 +17,9 @@ import {
 } from './dto/create-job-alert.dto';
 import { ListJobAlertsQueryDto } from './dto/list-job-alerts-query.dto';
 import { UpdateJobAlertDto } from './dto/update-job-alert.dto';
+import { cityOf, meansRemote } from '../locations/place-text';
+import { ResumeMatcherService } from '../resume-matcher/resume-matcher.service';
+import { CandidateJob, normalizeName } from '../resume-matcher/job-sources/types';
 
 type JobAlertWithUser = Prisma.JobAlertGetPayload<{
   include: {
@@ -39,6 +42,47 @@ type JobAlertWithUser = Prisma.JobAlertGetPayload<{
  */
 const MATCH_SCAN_LIMIT = 500;
 
+/** Words in an alert's title that say nothing about the job: "Nurse jobs in Toronto" asks for nurse and Toronto. */
+const TITLE_NOISE = new Set(['a', 'an', 'and', 'or', 'the', 'of', 'in', 'at', 'for', 'to', 'with', 'job', 'jobs', 'role', 'roles', 'position', 'positions']);
+
+/** "Senior Product Designer" → senior, product, designer. Keeps "c++", "c#" and "node.js" whole. */
+export function alertTitleTerms(name: string): string[] {
+  const words = name
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}+#.]+/u)
+    .map((w) => w.replace(/^\.+|\.+$/g, ''))
+    .filter((w) => w.length > 1 && !TITLE_NOISE.has(w));
+  return [...new Set(words)];
+}
+
+/** The same title at the same employer is one job, from whichever source and under whichever id. */
+function webJobKey(job: Pick<CandidateJob, 'title' | 'company'>): string {
+  return `${job.title.toLowerCase().replace(/\s+/g, ' ').trim()}|${normalizeName(job.company)}`;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** New web jobs kept and announced per check. */
+const WEB_MATCHES_PER_CHECK = 10;
+/** Web jobs an alert found are shown, and remembered so they aren't announced again, for this long. */
+const WEB_MATCH_RETENTION_DAYS = 60;
+/** A job posted a little before the last check still counts: listings reach Google a day or two late. */
+const POSTED_GRACE_MS = 2 * DAY_MS;
+/** A new alert's first web check looks back this far. */
+const FIRST_CHECK_LOOKBACK_MS = 7 * DAY_MS;
+
+type WebAlert = Prisma.JobAlertGetPayload<{
+  include: {
+    user: {
+      select: {
+        id: true;
+        role: true;
+        subscriptionTier: true;
+        jobSeekerProfile: { select: { notificationSettings: true } };
+      };
+    };
+  };
+}>;
+
 type AlertMatch = {
   id: string;
   title: string;
@@ -59,6 +103,7 @@ export class JobAlertsService {
     private readonly configService: ConfigService,
     private readonly notifications: NotificationsService,
     private readonly emailPrefs: EmailPreferencesService,
+    private readonly matcher: ResumeMatcherService,
   ) {}
 
   /**
@@ -77,6 +122,203 @@ export class JobAlertsService {
     if (data.notified || data.failed) {
       this.logger.log(`Job alerts: processed=${data.processed} notified=${data.notified} failed=${data.failed}`);
     }
+  }
+
+  /* ------------------------------ web matches ----------------------------- */
+
+  /**
+   * Searches the web for alerts due a check, and tells people about jobs they
+   * haven't been told about.
+   *
+   * Once a day at most (weekly alerts weekly), whatever the alert's
+   * frequency: every check spends outside searches, and JSearch's are counted
+   * by the request. JSearch joins only JOB_ALERTS_WEB_JSEARCH_PER_DAY checks a
+   * day across everyone (2 by default: its free plan has 200 requests a month
+   * for all searches); the other checks use Adzuna and the employer boards.
+   * Jobs aren't scored by the AI here for the same reason: its allowance is
+   * small and shared. In-app only for now; email isn't set up.
+   *
+   * Its own schedule, not the ten-minute alert pass: a check can take most of
+   * a minute when JSearch is slow, and a batch of them would outrun that
+   * pass's lease.
+   */
+  @ExclusiveCron(CronExpression.EVERY_30_MINUTES, { name: 'job-alerts-web-check' })
+  async checkWebScheduled(): Promise<void> {
+    const { checked, notified } = await this.checkWebForDueAlerts();
+    if (checked) this.logger.log(`Job alerts on the web: checked=${checked} notified=${notified}`);
+  }
+
+  async checkWebForDueAlerts(now = new Date()): Promise<{ checked: number; notified: number }> {
+    const perPass = this.readIntConfig('JOB_ALERTS_WEB_CHECKS_PER_PASS', 5, { min: 0, max: 50 });
+    if (perPass === 0) return { checked: 0, notified: 0 };
+
+    const alerts = await this.prisma.jobAlert.findMany({
+      where: {
+        isActive: true,
+        user: { status: { notIn: [UserStatus.SUSPENDED, UserStatus.INACTIVE] } },
+        OR: [
+          { webCheckedAt: null },
+          { frequency: { not: 'weekly' }, webCheckedAt: { lte: new Date(now.getTime() - DAY_MS) } },
+          { frequency: 'weekly', webCheckedAt: { lte: new Date(now.getTime() - 7 * DAY_MS) } },
+        ],
+      },
+      include: {
+        user: {
+          select: { id: true, role: true, subscriptionTier: true, jobSeekerProfile: { select: { notificationSettings: true } } },
+        },
+      },
+      orderBy: { webCheckedAt: { sort: 'asc', nulls: 'first' } },
+      take: perPass,
+    });
+    if (alerts.length === 0) return { checked: 0, notified: 0 };
+
+    const startOfDay = new Date(now);
+    startOfDay.setUTCHours(0, 0, 0, 0);
+    const jsearchToday = await this.prisma.jobAlert.count({
+      where: { webUsedJSearch: true, webCheckedAt: { gte: startOfDay } },
+    });
+    let jsearchLeft = this.readIntConfig('JOB_ALERTS_WEB_JSEARCH_PER_DAY', 2, { min: 0, max: 1000 }) - jsearchToday;
+
+    let checked = 0;
+    let notified = 0;
+    for (const alert of alerts) {
+      try {
+        const result = await this.checkWeb(alert, now, jsearchLeft > 0);
+        checked += 1;
+        if (result.usedJSearch) jsearchLeft -= 1;
+        if (result.announced) notified += 1;
+      } catch (error) {
+        // Not marked checked, so a later pass tries again.
+        this.logger.error(`Web check for alert ${alert.id} failed: ${error instanceof Error ? error.message : error}`);
+      }
+    }
+    return { checked, notified };
+  }
+
+  /** The web jobs the person's alerts found lately, newest first. */
+  async listWebMatches(userId: string) {
+    const data = await this.prisma.jobAlertWebMatch.findMany({
+      where: { userId, foundAt: { gte: new Date(Date.now() - WEB_MATCH_RETENTION_DAYS * DAY_MS) } },
+      orderBy: [{ foundAt: 'desc' }, { postedAt: 'desc' }],
+      take: 200,
+      select: {
+        id: true, alertId: true, jobId: true, source: true, title: true, company: true, location: true,
+        url: true, publisher: true, logoUrl: true, salary: true, postedAt: true, foundAt: true,
+      },
+    });
+    return { success: true, data };
+  }
+
+  @ExclusiveCron(CronExpression.EVERY_DAY_AT_4AM, { name: 'job-alert-web-matches-retention' })
+  async pruneWebMatches(): Promise<void> {
+    const { count } = await this.prisma.jobAlertWebMatch.deleteMany({
+      where: { foundAt: { lt: new Date(Date.now() - WEB_MATCH_RETENTION_DAYS * DAY_MS) } },
+    });
+    if (count) this.logger.log(`Pruned ${count} web matches older than ${WEB_MATCH_RETENTION_DAYS} days`);
+  }
+
+  /** One alert's web check. */
+  private async checkWeb(
+    alert: WebAlert,
+    now: Date,
+    useJSearch: boolean,
+  ): Promise<{ usedJSearch: boolean; announced: boolean }> {
+    // "Remote" is a way of working, not a place: the person's own country is
+    // searched, for remote work.
+    const remote = !!alert.location && meansRemote(alert.location);
+    const found = await this.matcher.findWebJobs(
+      alert.user,
+      { query: remote ? `${alert.name} remote` : alert.name, location: remote ? '' : (alert.location ?? '') },
+      { without: useJSearch ? [] : ['jsearch'] },
+    );
+    // Null: their plan doesn't include the web. Marked checked all the same,
+    // so they aren't looked up again every pass.
+    const fresh = found ? await this.newWebJobs(alert, found.jobs, now, remote) : [];
+    if (fresh.length > 0) {
+      await this.prisma.jobAlertWebMatch.createMany({
+        data: fresh.map((j) => ({
+          alertId: alert.id,
+          userId: alert.userId,
+          jobKey: webJobKey(j),
+          jobId: j.id,
+          source: j.source,
+          title: j.title,
+          company: j.company,
+          location: j.location,
+          url: j.url ?? null,
+          publisher: j.publisher ?? null,
+          logoUrl: j.logoUrl ?? null,
+          salary: j.salary ?? null,
+          postedAt: j.postedAt ? new Date(j.postedAt) : null,
+        })),
+        skipDuplicates: true,
+      });
+    }
+    const usedJSearch = !!found?.searched.includes('jsearch');
+    await this.prisma.jobAlert.update({
+      where: { id: alert.id },
+      data: { webCheckedAt: now, webUsedJSearch: usedJSearch },
+    });
+    return { usedJSearch, announced: fresh.length > 0 && (await this.announceWeb(alert, fresh)) };
+  }
+
+  /**
+   * Jobs from this check the alert hasn't found before, that fit it.
+   *
+   * Each filter leaves out only what clearly doesn't fit: most web listings
+   * don't say their type or pay, and none their level, which isn't checked.
+   * (The alert form also always sets a type, so it is rarely a real choice.)
+   * The pay minimum is compared in the job's own currency, as for jobs here.
+   */
+  private async newWebJobs(alert: WebAlert, jobs: CandidateJob[], now: Date, remote: boolean): Promise<CandidateJob[]> {
+    const since = alert.webCheckedAt ? alert.webCheckedAt.getTime() - POSTED_GRACE_MS : now.getTime() - FIRST_CHECK_LOOKBACK_MS;
+    const type = normalizeJobType(alert.jobType);
+    const fitting = jobs.filter((j) => {
+      if (j.postedAt && Date.parse(j.postedAt) < since) return false;
+      if (type && j.employmentType && normalizeJobType(j.employmentType) !== type) return false;
+      const pay = j.yearlyPay?.max ?? j.yearlyPay?.min;
+      if (alert.salaryMin && pay !== undefined && pay < alert.salaryMin) return false;
+      if (remote && j.workplace && j.workplace !== 'remote') return false;
+      return true;
+    });
+    if (fitting.length === 0) return [];
+
+    const known = await this.prisma.jobAlertWebMatch.findMany({
+      where: { alertId: alert.id, jobKey: { in: fitting.map(webJobKey) } },
+      select: { jobKey: true },
+    });
+    const seen = new Set(known.map((k) => k.jobKey));
+    const fresh: CandidateJob[] = [];
+    for (const job of fitting) {
+      const key = webJobKey(job);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      fresh.push(job);
+      if (fresh.length === WEB_MATCHES_PER_CHECK) break;
+    }
+    return fresh;
+  }
+
+  /**
+   * In-app, when the person has job-alert notifications on. Either way the
+   * jobs are kept and shown on the alert. The notification opens them there:
+   * opening it costs no new search.
+   */
+  private async announceWeb(alert: WebAlert, jobs: CandidateJob[]): Promise<boolean> {
+    const prefs = readSeekerPrefs(alert.user.jobSeekerProfile?.notificationSettings);
+    if (!prefs.pushJobAlerts) return false;
+    const plural = jobs.length === 1 ? 'job' : 'jobs';
+    const note = await this.notifications.create({
+      userId: alert.user.id,
+      type: 'job_alert',
+      title: `${jobs.length} new ${plural} from across the web for “${alert.name}”`,
+      message: jobs
+        .slice(0, 5)
+        .map((j) => [j.title, j.company, j.location].filter(Boolean).join(' · '))
+        .join('\n'),
+      link: `/activity?tab=alerts&alert=${alert.id}`,
+    });
+    return note !== null;
   }
 
   async listMyAlerts(userId: string, query: ListJobAlertsQueryDto) {
@@ -342,7 +584,17 @@ export class JobAlertsService {
       { OR: [{ publishedAt: { gte: since } }, { createdAt: { gte: since } }] },
     ];
     if (alert.location?.trim()) {
-      filters.push({ location: { contains: alert.location.trim(), mode: 'insensitive' } });
+      const wanted = alert.location.trim();
+      if (meansRemote(wanted)) {
+        // "Remote" is a way of working, not a place: a remote job's location
+        // is often empty or a head office, and matching the word alone found
+        // only the few that wrote it in.
+        filters.push({ OR: [{ isRemote: true }, { location: { contains: 'remote', mode: 'insensitive' } }] });
+      } else {
+        // On the city: an alert for "Toronto, ON" (as the location box writes
+        // it) must find a job listed as "Toronto, Ontario, Canada".
+        filters.push({ location: { contains: cityOf(wanted), mode: 'insensitive' } });
+      }
     }
     if (alert.salaryMin !== null && alert.salaryMin !== undefined) {
       filters.push({ salaryMax: { gte: alert.salaryMin } });
@@ -360,6 +612,7 @@ export class JobAlertsService {
     });
 
     const keywords = this.normalizeKeywords(alert.keywords);
+    const titleTerms = alertTitleTerms(alert.name);
     const type = normalizeJobType(alert.jobType);
     const level = normalizeLevel(alert.experienceLevel);
 
@@ -373,10 +626,15 @@ export class JobAlertsService {
             return false;
           }
         }
-        if (keywords.length === 0) return true;
+        if (titleTerms.length === 0 && keywords.length === 0) return true;
         const skills = skillSet(job.skills);
         const text = `${job.title}\n${job.description}`.toLowerCase();
-        return keywords.some((k) => skills.has(k) || text.includes(k));
+        const has = (term: string) => skills.has(term) || text.includes(term);
+        // The alert's title ("Senior Product Designer") is what it is for:
+        // every word of it, anywhere in the job. It used to be ignored, so an
+        // alert with no additional keywords matched every new job. Additional
+        // keywords widen it: any one of them will do, as before.
+        return (titleTerms.length > 0 && titleTerms.every(has)) || keywords.some(has);
       })
       .slice(0, limit)
       .map(({ description: _d, skills: _s, experienceLevel: _l, ...rest }) => rest);

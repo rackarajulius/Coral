@@ -22,6 +22,10 @@ export const editJobSchema = z
     applicationUrl: z.string().optional(),
     applicationEmail: z.string().optional(),
     status: z.enum(["open", "draft", "closed"]),
+    // What the posting states (Ontario requires both since January 2026).
+    // Defaults let a draft saved before these existed still load.
+    existingVacancy: z.enum(["", "open", "future"]).default(""),
+    usesAi: z.boolean().default(false),
   })
   .refine((d) => d.salaryMax >= d.salaryMin, {
     message: "Max salary must be ≥ min salary",
@@ -89,6 +93,8 @@ export const mockJob: EditJobForm = {
   applicationUrl: "",
   applicationEmail: "",
   status: "open",
+  existingVacancy: "open",
+  usesAi: false,
 };
 
 export const suggestedSkills = [

@@ -9,9 +9,12 @@ import {
   IsUUID,
   MaxLength,
   IsISO8601,
+  IsNotEmpty,
   ValidateNested,
 } from 'class-validator';
+import { MaxReadableLength } from '../../readable-length.validator';
 import { Type } from 'class-transformer';
+import { CommentPolicy } from '@prisma/client';
 
 export enum CommunityPostType {
   TEXT = 'TEXT',
@@ -58,10 +61,28 @@ export class PollDto {
   closesAt?: string;
 }
 
+/** A PDF uploaded through POST /community/posts/documents, and what to call it. */
+export class PostDocumentDto {
+  @IsUrl({ require_tld: false })
+  @MaxLength(2048)
+  url!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(150)
+  title!: string;
+}
+
 export class CreatePostDto {
   @IsOptional()
   @IsEnum(CommunityPostPurpose)
   purpose?: CommunityPostPurpose;
+
+  /** Present when the post shares a document. It goes on its own: no pictures, video or poll. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => PostDocumentDto)
+  document?: PostDocumentDto;
 
   @IsOptional()
   @ValidateNested()
@@ -74,9 +95,16 @@ export class CreatePostDto {
   @Type(() => PollDto)
   poll?: PollDto;
 
-  /** Which space the post belongs to. Required for new posts. */
+  /**
+   * The space the post is for, when it is for one.
+   *
+   * Optional, the way LinkedIn's audience is: without a space a post is for
+   * everyone — Home, the author's followers, their profile or the company's
+   * page. With one, the author becomes a member of it on posting.
+   */
+  @IsOptional()
   @IsUUID()
-  spaceId!: string;
+  spaceId?: string;
 
   /**
    * Post for the company rather than for yourself.
@@ -95,7 +123,7 @@ export class CreatePostDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(5000)
+  @MaxReadableLength(5000)
   content?: string;
 
   @IsOptional()
@@ -114,4 +142,9 @@ export class CreatePostDto {
   @IsString({ each: true })
   @MaxLength(50, { each: true })
   hashtags?: string[];
+
+  /** Who may comment: anyone (the default), followers only, or nobody. */
+  @IsOptional()
+  @IsEnum(CommentPolicy)
+  commentPolicy?: CommentPolicy;
 }

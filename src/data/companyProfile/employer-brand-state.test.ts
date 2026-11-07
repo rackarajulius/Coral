@@ -66,6 +66,19 @@ test("an empty or minimally onboarded company never inherits example branding", 
   assert.equal(hydrateEmployerBrand({ ...company, companyName: "New Company" }).displayName, "");
 });
 
+test("saving never clears the company name", () => {
+  // "New Company" hydrates to a blank display name so the wizard shows an empty
+  // field. Sending that back as companyName: "" would erase the stored name, so
+  // a blank one is omitted and the server keeps what it has.
+  const placeholder = hydrateEmployerBrand({ ...company, companyName: "New Company" });
+  assert.equal(brandToCompanyPayload(placeholder).companyName, undefined);
+  assert.equal(brandToCompanyPayload({ ...placeholder, displayName: "   " }).companyName, undefined);
+  assert.equal(brandToCompanyPayload(defaultEmployerBrand).companyName, undefined);
+  // A name the employer actually typed is still sent, trimmed.
+  assert.equal(brandToCompanyPayload({ ...placeholder, displayName: "  Airtel Uganda " }).companyName, "Airtel Uganda");
+  assert.equal(brandToCompanyPayload(hydrateEmployerBrand(company)).companyName, company.companyName);
+});
+
 test("a legacy automatic draft loses untouched examples while keeping real onboarding values", () => {
   const draft = parseEmployerBrandDraft(JSON.stringify(legacyDraft));
   const brand = hydrateEmployerBrand(company, draft);

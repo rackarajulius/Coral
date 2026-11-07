@@ -2,7 +2,8 @@ import { useRef, useState, forwardRef } from "react";
 import { Controller, useFieldArray, useFormContext } from "react-hook-form";
 import { Plus, X, Building2, Globe, MapPin, Star, Upload, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { EmployerBrand, INDUSTRIES, COMPANY_SIZES } from  "@/data/companyProfile/employer-brand-schema";
+import { EmployerBrand, INDUSTRIES } from  "@/data/companyProfile/employer-brand-schema";
+import { COMPANY_TYPES, companySizeOptions } from "@/lib/companyFacts";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -41,7 +42,9 @@ export function BasicInfoStep() {
           name="banner"
           render={({ field }) => {
             const ALLOWED = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
-            const MAX_MB = 5;
+            // Pictures are resized before upload (lib/imageResize), so a
+            // phone photo straight off the camera is fine.
+            const MAX_MB = 25;
             const MIN_W = 1200;
             const MIN_H = 300;
 
@@ -95,7 +98,7 @@ export function BasicInfoStep() {
                   value={field.value}
                   onChange={field.onChange}
                   label="Drop your cover banner"
-                  hint="Recommended 1600×400 · PNG, JPG, WEBP · max 5MB"
+                  hint="Recommended 1600×400 · PNG, JPG, WEBP · resized for you"
                   className="aspect-[4/1] w-full"
                   uploading={uploadingBanner}
                   onFile={pickAndValidate}
@@ -215,8 +218,24 @@ export function BasicInfoStep() {
               <Select value={field.value} onValueChange={field.onChange}>
                 <SelectTrigger className="bg-card"><SelectValue placeholder="Select" /></SelectTrigger>
                 <SelectContent>
-                  {Array.from(new Set([...COMPANY_SIZES, field.value].filter(Boolean))).map((s) => (
-                    <SelectItem key={s} value={s}>{s} employees</SelectItem>
+                  {companySizeOptions(field.value).map((s) => (
+                    <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          />
+        </Field>
+        <Field label="Organization type" error={errors.companyType?.message}>
+          <Controller
+            control={control}
+            name="companyType"
+            render={({ field }) => (
+              <Select value={field.value || undefined} onValueChange={field.onChange}>
+                <SelectTrigger className="bg-card"><SelectValue placeholder="Select" /></SelectTrigger>
+                <SelectContent>
+                  {COMPANY_TYPES.map((t) => (
+                    <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>

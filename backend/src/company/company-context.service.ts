@@ -14,6 +14,8 @@ export interface CompanyContext {
    * so "everything my company can see" is `IN (memberUserIds)`.
    */
   memberUserIds: string[];
+  /** Set while the company has taken its page down (company-status.service.ts). */
+  deactivatedAt?: Date | null;
 }
 
 /**
@@ -52,7 +54,7 @@ export class CompanyContextService {
   async membershipFor(userId: string) {
     return this.prisma.companyMember.findFirst({
       where: { userId, status: { not: CompanyMemberStatus.PENDING } },
-      include: { company: { select: { id: true, name: true } } },
+      include: { company: { select: { id: true, name: true, deactivatedAt: true } } },
       orderBy: { createdAt: 'asc' },
     });
   }
@@ -75,6 +77,7 @@ export class CompanyContextService {
       companyName: membership.company.name,
       role: membership.role,
       memberUserIds: members.map((m) => m.userId),
+      deactivatedAt: membership.company.deactivatedAt ?? null,
     };
   }
 
@@ -96,6 +99,30 @@ export class CompanyContextService {
   async memberUserIds(userId: string): Promise<string[]> {
     const context = await this.forUser(userId);
     return context ? context.memberUserIds : [userId];
+  }
+
+  /**
+   * The people the caller currently works with, the caller included.
+   *
+   * One account can both act for a company and look for work, so a company
+   * must not see its own people's job search: they are left out of its
+   * candidate search and its approaches, and their Open to Work is hidden from
+   * it. "Currently" means active, waiting to be approved, or suspended. Someone
+   * removed has left, and is a candidate like anyone else.
+   */
+  async colleagueIds(userId: string): Promise<string[]> {
+    const membership = await this.membershipFor(userId);
+    if (!membership || membership.status !== CompanyMemberStatus.ACTIVE) return [userId];
+    const rows = await this.prisma.companyMember.findMany({
+      where: {
+        companyId: membership.companyId,
+        status: {
+          in: [CompanyMemberStatus.ACTIVE, CompanyMemberStatus.PENDING, CompanyMemberStatus.SUSPENDED],
+        },
+      },
+      select: { userId: true },
+    });
+    return [...new Set([userId, ...rows.map((r) => r.userId)])];
   }
 
   /** True when the caller may manage members, roles and invitations. */

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, CalendarDays } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+import { TideListSkeleton } from "@/components/community/feed/skeletons";
 import { cn } from "@/lib/utils";
 import { listTides } from "@/lib/api/tides";
 import { TideCard } from "./TideCard";
@@ -60,13 +60,7 @@ export function TidesView() {
         ))}
       </div>
 
-      {tides.isLoading && (
-        <div className="space-y-3">
-          {[0, 1, 2].map((i) => (
-            <Skeleton key={i} className="h-44 rounded-xl" />
-          ))}
-        </div>
-      )}
+      {tides.isLoading && <TideListSkeleton />}
 
       {tides.isError && (
         <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 p-5">

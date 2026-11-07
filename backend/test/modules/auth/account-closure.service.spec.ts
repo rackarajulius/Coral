@@ -30,7 +30,9 @@ describe('permanent job seeker account closure', () => {
     for (const model of ['interview', 'aiScreen', 'outreachMessage', 'shortlistItem', 'conversation',
       'interviewCoachReport', 'interviewCoachSession', 'googleCredential', 'microsoftCredential',
       'zoomCredential', 'postReport', 'reviewFlag', 'availabilitySlot', 'analyticsEvent', 'space',
-      'candidateTag', 'scorecard', 'offer', 'emailTemplate', 'post', 'postComment']) {
+      'candidateTag', 'scorecard', 'offer', 'emailTemplate', 'post', 'postComment',
+      // Read first, to hand the person's companies over (company-departure.ts).
+      'companyMember', 'company', 'employerProfile', 'job']) {
       tx[model] = { findMany: jest.fn().mockResolvedValue([]), deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }), findUnique: jest.fn().mockResolvedValue(null), update: jest.fn() };
     }
@@ -81,7 +83,14 @@ describe('permanent job seeker account closure', () => {
     expect(supabase.deleteAuthUser).not.toHaveBeenCalled();
   });
 
-  it('deletes owned data, non-FK records, and scoped uploads before revoking sign-in', async () => {
+  it("hands the person's companies over before their account goes, so a page doesn't go with it", async () => {
+    await service.closeAccount(user, 'CLOSE');
+    const lookup = tx.companyMember.findMany.mock.invocationCallOrder[0];
+    expect(lookup).toBeLessThan(tx.user.deleteMany.mock.invocationCallOrder[0]);
+    expect(tx.companyMember.findMany.mock.calls[0][0].where.userId).toBe(user.id);
+  });
+
+  it('deletes owned data, non-FK records, and scoped uploads once closure is committed', async () => {
     await service.closeAccount(user, 'CLOSE');
     expect(retained).toBe(false);
     expect(committed).toBe(1);
@@ -100,14 +109,24 @@ describe('permanent job seeker account closure', () => {
     expect(storage.deleteFilesUnder).toHaveBeenCalledWith('messages/thread', 'message-attachments');
     expect(supabase.deleteAuthUser).toHaveBeenCalledWith('identity');
     expect(stripe.delete).not.toHaveBeenCalled();
+    // Deleting a storage object cannot be undone, so it waits for the commit.
+    expect(storage.deleteFilesUnder.mock.invocationCallOrder[0])
+      .toBeGreaterThan(supabase.deleteAuthUser.mock.invocationCallOrder[0]);
   });
 
-  it('keeps database account and sign-in intact if strict file cleanup fails', async () => {
+  it('closes the account and reports pending cleanup when uploads cannot be removed', async () => {
     storage.deleteFilesUnder.mockRejectedValue(new Error('private provider detail'));
-    await expect(service.closeAccount(user, 'CLOSE')).rejects.toThrow('Your uploaded files could not be removed');
-    expect(retained).toBe(true);
-    expect(prisma.$transaction).not.toHaveBeenCalled();
-    expect(supabase.deleteAuthUser).not.toHaveBeenCalled();
+    let error: BadGatewayException | undefined;
+    try { await service.closeAccount(user, 'CLOSE'); } catch (caught) { error = caught as BadGatewayException; }
+    // Closure already happened: claiming it failed would be false, and a retry
+    // would only find a missing account.
+    expect(retained).toBe(false);
+    expect(committed).toBe(1);
+    expect(supabase.deleteAuthUser).toHaveBeenCalledTimes(1);
+    expect(error?.getResponse()).toEqual(expect.objectContaining({
+      accountClosed: true, code: 'ACCOUNT_CLOSED_CLEANUP_PENDING',
+    }));
+    expect(JSON.stringify(error?.getResponse())).not.toContain('private provider detail');
   });
 
   it('rolls back database deletion when the authentication provider rejects closure', async () => {
@@ -116,12 +135,17 @@ describe('permanent job seeker account closure', () => {
     expect(retained).toBe(true);
     expect(committed).toBe(0);
     expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), { timeout: 30_000 });
+    // The account still works, so its uploads have to still be there.
+    expect(storage.deleteFilesUnder).not.toHaveBeenCalled();
   });
 
   it('refuses identity deletion if the user changed roles before database deletion', async () => {
     tx.user.deleteMany.mockResolvedValue({ count: 0 });
     await expect(service.closeAccount(user, 'CLOSE')).rejects.toThrow('Your account changed');
     expect(supabase.deleteAuthUser).not.toHaveBeenCalled();
+    // This is the retryable one: the user is told to try again, so they must
+    // still have a resume, identity documents and portfolio to try again with.
+    expect(storage.deleteFilesUnder).not.toHaveBeenCalled();
   });
 
   it('finishes idempotent database cleanup if the provider succeeds but the first commit fails', async () => {
@@ -182,11 +206,18 @@ describe('permanent job seeker account closure', () => {
     expect(calendar.deleteMeeting.mock.invocationCallOrder[0]).toBeGreaterThan(supabase.deleteAuthUser.mock.invocationCallOrder[0]);
   });
 
-  it('leaves external meetings intact when file cleanup prevents closure', async () => {
+  it('leaves external meetings intact when closure itself is refused', async () => {
+    prisma.interview.findMany.mockResolvedValue([{ employerId: 'employer', calendarEventId: 'event', calendarProvider: 'google', zoomMeetingId: null }]);
+    tx.user.deleteMany.mockResolvedValue({ count: 0 });
+    await expect(service.closeAccount(user, 'CLOSE')).rejects.toThrow('Your account changed');
+    expect(calendar.deleteMeeting).not.toHaveBeenCalled();
+  });
+
+  it('still cancels meetings when only upload cleanup fails after closure', async () => {
     prisma.interview.findMany.mockResolvedValue([{ employerId: 'employer', calendarEventId: 'event', calendarProvider: 'google', zoomMeetingId: null }]);
     storage.deleteFilesUnder.mockRejectedValue(new Error('storage unavailable'));
     await expect(service.closeAccount(user, 'CLOSE')).rejects.toThrow(BadGatewayException);
-    expect(calendar.deleteMeeting).not.toHaveBeenCalled();
+    expect(calendar.deleteMeeting).toHaveBeenCalledWith('employer', 'event', 'google', null);
   });
 
   it('recounts surviving community posts after deleted likes, comments and reshares cascade', async () => {

@@ -1,4 +1,5 @@
 import supabase from "@/lib/supabase";
+import { deleteAccountAsAdmin } from "./accountDeletion";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001/api/v1";
 
@@ -25,4 +26,5 @@ export const approveEmployer = (id: string) => send(`/admin/employers/${id}/appr
 export const suspendEmployer = (id: string) => send(`/admin/employers/${id}/suspend`, "PATCH");
 export const banEmployer = (id: string) => send(`/admin/employers/${id}/ban`, "PATCH");
 export const activateEmployer = (id: string) => send(`/admin/employers/${id}/activate`, "PATCH");
-export const deleteEmployer = (id: string) => send(`/admin/employers/${id}`, "DELETE");
+/** Deletes the account; its companies are handed over or deactivated, never left half-deleted. */
+export const deleteEmployer = (id: string) => deleteAccountAsAdmin(`/admin/employers/${id}`);

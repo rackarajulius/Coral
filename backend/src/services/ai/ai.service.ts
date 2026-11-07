@@ -203,6 +203,73 @@ interface OpenAIResponse {
  */
 export type AiTask = 'scoring' | 'questions' | 'report' | 'extraction' | 'general';
 
+/** Per-call settings for `complete`. */
+interface CompletionOptions {
+  /** 0.3 by default; scoring passes 0 so the same input gets the same verdict. */
+  temperature?: number;
+  /**
+   * "off" skips Gemini's extended reasoning, for calls that are lookups more
+   * than judgements. Measured on 30-job match scoring: 41.6s, and 6,803
+   * reasoning tokens against 2,365 of answer, so it always missed the 25s
+   * limit and every match fell back to keyword scoring.
+   */
+  thinking?: 'off';
+  /** Instead of AI_REQUEST_TIMEOUT_MS, for a call known to be long or short. */
+  timeoutMs?: number;
+  /**
+   * The exact shape Gemini must answer in (its `responseSchema`). JSON mode
+   * alone still let a model return malformed JSON now and then — seen on a
+   * 30-job scoring answer — and a broken answer costs the whole AI result.
+   */
+  geminiSchema?: Record<string, unknown>;
+}
+
+/**
+ * Whether a Gemini model's reasoning can be switched off. The 2.5 Flash
+ * models take a budget of 0; 2.5 Pro cannot go below its minimum, and
+ * models that don't reason may reject the setting, so it is sent to these only.
+ */
+function canSwitchOffThinking(model: string): boolean {
+  return /gemini-2\.5-flash/i.test(model);
+}
+
+/**
+ * How long a match search waits for its scores before ranking by keywords
+ * instead. 30 jobs' scores are about 2,400 tokens of answer, which without
+ * reasoning should arrive well inside this.
+ */
+const MATCH_SCORING_TIMEOUT_MS = 30_000;
+
+/** `{ scores: [{ id, score, reason }] }`, as Gemini's response schema. */
+const MATCH_SCORES_SCHEMA: Record<string, unknown> = {
+  type: 'OBJECT',
+  properties: {
+    scores: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          id: { type: 'STRING' },
+          score: { type: 'INTEGER' },
+          reason: { type: 'STRING' },
+        },
+        required: ['id', 'score', 'reason'],
+      },
+    },
+  },
+  required: ['scores'],
+};
+
+/** `{ title }`, as Gemini's response schema. */
+const JOB_TITLE_SCHEMA: Record<string, unknown> = {
+  type: 'OBJECT',
+  properties: { title: { type: 'STRING' } },
+  required: ['title'],
+};
+
+/** A job title is a short answer; the search waits on it only briefly anyway. */
+const JOB_TITLE_TIMEOUT_MS = 10_000;
+
 const TASK_ENV: Record<AiTask, string> = {
   scoring: 'AI_MODEL_SCORING',
   questions: 'AI_MODEL_QUESTIONS',
@@ -489,41 +556,95 @@ export class AiService {
       headline?: string;
       summary?: string;
       skills?: string[];
-      experiences?: { title: string; company: string }[];
+      experiences?: { title: string; company: string; period?: string }[];
     },
     jobs: { id: string; title: string; company: string; location: string; description: string }[],
   ): Promise<JobMatchScore[]> {
     if (jobs.length === 0) return [];
 
+    // Short ids in the prompt, mapped back after. JSearch's ids are 410
+    // characters, and the model has to copy each back exactly: one slip and
+    // that job's score was dropped (seen 2026-10-16: a near-perfect match
+    // fell to a keyword score), and 30 long ids made every answer longer.
+    const batch = jobs.slice(0, 30);
+    const ref = (i: number) => `j${i + 1}`;
+
     const systemPrompt = [
       'You are a technical recruiter scoring how well a candidate fits each job, based ONLY on the candidate profile and the job.',
       'Return STRICT JSON only: { "scores": [{ "id": string, "score": integer 0-100, "reason": string }] }.',
       'Include exactly one entry for every job id provided. Calibrate: 80+ strong fit, 50-79 partial fit with gaps, below 50 weak fit.',
-      'reason: one concise sentence citing the main fit signal or gap. Never invent candidate experience.',
+      'Years and seniority come only from the roles the profile lists, counted to today (given): when a job requires years or seniority the profile does not show, that is a gap.',
+      'reason: one concise sentence citing the main fit signal or gap. Describe the candidate only by what the profile states ("lists React and TypeScript", "4 years as a frontend developer"); never claim expertise, depth or experience it does not show.',
     ].join(' ');
 
     const userPrompt = JSON.stringify(
       {
+        // "Mar 2020 - Present" was counted as 4 years in October 2026: the
+        // model takes "now" from its training unless told.
+        today: new Date().toISOString().slice(0, 10),
         candidate: {
           headline: profile.headline ?? '',
           summary: profile.summary ?? '',
           skills: (profile.skills ?? []).slice(0, 20),
-          recentRoles: (profile.experiences ?? []).slice(0, 5).map((e) => `${e.title} @ ${e.company}`),
+          // With their dates ("Jan 2020 - Present"): without them, a job's
+          // "8+ years" could only be guessed at.
+          recentRoles: (profile.experiences ?? [])
+            .slice(0, 5)
+            .map((e) => `${e.title} @ ${e.company}${e.period ? ` (${e.period})` : ''}`),
         },
-        jobs: jobs.slice(0, 30).map((j) => ({
-          id: j.id,
+        jobs: batch.map((j, i) => ({
+          id: ref(i),
           title: j.title,
           company: j.company,
           location: j.location,
-          description: (j.description || '').slice(0, 800),
+          // Callers pass the part that matters (the matcher: what the job asks for).
+          description: (j.description || '').slice(0, 1000),
         })),
       },
       null,
       2,
     );
 
-    const raw = await this.complete('scoring', systemPrompt, userPrompt, { temperature: 0 });
-    return validateMatchScores(raw, jobs.slice(0, 30).map((job) => job.id));
+    // Ranking jobs against a profile is a quick comparison, not a careful
+    // judgement like interview scoring, which keeps its reasoning. The limit
+    // is the matcher's own: a search waits on this call.
+    const raw = await this.complete('scoring', systemPrompt, userPrompt, {
+      temperature: 0,
+      thinking: 'off',
+      timeoutMs: MATCH_SCORING_TIMEOUT_MS,
+      geminiSchema: MATCH_SCORES_SCHEMA,
+    });
+    return validateMatchScores(raw, batch.map((_, i) => ref(i))).map((s) => ({
+      ...s,
+      id: batch[Number(s.id.slice(1)) - 1].id,
+    }));
+  }
+
+  /**
+   * A job title as job ads in another language write it: "nurse" in German
+   * is "Pflegefachkraft". The matcher searches with both, so a keyword search
+   * also finds ads written in the local language. Only the title is sent.
+   */
+  async translateJobTitle(title: string, language: string): Promise<string> {
+    const systemPrompt = [
+      'You help a job search find ads written in another language.',
+      'Given a job title and a language, return the title that job ads in that language most often use for the same role, so a keyword search finds them.',
+      'Keep the seniority and specialism given. Leave out gender markers such as (m/w/d) or (H/F), and add nothing else.',
+      'If ads in that language usually use the title exactly as given, return it unchanged.',
+      'Return STRICT JSON only: { "title": string }.',
+    ].join(' ');
+    const raw = await this.complete('extraction', systemPrompt, JSON.stringify({ title, language }), {
+      temperature: 0,
+      thinking: 'off',
+      timeoutMs: JOB_TITLE_TIMEOUT_MS,
+      geminiSchema: JOB_TITLE_SCHEMA,
+    });
+    const local = typeof raw.title === 'string' ? raw.title.replace(/\s+/g, ' ').trim() : '';
+    // A title, not a sentence: anything else is a confused answer, not a search term.
+    if (!local || local.length > 80 || /[{}<>]/.test(local)) {
+      throw new Error(`Unusable job title translation: ${JSON.stringify(raw.title)}`);
+    }
+    return local;
   }
 
   private clampScore(n: number | null): number {
@@ -1212,7 +1333,7 @@ export class AiService {
     task: AiTask,
     systemPrompt: string,
     userPrompt: string,
-    opts: { temperature?: number } = {},
+    opts: CompletionOptions = {},
   ): Promise<Record<string, unknown>> {
     const configured = (this.configService.get<string>('AI_PROVIDER') ?? 'gemini').toLowerCase();
     const primary: AiProvider = configured === 'openai' ? 'openai' : 'gemini';
@@ -1234,7 +1355,7 @@ export class AiService {
       try {
         const model = this.modelFor(task, provider);
         return provider === 'gemini'
-          ? await this.callGeminiJson(systemPrompt, userPrompt, opts.temperature ?? 0.3, model)
+          ? await this.callGeminiJson(systemPrompt, userPrompt, opts.temperature ?? 0.3, model, opts)
           : await this.callJsonModel(
               [
                 { role: 'system', content: systemPrompt },
@@ -1242,6 +1363,7 @@ export class AiService {
               ],
               opts.temperature ?? 0.3,
               model,
+              opts.timeoutMs,
             );
       } catch (err) {
         lastError = err;
@@ -1276,12 +1398,14 @@ export class AiService {
     userPrompt: string,
     temperature = 0.3,
     modelOverride?: string,
+    opts: CompletionOptions = {},
   ): Promise<Record<string, unknown>> {
     const apiKey = this.configService.get<string>('GEMINI_API_KEY');
     const baseUrl = this.configService.get<string>('GEMINI_BASE_URL', this.defaultGeminiBaseUrl);
     const model =
       modelOverride ?? this.configService.get<string>('GEMINI_MODEL', this.defaultGeminiModel);
-    const timeoutMs = Number(this.configService.get<string>('AI_REQUEST_TIMEOUT_MS', '25000'));
+    const timeoutMs =
+      opts.timeoutMs ?? Number(this.configService.get<string>('AI_REQUEST_TIMEOUT_MS', '25000'));
 
     if (!apiKey) {
       throw new ServiceUnavailableException(
@@ -1305,6 +1429,10 @@ export class AiService {
           generationConfig: {
             temperature,
             responseMimeType: 'application/json',
+            ...(opts.geminiSchema ? { responseSchema: opts.geminiSchema } : {}),
+            ...(opts.thinking === 'off' && canSwitchOffThinking(model)
+              ? { thinkingConfig: { thinkingBudget: 0 } }
+              : {}),
           },
         }),
         signal: controller.signal,
@@ -1352,11 +1480,13 @@ export class AiService {
     messages: OpenAIMessage[],
     temperature = 0.3,
     modelOverride?: string,
+    timeoutOverrideMs?: number,
   ): Promise<Record<string, unknown>> {
     const apiKey = this.configService.get<string>('OPENAI_API_KEY');
     const baseUrl = this.configService.get<string>('OPENAI_BASE_URL', this.defaultBaseUrl);
     const model = modelOverride ?? this.configService.get<string>('OPENAI_MODEL', this.defaultModel);
-    const timeoutMs = Number(this.configService.get<string>('AI_REQUEST_TIMEOUT_MS', '25000'));
+    const timeoutMs =
+      timeoutOverrideMs ?? Number(this.configService.get<string>('AI_REQUEST_TIMEOUT_MS', '25000'));
 
     if (!apiKey) {
       throw new ServiceUnavailableException(

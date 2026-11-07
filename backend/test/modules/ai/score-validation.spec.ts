@@ -18,20 +18,48 @@ describe('AI hiring score validation', () => {
     expect(validateScreenEvaluation({ ...evaluation(), overallScore: score, recommendation }, [question]).overallScore).toBe(score);
   });
 
+  it.each(['hire', 'strong_yes', 'no', undefined])('derives the recommendation from the score, overriding the model label (%s)', (recommendation) => {
+    // The score is the source of truth. A label we never read is not worth
+    // discarding a complete scorecard over.
+    expect(validateScreenEvaluation({ ...evaluation(), overallScore: 80, recommendation }, [question]).recommendation).toBe('yes');
+  });
+
+  it('matches a reflowed echo of the question but not a different one', () => {
+    const reflowed = `  Describe a specific production\n  incident you   resolved.  `;
+    expect(validateScreenEvaluation(
+      { ...evaluation(), perAnswer: [{ question: reflowed, score: 80, note: 'Explained the rollback.' }] }, [question],
+    ).perAnswer[0].question).toBe(question);
+    expect(() => validateScreenEvaluation(
+      { ...evaluation(), perAnswer: [{ question: 'Describe a production incident you resolved.', score: 80, note: 'Good' }] }, [question],
+    )).toThrow(ServiceUnavailableException);
+  });
+
   it.each([
-    { recommendation: 'hire' }, { recommendation: 'no' }, { summary: '' }, { strengths: 'good' }, { concerns: [null] },
+    { summary: '' }, { strengths: 'good' }, { concerns: [null] },
     { perAnswer: [] }, { perAnswer: [{ question: 'Invented question', score: 80, note: 'Good' }] },
     { perAnswer: [{ question, score: null, note: 'Good' }] }, { perAnswer: [{ question, score: 80, note: '' }] },
   ])('rejects incomplete or misaligned scorecards: %j', (patch) => {
     expect(() => validateScreenEvaluation({ ...evaluation(), ...patch }, [question])).toThrow(ServiceUnavailableException);
   });
 
-  it('requires a complete, unique set of requested match IDs', () => {
+  it('keeps the usable match scores and drops the rest', () => {
     const row = { id: 'a', score: 80, reason: 'Relevant skills' };
-    for (const scores of [[], [row, row], [row, { ...row, id: 'unknown' }]]) {
+    const ids = ['a', 'b', 'c'];
+    // A duplicate, an unrequested ID, and a malformed row each cost only
+    // themselves — "b" survives all three.
+    const good = { id: 'b', score: 60, reason: 'Adjacent domain' };
+    for (const junk of [row, { ...row, id: 'invented' }, { id: 'c', score: 200, reason: 'x' }, { id: 'c' }, null, 'nope']) {
+      expect(validateMatchScores({ scores: [row, junk, good] }, ids).map((r) => r.id)).toEqual(['a', 'b']);
+    }
+    // Request order, not response order.
+    expect(validateMatchScores({ scores: [good, row] }, ids).map((r) => r.id)).toEqual(['a', 'b']);
+  });
+
+  it('still rejects a response with no usable scores at all', () => {
+    for (const scores of [[], [{ id: 'invented', score: 80, reason: 'x' }], [null], [{ id: 'a', score: -1, reason: 'x' }]]) {
       expect(() => validateMatchScores({ scores }, ['a', 'b'])).toThrow(ServiceUnavailableException);
     }
-    expect(validateMatchScores({ scores: [{ ...row, id: 'b' }, row] }, ['a', 'b']).map((r) => r.id)).toEqual(['a', 'b']);
+    expect(() => validateMatchScores({ scores: 'not-a-list' }, ['a'])).toThrow(ServiceUnavailableException);
   });
 
   it('runs validation on real AI service outputs and retains spoken/language safeguards', async () => {

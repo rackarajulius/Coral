@@ -1,9 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 import { CATEGORIES, CURRENCIES } from './dto/marketplace.dto';
+import { assertOwnMedia, isVideoFile, ownUploadedMedia } from '../community/own-media';
 export type ListingKind = 'service' | 'project';
 export type ListingReference = { type: 'service' | 'project' | 'job'; id: string };
 export const COMMON_FIELDS = ['title', 'description', 'category', 'skills', 'workMode', 'country', 'city', 'currency', 'publicConsent'];
-export const SERVICE_FIELDS = [...COMMON_FIELDS, 'deliverables', 'workSamples', 'availability', 'pricingMode', 'amountMinor'];
+export const SERVICE_FIELDS = [...COMMON_FIELDS, 'deliverables', 'workSamples', 'mediaUrls', 'availability', 'pricingMode', 'amountMinor'];
 export const PROJECT_FIELDS = [...COMMON_FIELDS, 'scope', 'budgetMode', 'minBudgetMinor', 'maxBudgetMinor', 'deadline'];
 export function safeWorkUrl(value: unknown): string | null {
   if (typeof value !== 'string' || value.length > 2048) return null;
@@ -11,6 +12,22 @@ export function safeWorkUrl(value: unknown): string | null {
     const url = new URL(value);
     return url.protocol === 'https:' && !!url.hostname && !url.username && !url.password ? url.href : null;
   } catch { return null; }
+}
+/** The most pictures a service can show; it can also have one video. */
+export const LISTING_MAX_PICTURES = 8;
+/** A service's pictures and video: the owner's own uploads (community/own-media.ts). */
+export const ownListingMedia = ownUploadedMedia;
+export const isListingVideo = isVideoFile;
+export function assertListingMedia(value: unknown, ownerUserId: string) {
+  assertOwnMedia(value, ownerUserId, { maxPictures: LISTING_MAX_PICTURES, subject: 'A service', owner: 'the listing owner' });
+}
+/**
+ * Who a published service is public to: everyone, while it is published with
+ * consent, not removed, and its owner's provider profile is complete and on.
+ * Shared with anything that links to a service, so no link leads to a 404.
+ */
+export function publicServiceWhere() {
+  return { publicConsent: true, removedAt: null, status: 'published', owner: { status: 'ACTIVE', role: { in: ['JOB_SEEKER', 'FREELANCER'] }, freelancerProfile: { is: { providerEnabled: true, publicPreviewEnabled: true, category: { in: [...CATEGORIES] }, headline: { not: '' }, summary: { not: '' }, skills: { isEmpty: false }, OR: [{ portfolioUrl: { not: '' } }, { githubUrl: { not: '' } }] } } } } as const;
 }
 export function normalizedLabels(values: string[]) {
   const seen = new Set<string>();
@@ -24,7 +41,7 @@ export function defaults(kind: ListingKind) {
   return {
     title: '', description: '', category: 'design', skills: [], normalizedSkills: [], workMode: 'remote', country: 'Canada', city: null,
     currency: 'CAD', publicConsent: false,
-    ...(kind === 'service' ? { deliverables: [], workSamples: [], availability: 'available', pricingMode: 'quote', amountMinor: null }
+    ...(kind === 'service' ? { deliverables: [], workSamples: [], mediaUrls: [], availability: 'available', pricingMode: 'quote', amountMinor: null }
       : { scope: '', budgetMode: 'negotiable', minBudgetMinor: null, maxBudgetMinor: null, deadline: null }),
   };
 }
@@ -45,7 +62,7 @@ export function validateFields(kind: ListingKind, value: Record<string, any>, pu
   if (kind === 'service') {
     labels('deliverables', 12, 300);
     if (!['available', 'limited', 'unavailable'].includes(value.availability) || !['fixed', 'hourly', 'quote'].includes(value.pricingMode) || !money(value.amountMinor)) throw new BadRequestException('Invalid service pricing or availability');
-    if (!Array.isArray(value.workSamples) || value.workSamples.length > 8 || value.workSamples.some((sample: any) => !sample || typeof sample.label !== 'string' || sample.label.length > 100 || !safeWorkUrl(sample.url) || Object.keys(sample).some(k => !['label', 'url'].includes(k)))) throw new BadRequestException('Work samples require a label and a credential-free HTTPS URL');
+    if (!Array.isArray(value.workSamples) || value.workSamples.length > 8 || value.workSamples.some((sample: any) => !sample || typeof sample.label !== 'string' || sample.label.length > 100 || !safeWorkUrl(sample.url) || Object.keys(sample).some(k => !['label', 'url', 'preview'].includes(k)))) throw new BadRequestException('Work samples require a label and a credential-free HTTPS URL');
     if (value.pricingMode === 'quote' && value.amountMinor !== null) throw new BadRequestException('Quote pricing must omit an amount');
     if (publishing && (value.pricingMode !== 'quote' && value.amountMinor === null)) throw new BadRequestException('Enter a price in minor units');
     if (publishing && (!value.deliverables.length || value.deliverables.some((label: string) => label.trim().length < 3) || !value.workSamples.length || value.workSamples.some((sample: any) => sample.label.trim().length < 3))) throw new BadRequestException('Add deliverables and relevant work samples before publication');

@@ -165,7 +165,7 @@ export default function QuestionStage({
               )}
             >
               {avatarUrl ? (
-                <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
+                <img src={avatarUrl} alt="" referrerPolicy="no-referrer" className="h-full w-full object-cover" />
               ) : (
                 <div className="grid h-full w-full place-items-center bg-gradient-to-br from-sky-400 to-blue-600 font-display text-3xl font-semibold text-white">
                   {youInitial}

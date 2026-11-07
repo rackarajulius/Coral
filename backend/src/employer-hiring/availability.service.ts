@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { profileShownFor } from '../company/company-page';
 import { NotificationsService } from '../notifications/notifications.service';
 import { User } from '../common/types/user.types';
 import { InterviewService } from './interview.service';
@@ -65,10 +66,8 @@ export class AvailabilityService {
   /** Public booking page: an employer's open future slots + company name. */
   async bookingPage(employerId: string) {
     const [employer, slots] = await Promise.all([
-      this.prisma.employerProfile.findUnique({
-        where: { userId: employerId },
-        select: { companyName: true },
-      }),
+      // The company the interviewer books for: its page's name.
+      profileShownFor(this.prisma, employerId, { companyName: true }),
       this.prisma.availabilitySlot.findMany({
         where: { employerId, status: 'open', startAt: { gt: new Date() } },
         orderBy: { startAt: 'asc' },

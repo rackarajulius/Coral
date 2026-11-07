@@ -62,6 +62,10 @@ export interface Job {
   applicationEmail?: string | null;
   /** The employer's own company info, from their profile. */
   companyProfile?: CompanyProfile | null;
+  /** Open now (true), or gathering candidates for future openings (false). Unstated: null. */
+  existingVacancy?: boolean | null;
+  /** The posting says AI is used to screen, assess or select applicants. */
+  usesAi?: boolean;
 }
 
 export const mockJobs: Job[] = [

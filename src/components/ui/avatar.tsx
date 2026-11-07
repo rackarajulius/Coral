@@ -19,7 +19,15 @@ const AvatarImage = React.forwardRef<
   React.ElementRef<typeof AvatarPrimitive.Image>,
   React.ComponentPropsWithoutRef<typeof AvatarPrimitive.Image>
 >(({ className, ...props }, ref) => (
-  <AvatarPrimitive.Image ref={ref} className={cn("aspect-square h-full w-full", className)} {...props} />
+  // Google sign-in photos (lh3.googleusercontent.com) answer 429 to every
+  // request after the first once a Referer is sent, so the initials showed
+  // instead. Without one they always load.
+  <AvatarPrimitive.Image
+    ref={ref}
+    referrerPolicy="no-referrer"
+    className={cn("aspect-square h-full w-full", className)}
+    {...props}
+  />
 ));
 AvatarImage.displayName = AvatarPrimitive.Image.displayName;
 

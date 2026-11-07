@@ -12,10 +12,12 @@ import Header from '@/components/Header';
 import ProgressSidebar from '@/components/jobSeeker/ProgressSidebar';
 import { useProfile } from '@/contexts/ProfileContext';
 import { WORK_ELIGIBILITY_OPTIONS, getWorkEligibilityOption } from '@/lib/workEligibility';
+import { CityAutocomplete } from '@/components/location/CityAutocomplete';
 
 const JobPreferences = () => {
   const { profile, updateJobPreferences, updateProfileInfo } = useProfile();
   const [jobPreferences, setJobPreferences] = useState(profile.jobPreferences);
+  const [locationDraft, setLocationDraft] = useState('');
   const [workEligibility, setWorkEligibility] = useState(profile.workEligibility);
   const [workPermitExpiry, setWorkPermitExpiry] = useState(profile.workPermitExpiry);
 
@@ -32,10 +34,12 @@ const JobPreferences = () => {
   };
 
   const addLocation = (location: string) => {
-    if (location && !jobPreferences.locations.includes(location)) {
+    const place = location.trim();
+    setLocationDraft('');
+    if (place && !jobPreferences.locations.some((l) => l.toLowerCase() === place.toLowerCase())) {
       setJobPreferences({
         ...jobPreferences,
-        locations: [...jobPreferences.locations, location]
+        locations: [...jobPreferences.locations, place]
       });
     }
   };
@@ -245,25 +249,18 @@ const JobPreferences = () => {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex gap-2">
-                <Input
-                  placeholder="Add a location..."
-                  onKeyPress={(e) => {
-                    if (e.key === 'Enter') {
-                      addLocation((e.target as HTMLInputElement).value);
-                      (e.target as HTMLInputElement).value = '';
-                    }
-                  }}
+                <CityAutocomplete
+                  className="flex-1"
+                  variant="field"
+                  aria-label="Add a preferred location"
+                  placeholder="Add a city, or type “Remote”"
+                  value={locationDraft}
+                  onChange={setLocationDraft}
+                  onSelect={(city) => addLocation(city.label)}
+                  onCommit={addLocation}
+                  near={profile.location.split(',').pop()?.trim() || undefined}
                 />
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    const input = document.querySelector('input[placeholder="Add a location..."]') as HTMLInputElement;
-                    if (input?.value) {
-                      addLocation(input.value);
-                      input.value = '';
-                    }
-                  }}
-                >
+                <Button variant="outline" onClick={() => addLocation(locationDraft)}>
                   Add
                 </Button>
               </div>

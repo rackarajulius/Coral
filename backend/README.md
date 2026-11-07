@@ -88,14 +88,25 @@ export default defineConfig({
 ### Client Initialization with Adapter
 
 ```typescript
-import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { databasePoolOptions } from './src/config/database.config';
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-const adapter = new PrismaPg(pool);
+// The adapter owns the pool and closes it on prisma.$disconnect().
+const adapter = new PrismaPg(databasePoolOptions());
 
 const prisma = new PrismaClient({ adapter });
 ```
+
+`DB_POOL_MAX` controls the application's `pg` pool and defaults to 5 connections
+per backend process. Keep the combined maximum of all processes and maintenance
+tools below the database connection budget. Prisma 7 driver adapters do not use
+the old `connection_limit` URL option to configure this pool.
+
+For Supabase, use the transaction pooler (port 6543) for `DATABASE_URL`, and keep
+the session pooler (port 5432) or a direct connection in `DIRECT_URL` for Prisma
+CLI commands. Session mode reserves a database connection for each client and
+can return `EMAXCONNSESSION` when the shared session pool fills. Restart the
+backend after changing connection settings so old pools are released.
 
 ## Setup
 

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AiService } from '../services/ai/ai.service';
 import { User } from '../common/types/user.types';
+import { JOB_COMPANY_SELECT, jobCompanyName } from './job-company-name';
 
 export interface JobMatch {
   jobId: string;
@@ -72,7 +73,7 @@ export class JobMatchService {
 
     const jobs = await this.prisma.job.findMany({
       where: { id: { in: missing }, status: 'active' },
-      select: { id: true, title: true, companyName: true, location: true, description: true, skills: true },
+      select: { id: true, title: true, location: true, description: true, skills: true, ...JOB_COMPANY_SELECT },
     });
 
     try {
@@ -86,7 +87,7 @@ export class JobMatchService {
         jobs.map((j) => ({
           id: j.id,
           title: j.title,
-          company: j.companyName ?? '',
+          company: jobCompanyName(j) ?? '',
           location: j.location ?? '',
           // Skills matter more than prose for fit; keep the payload small.
           description: [j.skills.join(', '), (j.description ?? '').slice(0, 900)]

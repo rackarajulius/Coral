@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { Check, Loader2, Sparkles, Target, X } from "lucide-react";
+import { Check, Loader2, Lock, Sparkles, Target, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
@@ -11,6 +11,9 @@ import {
   tailorResumeForJob,
   type ResumeTailoring,
 } from "@/lib/api/jobs";
+import { getMyEntitlements, refusalFor } from "@/lib/api/entitlements";
+import { isEntitlementError } from "@/lib/api/entitlementError";
+import { useUpgradePrompt } from "@/stores/upgradePromptStore";
 
 /**
  * "Where do I stand, and how do I win this?" for one job.
@@ -44,12 +47,37 @@ export default function JobFitPanel({ jobId }: { jobId: string }) {
   // A tailored resume belongs to the job it was written for.
   useEffect(() => setResult(null), [jobId]);
 
+  const queryClient = useQueryClient();
+  const showUpgrade = useUpgradePrompt((s) => s.show);
+  const { data: entitlements } = useQuery({
+    queryKey: ["entitlements"],
+    queryFn: getMyEntitlements,
+    enabled: isAuthenticated,
+    staleTime: 60_000,
+    retry: false,
+  });
+
+  /**
+   * Resume tailoring is Premium. The plans open before any request when the
+   * plan doesn't cover it; the server still refuses on its own, and that
+   * refusal opens them too.
+   */
   const tailor = async () => {
+    const refusal = refusalFor(entitlements, "assist.tailor");
+    if (refusal) {
+      showUpgrade(refusal);
+      return;
+    }
     setTailoring(true);
     try {
       setResult(await tailorResumeForJob(jobId));
+      void queryClient.invalidateQueries({ queryKey: ["entitlements"] });
     } catch (e) {
-      toast.error((e as Error).message || "Couldn't tailor your resume");
+      if (isEntitlementError(e)) {
+        showUpgrade({ code: e.code, metric: e.metric, tier: e.tier, resetsAt: e.resetsAt, message: e.message });
+      } else {
+        toast.error((e as Error).message || "Couldn't tailor your resume");
+      }
     } finally {
       setTailoring(false);
     }
@@ -142,7 +170,13 @@ export default function JobFitPanel({ jobId }: { jobId: string }) {
         <div className="mt-4 border-t border-border pt-4">
           {!result ? (
             <Button variant="outline" size="sm" onClick={tailor} disabled={tailoring} className="gap-1.5">
-              {tailoring ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+              {tailoring ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : refusalFor(entitlements, "assist.tailor") ? (
+                <Lock className="h-3.5 w-3.5" aria-label="Premium" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5" />
+              )}
               {tailoring ? "Tailoring…" : "Tailor my resume for this job"}
             </Button>
           ) : (

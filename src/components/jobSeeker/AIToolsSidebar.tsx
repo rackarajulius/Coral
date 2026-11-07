@@ -78,8 +78,8 @@ const AIToolsSidebar = () => {
             <FileSearch className="w-4 h-4 text-green-600 dark:text-green-400" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-gray-900 dark:text-white">Match your resume</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400 truncate">See how you score against a job</p>
+            <p className="text-sm font-medium text-gray-900 dark:text-white">AI Job Match</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 truncate">Jobs ranked against your resume</p>
           </div>
           <ChevronRight className="w-4 h-4 text-gray-400 group-hover:text-green-600 dark:group-hover:text-green-400 group-hover:translate-x-0.5 transition-all flex-shrink-0" />
         </Link>

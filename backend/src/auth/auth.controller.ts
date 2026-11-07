@@ -15,7 +15,8 @@ import { RolesGuard } from './guards/roles.guard';
 import { Public } from '../common/decorators/public.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { User } from '../common/types/user.types';
-import { UserRole } from '@prisma/client';
+import { CompanyMemberStatus, UserRole } from '@prisma/client';
+import { CompanyContextService } from '../company/company-context.service';
 import { Equals, IsEnum, IsObject, IsOptional, IsUUID, ValidateIf } from 'class-validator';
 
 class CloseAccountDto {
@@ -46,6 +47,7 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly accountClosure: AccountClosureService,
+    private readonly companyContext: CompanyContextService,
   ) {}
 
   /**
@@ -68,11 +70,20 @@ export class AuthController {
   async getCurrentUser(@CurrentUser() user: User) {
     // User is already properly set up by JwtAuthGuard.getOrCreateUser()
     // which handles admin role assignment based on DEFAULT_ADMIN_EMAIL
+    //
+    // `company` is the seat this person acts for a company through, if any.
+    // With one account for everything, the account type no longer says
+    // whether someone may open the company dashboard — a seat does.
+    const seat = await this.companyContext.membershipFor(user.id);
+    const company =
+      seat?.status === CompanyMemberStatus.ACTIVE
+        ? { id: seat.company.id, name: seat.company.name, role: seat.role }
+        : null;
     return {
       success: true,
       message: 'Authenticated user retrieved',
       data: {
-        user,
+        user: { ...user, company },
         isNewUser: user.status === 'PENDING_ONBOARDING',
       },
     };

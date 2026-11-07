@@ -11,6 +11,7 @@ import { VerificationStatus, VerificationType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../services/email/email.service';
 import { extractDomain, isFreeEmailDomain } from '../employers/utils/email-domain.util';
+import { IS_PAGE } from '../company/company-page';
 
 /** How long a code is good for. Long enough to find the email, short enough to matter. */
 const CODE_TTL_MINUTES = 15;
@@ -232,7 +233,8 @@ export class WorkEmailService {
 
     // 2. An employer on Coral declared this domain as their website.
     const employer = await this.prisma.employerProfile.findFirst({
-      where: { companyWebsite: { contains: domain, mode: 'insensitive' } },
+      // A company's page, not a member's copy of it.
+      where: { AND: [IS_PAGE, { companyWebsite: { contains: domain, mode: 'insensitive' } }] },
       select: { companyName: true, companyWebsite: true },
     });
     if (

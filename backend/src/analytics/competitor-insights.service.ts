@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
+import { profileShownFor, seatPage, shownProfile } from '../company/company-page';
 import { LIVE_JOB_STATUSES } from '../jobs/job-lifecycle.service';
 import { RoleSimilarity, roleSimilarity, skillSet, titleTokens } from '../common/job-text';
 import { User } from '../common/types/user.types';
@@ -35,14 +36,20 @@ interface OtherJobRow extends JobRow {
   companyName: string | null;
   companyLogo: string | null;
   postedBy: {
-    employerProfile: {
-      id: string;
-      companyId: string | null;
-      companyName: string;
-      companyLogo: string | null;
-    } | null;
+    employerProfile: OtherEmployer | null;
+    /** The poster's company page, which their jobs are shown under (seatPage). */
+    companyMemberships?: Array<{ company: { page: OtherEmployer | null } | null }>;
   } | null;
 }
+
+interface OtherEmployer {
+  id: string;
+  companyId: string | null;
+  companyName: string;
+  companyLogo: string | null;
+}
+
+const OTHER_EMPLOYER = { id: true, companyId: true, companyName: true, companyLogo: true } as const;
 
 /**
  * Who else on Coral is hiring for roles like yours.
@@ -81,10 +88,7 @@ export class CompetitorInsightsService {
         orderBy: [{ publishedAt: 'desc' }, { createdAt: 'desc' }],
         take: MAX_OWN_ROLES,
       }),
-      this.prisma.employerProfile.findUnique({
-        where: { userId: user.id },
-        select: { companyName: true },
-      }),
+      profileShownFor(this.prisma, user.id, { companyName: true }),
     ]);
 
     const note =
@@ -110,9 +114,8 @@ export class CompetitorInsightsService {
         companyLogo: true,
         postedBy: {
           select: {
-            employerProfile: {
-              select: { id: true, companyId: true, companyName: true, companyLogo: true },
-            },
+            employerProfile: { select: OTHER_EMPLOYER },
+            ...seatPage(OTHER_EMPLOYER),
           },
         },
       },
@@ -235,7 +238,8 @@ export class CompetitorInsightsService {
   }
 
   private companyOf(job: OtherJobRow) {
-    const profile = job.postedBy?.employerProfile ?? null;
+    // The poster's company page, so one company's teammates count as one.
+    const profile = shownProfile(job.postedBy);
     // An admin's manual override names a company that has no account here.
     if (job.companyName) {
       return {

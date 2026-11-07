@@ -1,9 +1,12 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
+import { useAuth } from '@/contexts/AuthContext';
 import { useProfile } from '@/contexts/ProfileContext';
 import { uploadAvatar, deleteAvatar } from '@/lib/api/jobSeekerProfile';
 
-const MAX_AVATAR_SIZE = 5 * 1024 * 1024; // 5MB
+// Resized to 400px before upload (lib/imageResize), so a photo straight off
+// a phone is fine.
+const MAX_AVATAR_SIZE = 25 * 1024 * 1024;
 
 /**
  * Single source of truth for profile-photo changes. Both the profile hero and
@@ -14,6 +17,9 @@ const MAX_AVATAR_SIZE = 5 * 1024 * 1024; // 5MB
  */
 export function useAvatarUpload() {
   const { updateProfileInfo } = useProfile();
+  // The profile photo is also the account photo (the header, posts, chat), so
+  // the signed-in user is re-read after every change.
+  const { refreshUser } = useAuth();
   const [uploading, setUploading] = useState(false);
 
   const upload = async (file: File | undefined | null) => {
@@ -23,7 +29,7 @@ export function useAvatarUpload() {
       return;
     }
     if (file.size > MAX_AVATAR_SIZE) {
-      toast.error('Photo must be under 5MB');
+      toast.error('Photo must be under 25MB');
       return;
     }
 
@@ -31,6 +37,7 @@ export function useAvatarUpload() {
     try {
       const url = await uploadAvatar(file);
       updateProfileInfo({ avatarUrl: url });
+      void refreshUser().catch(() => undefined);
       toast.success('Profile photo updated');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to upload photo');
@@ -44,6 +51,7 @@ export function useAvatarUpload() {
     try {
       await deleteAvatar();
       updateProfileInfo({ avatarUrl: undefined });
+      void refreshUser().catch(() => undefined);
       toast.success('Profile photo removed');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to remove photo');

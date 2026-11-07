@@ -28,13 +28,14 @@ import {
 } from '@/components/ui/select';
 import { useProfile, PortfolioItem } from '@/contexts/ProfileContext';
 import { uploadPortfolioImage } from '@/lib/api/jobSeekerProfile';
+import { FEATURED_LINK_VERB } from './FeaturedWork';
 
-/** What the link is called, per kind of item. */
-const LINK_COPY: Record<PortfolioItem['type'], { label: string; placeholder: string; open: string }> = {
-  project: { label: 'Link', placeholder: 'e.g., github.com/username/project', open: 'View project' },
-  video: { label: 'Video link', placeholder: 'e.g., youtube.com/watch?v=abc123', open: 'Watch' },
-  document: { label: 'Document link', placeholder: 'e.g., drive.google.com/file/...', open: 'Open document' },
-  design: { label: 'Design link', placeholder: 'e.g., figma.com/file/...', open: 'View design' },
+/** What the link field is called, per kind of item. What the link says is FEATURED_LINK_VERB, shared with visitors' view. */
+const LINK_COPY: Record<PortfolioItem['type'], { label: string; placeholder: string }> = {
+  project: { label: 'Link', placeholder: 'e.g., github.com/username/project' },
+  video: { label: 'Video link', placeholder: 'e.g., youtube.com/watch?v=abc123' },
+  document: { label: 'Document link', placeholder: 'e.g., drive.google.com/file/...' },
+  design: { label: 'Design link', placeholder: 'e.g., figma.com/file/...' },
 };
 
 interface ValidationErrors {
@@ -140,9 +141,9 @@ const PortfolioSection = () => {
       return;
     }
 
-    // Validate file size (max 5MB)
-    if (file.size > 5 * 1024 * 1024) {
-      setErrors(prev => ({ ...prev, image: 'Image must be less than 5MB' }));
+    // Resized before upload (lib/imageResize), so only the truly huge are refused.
+    if (file.size > 25 * 1024 * 1024) {
+      setErrors(prev => ({ ...prev, image: 'Image must be less than 25MB' }));
       return;
     }
 
@@ -324,7 +325,7 @@ const PortfolioSection = () => {
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline mt-2"
                   >
-                    {LINK_COPY[item.type].open}
+                    {FEATURED_LINK_VERB[item.type]}
                     <ExternalLink className="w-2.5 h-2.5" aria-hidden="true" />
                   </a>
                 )}
@@ -485,7 +486,7 @@ const PortfolioSection = () => {
                     <>
                       <ImageIcon className="w-6 h-6" aria-hidden="true" />
                       <span className="text-xs">Click to upload image</span>
-                      <span className="text-xs text-gray-400">Max 5MB</span>
+                      <span className="text-xs text-gray-400">Max 25MB · resized for you</span>
                     </>
                   )}
                 </button>

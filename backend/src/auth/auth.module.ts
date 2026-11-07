@@ -3,11 +3,13 @@ import { APP_GUARD } from '@nestjs/core';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { AccountClosureService } from './account-closure.service';
+import { ProviderAvatarService } from './provider-avatar.service';
 import { StorageModule } from '../storage/storage.module';
 import { StripeClient } from '../billing/stripe.client';
 import { IntegrationsModule } from '../integrations/integrations.module';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
+import { SelfReviewGuard } from '../company/self-review.guard';
 
 @Global()
 @Module({
@@ -16,6 +18,7 @@ import { RolesGuard } from './guards/roles.guard';
   providers: [
     AuthService,
     AccountClosureService,
+    ProviderAvatarService,
     StripeClient,
     // Register guards globally
     {
@@ -25,6 +28,12 @@ import { RolesGuard } from './guards/roles.guard';
     {
       provide: APP_GUARD,
       useClass: RolesGuard,
+    },
+    // After RolesGuard: refuses company-side actions on the caller's own
+    // candidacy, for routes marked @AboutCandidate.
+    {
+      provide: APP_GUARD,
+      useClass: SelfReviewGuard,
     },
   ],
   exports: [AuthService],

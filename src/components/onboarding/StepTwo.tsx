@@ -1,13 +1,32 @@
-import { MapPin } from 'lucide-react';
+import { useState } from 'react';
+import { X } from 'lucide-react';
 import type { FormData } from '../../data/onboarding/types';
 import FieldLabel from './FieldLabel';
 import BrandInput from './BrandInput';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
+import { CityAutocomplete } from '@/components/location/CityAutocomplete';
+import { BRAND_LOCATION_INPUT_CLASSES } from './brandStyles';
+
+/** Enough to say where you'd work without turning the list into a wish list. */
+const MAX_PLACES = 10;
 
 const WORK_TYPES = ['Remote', 'Hybrid', 'Onsite'];
 const EMPLOYMENT_TYPES = ['Full Time', 'Part Time', 'Contract', 'Internship'];
 
 const StepTwo = ({ data, set }: { data: FormData; set: (d: Partial<FormData>) => void }) => {
+  const [draft, setDraft] = useState('');
+
+  /**
+   * Adds a place to the list. They used to be typed as one comma-separated
+   * line, which a picked "Toronto, ON" would have split into "Toronto" and "ON".
+   */
+  const addPlace = (place: string) => {
+    const p = place.trim();
+    setDraft('');
+    if (!p || data.locations.some((l) => l.toLowerCase() === p.toLowerCase())) return;
+    set({ locations: [...data.locations, p].slice(0, MAX_PLACES) });
+  };
+
   const renderSelect = (
     key: 'workTypes' | 'employment',
     label: string,
@@ -68,16 +87,36 @@ const StepTwo = ({ data, set }: { data: FormData; set: (d: Partial<FormData>) =>
 
       <div className="space-y-2">
         <FieldLabel htmlFor="locs">Preferred Locations</FieldLabel>
-        <div className="relative">
-          <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-          <BrandInput
-            id="locs"
-            className="pl-11"
-            placeholder="San Francisco, New York, Remote"
-            value={data.locations}
-            onChange={(e) => set({ locations: e.target.value })}
-          />
-        </div>
+        <CityAutocomplete
+          id="locs"
+          variant="field"
+          inputClassName={BRAND_LOCATION_INPUT_CLASSES}
+          near={data.countryHint || undefined}
+          placeholder="Add a city, or type “Remote” and press Enter"
+          value={draft}
+          onChange={setDraft}
+          onSelect={(city) => addPlace(city.label)}
+          onCommit={addPlace}
+        />
+        {data.locations.length > 0 && (
+          <ul className="flex flex-wrap gap-2 pt-1" aria-label="Preferred locations">
+            {data.locations.map((place) => (
+              <li key={place}>
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-sm text-foreground">
+                  {place}
+                  <button
+                    type="button"
+                    onClick={() => set({ locations: data.locations.filter((p) => p !== place) })}
+                    aria-label={`Remove ${place}`}
+                    className="rounded-full text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );

@@ -18,6 +18,8 @@ export interface MetricStatus {
   limit: number | null;
   /** When the allowance comes back. Null when unlimited or not included. */
   resetsAt: string | null;
+  /** Whether this limit is applied yet: Premium features go live one at a time. */
+  enforced?: boolean;
   allowed: boolean;
   reason: "PREMIUM_REQUIRED" | "ALLOWANCE_EXHAUSTED" | null;
 }
@@ -25,8 +27,10 @@ export interface MetricStatus {
 export interface Entitlements {
   tier: "free" | "premium";
   /**
-   * False while Premium isn't being charged for. Limits are measured and
-   * shown, but nothing is refused — the UI must not imply otherwise.
+   * Whether EVERY limit is applied. Features go live one at a time (web job
+   * matching first), so ask `limitApplied` about the one at hand. Where a
+   * limit isn't applied it is measured and shown, but nothing is refused —
+   * the UI must not imply otherwise.
    */
   enforced: boolean;
   metrics: MetricStatus[];
@@ -48,6 +52,11 @@ export function metricOf(e: Entitlements | undefined, metric: SeekerMetric) {
   return e?.metrics.find((m) => m.metric === metric);
 }
 
+/** Whether a feature's limit is applied yet (a server without per-feature flags answers for all). */
+export function limitApplied(e: Entitlements | undefined, m: MetricStatus | undefined): boolean {
+  return m?.enforced ?? e?.enforced ?? false;
+}
+
 /** Mid-sentence names, matching the server's refusal wording. */
 const NOUNS: Record<SeekerMetric, string> = {
   "coach.session": "AI interviews",
@@ -65,7 +74,7 @@ const NOUNS: Record<SeekerMetric, string> = {
  */
 export function refusalFor(e: Entitlements | undefined, metric: SeekerMetric) {
   const m = metricOf(e, metric);
-  if (!e?.enforced || !m || m.allowed || !m.reason) return null;
+  if (!e || !m || !limitApplied(e, m) || m.allowed || !m.reason) return null;
   const period = m.window === "day" ? "today's" : "this month's";
   const message =
     m.reason === "PREMIUM_REQUIRED"

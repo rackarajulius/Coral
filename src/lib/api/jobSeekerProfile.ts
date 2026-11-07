@@ -1,4 +1,9 @@
 import supabase from "@/lib/supabase";
+import { fitImage, IMAGE_SIZES } from "@/lib/imageResize";
+import { splitLocation, type LocationParts } from "@/lib/location/places";
+
+/** Re-exported where they always were; they live with the other place helpers. */
+export { splitLocation, type LocationParts };
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001/api/v1";
 
@@ -268,7 +273,7 @@ export function reportTimezone(userId: string): void {
 /** Uploads a profile photo (avatar); returns its public URL. */
 export async function uploadAvatar(file: File): Promise<string> {
   const form = new FormData();
-  form.append("file", file);
+  form.append("file", await fitImage(file, IMAGE_SIZES.avatar));
   const res = await fetch(`${API_BASE_URL}/job-seekers/me/avatar`, {
     method: "POST",
     headers: await authHeaderOnly(),
@@ -291,7 +296,7 @@ export async function deleteAvatar(): Promise<void> {
 /** Uploads a banner image; returns its public URL. */
 export async function uploadBanner(file: File): Promise<string> {
   const form = new FormData();
-  form.append("file", file);
+  form.append("file", await fitImage(file, IMAGE_SIZES.banner));
   const res = await fetch(`${API_BASE_URL}/job-seekers/me/banner`, {
     method: "POST",
     headers: await authHeaderOnly(),
@@ -311,7 +316,7 @@ export async function uploadBanner(file: File): Promise<string> {
  */
 export async function uploadPortfolioImage(file: File): Promise<string> {
   const form = new FormData();
-  form.append("file", file);
+  form.append("file", await fitImage(file, IMAGE_SIZES.post));
   const res = await fetch(`${API_BASE_URL}/job-seekers/me/portfolio/image`, {
     method: "POST",
     headers: await authHeaderOnly(),
@@ -531,42 +536,6 @@ export function mapServerProfileToSyncedFields(
       keywords: Array.isArray(server.keywords) ? server.keywords : [],
     },
   };
-}
-
-export interface LocationParts {
-  city: string;
-  state: string;
-  country: string;
-}
-
-/**
- * "Kampala, Uganda" → the three columns the backend stores it in.
- *
- * The profile edits location as one line, which is how people write it, and the
- * backend keeps city/state/country separately so employers can filter on them.
- * One comma is read as city + country, two as city + state + country, since
- * that is the order those are written in. Anything past the third is kept with
- * the country rather than dropped, and the split reverses the join in
- * `mapServerProfileToSyncedFields` exactly, so a value survives a round trip
- * untouched.
- *
- * It cannot be lossless on its own, though, and that is why callers should pass
- * the parts they loaded rather than the joined text when nothing was edited.
- * A profile holding only `country: "Canada"` renders as "Canada", and reading
- * that back gives `city: "Canada"` — one comma-free word is far more often a
- * city than a country, so the guess is right in general and wrong exactly here.
- * Re-splitting unchanged text would quietly migrate the value between columns.
- *
- * Previously this field went nowhere at all: it was seeded to "Kampala,
- * Uganda", never loaded, and never saved — so it was wrong for almost everyone
- * and editing it changed nothing.
- */
-export function splitLocation(location: string): LocationParts {
-  const parts = location.split(",").map((p) => p.trim()).filter(Boolean);
-  if (parts.length === 0) return { city: "", state: "", country: "" };
-  if (parts.length === 1) return { city: parts[0], state: "", country: "" };
-  if (parts.length === 2) return { city: parts[0], state: "", country: parts[1] };
-  return { city: parts[0], state: parts[1], country: parts.slice(2).join(", ") };
 }
 
 /** ProfileContext fields → the PATCH payload. */

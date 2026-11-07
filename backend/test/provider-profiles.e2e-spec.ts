@@ -189,9 +189,9 @@ describe('Phase 1 provider profiles API (isolated PostgreSQL)', () => {
       expect(JSON.stringify(profile)).not.toContain('private-contact@example.test');
       expect(JSON.stringify(profile)).not.toContain('private-resume.pdf');
     }
-    expect((await request('GET', '/freelancers/me/profile', actor.id)).data).toMatchObject({
-      completedProjects: 99, rating: 4.9, totalEarnings: 100_000, statisticsProvenance: 'legacy_self_declared',
-    });
+    // Self-declared, never measured: not even the owner is shown them as figures.
+    const own = (await request('GET', '/freelancers/me/profile', actor.id)).data;
+    for (const field of ['completedProjects', 'rating', 'totalEarnings', 'statisticsProvenance']) expect(own).not.toHaveProperty(field);
   });
 
   it('requires provider capability before publishing and preserves a published profile on an incomplete edit', async () => {
@@ -268,7 +268,8 @@ describe('Phase 1 provider profiles API (isolated PostgreSQL)', () => {
       skills: ['Design'], expertise: [], portfolioUrl: 'https://work.example.test/legacy', completedProjects: 7, rating: 4.5,
     } });
     const legacy = (await request('GET', '/freelancers/me/profile', actor.id)).data;
-    expect(legacy).toMatchObject({ providerEnabled: false, publicPreviewEnabled: false, completedProjects: 7, statisticsProvenance: 'legacy_self_declared' });
+    expect(legacy).toMatchObject({ providerEnabled: false, publicPreviewEnabled: false });
+    expect(legacy).not.toHaveProperty('completedProjects');
     await request('GET', `/freelancers/${actor.id}`, null, undefined, 404);
     await publish(actor.id, `legacy-${randomUUID()}`, 'design');
     expect((await request('GET', `/freelancers/${actor.id}`)).data.category).toBe('design');

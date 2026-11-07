@@ -89,7 +89,7 @@ export function ProfileViewersDialog({
                 className="flex items-center gap-3 rounded-lg px-1 py-2.5"
               >
                 {viewer.avatarUrl ? (
-                  <img src={viewer.avatarUrl} alt="" className="h-10 w-10 rounded-full object-cover" />
+                  <img src={viewer.avatarUrl} alt="" referrerPolicy="no-referrer" className="h-10 w-10 rounded-full object-cover" />
                 ) : (
                   <span
                     aria-hidden="true"

@@ -1,16 +1,18 @@
 import { useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ImagePlus, Loader2, MessagesSquare, Users } from "lucide-react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
+import { PostListSkeleton, SpaceViewSkeleton } from "./skeletons";
 import { useAuth } from "@/contexts/AuthContext";
+import { useAuthModal } from "@/contexts/AuthModalContext";
+import { useSpaceMembership } from "./useSpaceMembership";
 import { PostComposer } from "./PostComposer";
 import { FeedPost } from "./FeedPost";
 import {
-  getSpace, joinSpace, leaveSpace, listPosts, setSpaceBanner, uploadPostMedia,
+  getSpace, initials, listPosts, setSpaceBanner, uploadPostMedia,
   type SpaceDetail,
 } from "@/lib/api/community";
 
@@ -23,7 +25,13 @@ import {
  * stays put and there is nothing to press "back" from.
  */
 export function SpaceView({ slug }: { slug: string }) {
+  // Keyed on the slug by the caller, so another space always opens on page 1.
   const [page, setPage] = useState(1);
+  const goToPage = (next: number) => {
+    setPage(next);
+    // The buttons sit under the last post; the next page starts at the top.
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   const space = useQuery({
     queryKey: ["space", slug],
@@ -40,16 +48,26 @@ export function SpaceView({ slug }: { slug: string }) {
 
   return (
     <>
-      {space.isLoading && <Skeleton className="h-52 rounded-2xl" />}
+      {space.isLoading && <SpaceViewSkeleton />}
 
       {space.isError && (
         <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 p-5">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
           <div>
-            <p className="text-sm font-medium text-destructive">Space not found</p>
-            <p className="mt-1 text-sm text-destructive/90">
-              It may have been retired for having no activity.
+            <p className="text-sm font-medium text-destructive">
+              {/not found/i.test((space.error as Error).message) ? "Space not found" : "Couldn't load this space"}
             </p>
+            <p className="mt-1 text-sm text-destructive/90">
+              {/not found/i.test((space.error as Error).message)
+                ? "It may have been retired for having no activity."
+                : (space.error as Error).message}
+            </p>
+            <div className="mt-3 flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => void space.refetch()}>Try again</Button>
+              <Button asChild variant="ghost" size="sm">
+                <Link to="/community/search?tab=spaces">Browse spaces</Link>
+              </Button>
+            </div>
           </div>
         </div>
       )}
@@ -62,11 +80,7 @@ export function SpaceView({ slug }: { slug: string }) {
             <PostComposer spaceId={space.data.id} spaceName={space.data.name} />
           </div>
 
-          {posts.isLoading && (
-            <div className="space-y-4">
-              {[0, 1].map((i) => <Skeleton key={i} className="h-40 rounded-2xl" />)}
-            </div>
-          )}
+          {posts.isLoading && <PostListSkeleton count={2} />}
 
           {posts.data?.data.length === 0 && (
             <div className="rounded-2xl border border-dashed border-border p-10 text-center">
@@ -84,7 +98,7 @@ export function SpaceView({ slug }: { slug: string }) {
             </div>
           )}
 
-          <div className="space-y-4">
+          <div className="space-y-2">
             {posts.data?.data.map((post) => <FeedPost key={post.id} post={post} />)}
           </div>
 
@@ -93,7 +107,7 @@ export function SpaceView({ slug }: { slug: string }) {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setPage((p) => Math.max(p - 1, 1))}
+                onClick={() => goToPage(Math.max(page - 1, 1))}
                 disabled={page <= 1 || posts.isFetching}
               >
                 Previous
@@ -104,7 +118,7 @@ export function SpaceView({ slug }: { slug: string }) {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setPage((p) => p + 1)}
+                onClick={() => goToPage(page + 1)}
                 disabled={page >= posts.data.meta.totalPages || posts.isFetching}
               >
                 Next
@@ -121,6 +135,7 @@ export function SpaceView({ slug }: { slug: string }) {
 
 function SpaceHeader({ space, slug }: { space: SpaceDetail; slug: string }) {
   const { user } = useAuth();
+  const { requireAuth } = useAuthModal();
   const queryClient = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -130,11 +145,8 @@ function SpaceHeader({ space, slug }: { space: SpaceDetail; slug: string }) {
     void queryClient.invalidateQueries({ queryKey: ["community-spaces"] });
   };
 
-  const toggle = useMutation({
-    mutationFn: (join: boolean) => (join ? joinSpace(space.id) : leaveSpace(space.id)),
-    onSuccess: refresh,
-    onError: (e) => toast.error((e as Error).message),
-  });
+  // The shared hook, so joining here also refreshes the "My spaces" feed.
+  const toggle = useSpaceMembership(space);
 
   /**
    * The banner goes through the normal media upload, so it is byte-checked and
@@ -205,17 +217,17 @@ function SpaceHeader({ space, slug }: { space: SpaceDetail; slug: string }) {
         )}
       </div>
 
-      {user && (
-        <Button
-          size="sm"
-          variant={space.joined ? "outline" : "default"}
-          onClick={() => toggle.mutate(!space.joined)}
-          disabled={toggle.isPending}
-        >
-          {toggle.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
-          {space.joined ? "Leave" : "Join"}
-        </Button>
-      )}
+      {/* Signed out, Join asks for a sign-in first rather than vanishing. */}
+      <Button
+        size="sm"
+        variant={space.joined ? "outline" : "default"}
+        className="rounded-full px-5"
+        onClick={() => requireAuth(() => toggle.mutate(!space.joined))}
+        disabled={toggle.isPending}
+      >
+        {toggle.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+        {user && space.joined ? "Leave" : "Join"}
+      </Button>
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground">
@@ -245,7 +257,7 @@ function SpaceHeader({ space, slug }: { space: SpaceDetail; slug: string }) {
               <Avatar className="h-5 w-5">
                 <AvatarImage src={m.avatarUrl ?? ""} alt="" />
                 <AvatarFallback className="bg-primary/10 text-[8px] text-primary">
-                  {m.name.split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? "").join("")}
+                  {initials(m.name)}
                 </AvatarFallback>
               </Avatar>
               <span className="text-xs">{m.name}</span>
@@ -255,13 +267,6 @@ function SpaceHeader({ space, slug }: { space: SpaceDetail; slug: string }) {
       </div>
         )}
 
-        {/* Only where it is both allowed and meaningful — the server decides,
-        because only it knows the member count. */}
-        {space.anonymityAvailable && (
-      <p className={cn("mt-3 text-xs text-muted-foreground")}>
-        This space is large enough to post without your name attached.
-      </p>
-        )}
       </div>
     </div>
   );

@@ -45,6 +45,7 @@ import { SubmitScreenDto } from './dto/submit-screen.dto';
 import { AddSlotsDto } from './dto/add-slots.dto';
 import { CompanyCapabilityGuard, RequiresCapability } from '../company/company-capability.guard';
 import { ProfileImpressionsService } from '../job-seekers/profile-impressions.service';
+import { AboutCandidate } from '../company/self-review.guard';
 
 @Controller('employers/hiring')
 @UseGuards(JwtAuthGuard, RolesGuard, CompanyCapabilityGuard)
@@ -66,7 +67,7 @@ export class HiringController {
   /** Sources & AI-ranks candidates from the opt-in talent pool for a role. */
   @Post('candidates')
   async candidates(@CurrentUser() user: User, @Body() dto: SourceCandidatesDto) {
-    const data = await this.sourcing.source(dto);
+    const data = await this.sourcing.source(dto, user.id);
     // Everyone who came back was actually shown to an employer, which is what
     // "search appearance" means on their profile. Deduped per viewer per day,
     // so re-running the same search all afternoon counts once.
@@ -74,6 +75,18 @@ export class HiringController {
     // Counted after it succeeds, so a vendor outage is not billed as usage.
     void this.billing.record(user.id, 'ai.search');
     return { success: true, data };
+  }
+
+  /**
+   * A search for people like this one. Returns the query, not results: the
+   * workspace runs it like any other, so it can be read, edited and saved.
+   */
+  @Get('candidates/:candidateId/similar')
+  async similarCandidates(
+    @CurrentUser() user: User,
+    @Param('candidateId', ParseUUIDPipe) candidateId: string,
+  ) {
+    return { success: true, data: await this.sourcing.similarTo(user.id, candidateId) };
   }
 
   /** Copilot: turns a NL chat message into a grounded reply + next action. */
@@ -158,6 +171,7 @@ export class HiringController {
 
   /** Upserts one shortlist item — add to pipeline, move stage, or save/unsave. */
   @RequiresCapability('candidates:write')
+  @AboutCandidate('candidate', 'params.candidateId')
   @Put('shortlists/:id/items/:candidateId')
   async upsertShortlistItem(
     @CurrentUser() user: User,
@@ -184,6 +198,7 @@ export class HiringController {
    * anyone's stage.
    */
   @RequiresCapability('candidates:write')
+  @AboutCandidate('shortlistItem', 'params.itemId')
   @Patch('shortlist-items/:itemId/project')
   async moveItemToProject(
     @CurrentUser() user: User,
@@ -197,6 +212,7 @@ export class HiringController {
   }
 
   @RequiresCapability('candidates:write')
+  @AboutCandidate('shortlistItem', 'params.itemId')
   @Patch('shortlist-items/:itemId/stage')
   async moveShortlistItem(
     @CurrentUser() user: User,
@@ -207,6 +223,7 @@ export class HiringController {
   }
 
   @RequiresCapability('candidates:write')
+  @AboutCandidate('candidate', 'params.candidateId')
   @Delete('shortlists/:id/items/:candidateId')
   async removeShortlistItem(
     @CurrentUser() user: User,
@@ -253,6 +270,7 @@ export class HiringController {
    * A rule over their own browser's timezone — see outreach-timing.ts.
    */
   @RequiresCapability('candidates:read')
+  @AboutCandidate('candidate', 'params.candidateId')
   @Get('outreach/timing/:candidateId')
   async outreachTiming(@Param('candidateId', ParseUUIDPipe) candidateId: string) {
     return { success: true, data: await this.outreach.timing(candidateId) };
@@ -280,6 +298,7 @@ export class HiringController {
 
   /** Every approach this company has made to one person, and what came back. */
   @RequiresCapability('candidates:read')
+  @AboutCandidate('candidate', 'params.candidateId')
   @Get('outreach/candidate/:candidateId')
   async outreachForCandidate(
     @CurrentUser() user: User,
@@ -290,6 +309,7 @@ export class HiringController {
 
   /** Proposes an interview (time slots) to a candidate. */
   @RequiresCapability('interviews:write')
+  @AboutCandidate('candidate', 'body.candidateId')
   @Post('interviews')
   async proposeInterview(@CurrentUser() user: User, @Body() dto: ProposeInterviewDto) {
     // New candidate-facing invitations require the same verification as outreach.
@@ -305,6 +325,7 @@ export class HiringController {
 
   /** Cancels a proposed/confirmed interview. */
   @RequiresCapability('interviews:write')
+  @AboutCandidate('interview', 'params.id')
   @Post('interviews/:id/cancel')
   async cancelInterview(@CurrentUser() user: User, @Param('id', ParseUUIDPipe) id: string) {
     return { success: true, data: await this.interviews.cancel(user, id) };
@@ -312,6 +333,7 @@ export class HiringController {
 
   /** Logs a post-interview scorecard (private) + a candidate-visible outcome. */
   @RequiresCapability('interviews:write')
+  @AboutCandidate('interview', 'params.id')
   @Post('interviews/:id/scorecard')
   async submitScorecard(
     @CurrentUser() user: User,
@@ -322,6 +344,7 @@ export class HiringController {
   }
 
   /** The employer's private scorecard + outcome for one interview. */
+  @AboutCandidate('interview', 'params.id')
   @Get('interviews/:id/scorecard')
   async getScorecard(@CurrentUser() user: User, @Param('id', ParseUUIDPipe) id: string) {
     return { success: true, data: await this.interviews.getScorecard(user, id) };
@@ -329,6 +352,7 @@ export class HiringController {
 
   /** Invites a candidate to an async AI screening (generates questions). */
   @RequiresCapability('candidates:write')
+  @AboutCandidate('candidate', 'body.candidateId')
   @Post('ai-screens')
   async inviteScreen(@CurrentUser() user: User, @Body() dto: InviteScreenDto) {
     if (user.role !== UserRole.ADMIN) await this.verification.assertCanReachCandidates(user.id);
@@ -342,6 +366,7 @@ export class HiringController {
   }
 
   /** Full scorecard for one completed screening. */
+  @AboutCandidate('aiScreen', 'params.id')
   @Get('ai-screens/:id')
   async getScreen(@CurrentUser() user: User, @Param('id', ParseUUIDPipe) id: string) {
     return { success: true, data: await this.screens.getForEmployer(user, id) };
@@ -352,6 +377,7 @@ export class HiringController {
    * A message to the candidate on the company's behalf — not a read.
    */
   @RequiresCapability('candidates:write')
+  @AboutCandidate('aiScreen', 'params.id')
   @Post('ai-screens/:id/accommodations/acknowledge')
   async acknowledgeAccommodations(
     @CurrentUser() user: User,

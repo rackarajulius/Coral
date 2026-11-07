@@ -23,7 +23,8 @@ export type ScheduledTaskType =
   | "STALE_APPLICATIONS"
   | "INTERVIEWS_WITHOUT_OUTCOME"
   | "WEEKLY_SUMMARY"
-  | "SAVED_SEARCH_MATCHES";
+  | "SAVED_SEARCH_MATCHES"
+  | "SAVED_NOT_CONTACTED";
 
 export type TaskCadence = "DAILY" | "WEEKDAYS" | "WEEKLY";
 

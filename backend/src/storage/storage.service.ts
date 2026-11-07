@@ -102,10 +102,14 @@ const BUCKETS: BucketConfig[] = [
      * other viewer gets a black rectangle — and the uploader is the last
      * person who would notice. Nothing here transcodes, so the only honest
      * option is to refuse the format and say why.
+     *
+     * PDFs are document posts, read page by page in the feed; the server has
+     * opened each one and counted its pages before it gets here.
      */
     allowedMimeTypes: [
       'image/png', 'image/jpeg', 'image/webp', 'image/gif',
       'video/mp4', 'video/webm',
+      'application/pdf',
     ],
   },
   {
@@ -225,6 +229,15 @@ export class StorageService implements OnModuleInit {
       throw new Error(`Failed to upload file: ${error.message}`);
     }
 
+    return this.client.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+  }
+
+  /**
+   * Where a public file is or would be served, without checking it exists.
+   * Null when storage is not configured.
+   */
+  publicUrlFor(path: string, bucket: string = COMPANY_BUCKET): string | null {
+    if (!this.client) return null;
     return this.client.storage.from(bucket).getPublicUrl(path).data.publicUrl;
   }
 

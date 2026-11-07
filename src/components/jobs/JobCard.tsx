@@ -4,6 +4,8 @@ import { Job } from "@/data/jobs";
 import { useSavedJob } from "@/hooks/useSavedJob";
 import { cn, resolveJobIcon } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
+import CompanyLogo from "@/components/company/CompanyLogo";
+import MatchScore from "./MatchScore";
 
 interface JobCardProps {
   job: Job;
@@ -11,13 +13,6 @@ interface JobCardProps {
   onClick: () => void;
   /** AI fit for this job. `score: null` = we can't judge; undefined = not scored yet. */
   match?: { score: number | null; reason: string | null };
-}
-
-/** Bands are deliberately coarse — a 2-point gap isn't a meaningful difference. */
-function matchTone(score: number): string {
-  if (score >= 80) return "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400";
-  if (score >= 55) return "bg-amber-500/10 text-amber-600 dark:text-amber-400";
-  return "bg-muted text-muted-foreground";
 }
 
 const JobCard = ({ job, isSelected, onClick, match }: JobCardProps) => {
@@ -164,15 +159,7 @@ const JobCard = ({ job, isSelected, onClick, match }: JobCardProps) => {
       >
       {/* Content */}
       <div className="flex items-start gap-3 sm:gap-4">
-        {/* Logo */}
-        <div className="flex-shrink-0 w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-muted
-         shadow-inner flex items-center justify-center overflow-hidden p-1.5">
-          <img
-            src={resolveJobIcon(job.icon)}
-            alt={`${job.company} logo`}
-            className="h-full rounded-sm w-full object-contain"
-          />
-        </div>
+        <CompanyLogo company={job.company} src={resolveJobIcon(job.icon)} className="h-10 w-10 sm:h-12 sm:w-12" />
 
         {/* Details */}
         <div className="flex-1 min-w-0">
@@ -225,17 +212,7 @@ const JobCard = ({ job, isSelected, onClick, match }: JobCardProps) => {
           </div>
 
           {/* AI fit — only shown once we have a real score for this job. */}
-          {match?.score != null && (
-            <span
-              title={match.reason ?? undefined}
-              className={cn(
-                "rounded-full px-2 py-0.5 text-[10px] sm:text-[11px] font-semibold whitespace-nowrap",
-                matchTone(match.score),
-              )}
-            >
-              {match.score}% match
-            </span>
-          )}
+          {match?.score != null && <MatchScore score={match.score} reason={match.reason} />}
 
           {/* Timestamp - aligned with salary */}
           <span className="text-[11px] sm:text-xs text-muted-foreground whitespace-nowrap">

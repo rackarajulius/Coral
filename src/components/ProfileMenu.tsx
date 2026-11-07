@@ -14,6 +14,7 @@ import {
 import {
   BadgeCheckIcon,
   BellIcon,
+  Building2,
   CircleUserRound,
   CreditCardIcon,
   LayoutDashboard,
@@ -22,25 +23,24 @@ import {
   Save,
   Settings,
   BriefcaseBusiness,
+  Sparkles,
   UsersRound,
 } from "lucide-react"
 import { Link } from "react-router-dom"
 import { useAuth } from "@/contexts/AuthContext"
-import { accountSide } from "@/lib/accountSide"
+import { accountSide, actsForCompany, companyLabel } from "@/lib/accountSide"
 
 /**
- * The menu follows the account: an employer's links go to the employer side
- * (job seeker pages would only send them back), an admin also gets the admin
- * dashboard, and everyone else gets the job seeker pages.
+ * One account does everything, as on LinkedIn, so the menu has two parts:
+ * your own pages, which everyone has, and the company you act for — one
+ * "Manage <company>" entry into its side of Coral, as LinkedIn's menu has
+ * one per page — or a way to create a company page if you don't act for one
+ * yet. Freelancer accounts keep their own menu for now, and an admin also
+ * gets the admin dashboard.
  */
-const EMPLOYER_ITEMS = [
-  { to: "/employers/dashboard", label: "Employer dashboard", icon: LayoutDashboard },
-  { to: "/employers/chat", label: "Chat", icon: MessageSquare },
-  { to: "/employers/notifications", label: "Notifications", icon: BellIcon },
-  { to: "/employers/settings", label: "Settings", icon: Settings },
-]
 const SEEKER_ITEMS = [
   { to: "/jobseeker/profile", label: "Profile", icon: CircleUserRound },
+  { to: "/resume-matcher", label: "AI Job Match", icon: Sparkles },
   { to: "/provider", label: "Offer services", icon: BriefcaseBusiness },
   { to: "/saved-jobs", label: "Saved Jobs", icon: Save },
   { to: "/jobseeker/chat", label: "Chat", icon: MessageSquare },
@@ -67,7 +67,16 @@ const ProfileMenu = () => {
   }
 
   const side = accountSide(user)
-  const items = side === "employer" ? EMPLOYER_ITEMS : side === "admin" ? ADMIN_ITEMS : side === "provider" ? PROVIDER_ITEMS : SEEKER_ITEMS
+  // Not yet on an employer account's personal side: offering services (the
+  // freelancer side) and AI Job Match, which needs Premium — still a job
+  // seeker plan.
+  const items =
+    side === "admin" ? ADMIN_ITEMS
+      : side === "provider" ? PROVIDER_ITEMS
+        : side === "employer" ? SEEKER_ITEMS.filter((item) => item.to !== "/provider" && item.to !== "/resume-matcher")
+          : SEEKER_ITEMS
+  const showCompany = side !== "provider"
+  const forCompany = actsForCompany(user)
 
   return (
     <DropdownMenu modal={false}>
@@ -97,6 +106,26 @@ const ProfileMenu = () => {
             </DropdownMenuItem>
           ))}
         </DropdownMenuGroup>
+        {showCompany && (
+          <>
+            <DropdownMenuSeparator />
+            {forCompany ? (
+              <DropdownMenuItem asChild>
+                <Link to="/employers/dashboard" className="flex min-w-0 items-center">
+                  <Building2 className="mr-2 h-4 w-4 shrink-0" size={14} />
+                  <span className="truncate">Manage {companyLabel(user)}</span>
+                </Link>
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem asChild>
+                <Link to="/employers/onboarding" className="flex items-center">
+                  <Building2 className="mr-2 h-4 w-4" size={14} />
+                  Create a company page
+                </Link>
+              </DropdownMenuItem>
+            )}
+          </>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem
           className="text-destructive focus:text-destructive"

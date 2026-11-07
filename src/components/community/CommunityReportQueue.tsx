@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { REPORTS_SUMMARY_KEY } from "@/lib/api/adminReports";
+import { plainText } from "@/lib/mentions";
 import {
   dismissReport,
   listReports,
@@ -158,7 +159,8 @@ function ReportCard({ report }: { report: ModerationReport }) {
           than on how it was described. */}
       {report.target ? (
         <blockquote className="mt-3 whitespace-pre-wrap rounded-xl bg-muted/50 p-3 text-sm">
-          {report.target.content || <span className="text-muted-foreground">(no text)</span>}
+          {/* Mentions read as names, not as their stored tokens. */}
+          {plainText(report.target.content) || <span className="text-muted-foreground">(no text)</span>}
         </blockquote>
       ) : (
         <p className="mt-3 text-sm text-muted-foreground">

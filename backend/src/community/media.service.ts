@@ -1,10 +1,15 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, Optional } from '@nestjs/common';
 import { CronExpression } from '@nestjs/schedule';
 import { ExclusiveCron } from '../common/scheduling/exclusive-cron';
 import { randomUUID } from 'crypto';
+// pdf-parse is CommonJS, and this project compiles without esModuleInterop, so a
+// default import of it would be undefined at run time; this one is the function.
+import * as pdfParse from 'pdf-parse';
 import { PrismaService } from '../prisma/prisma.service';
 import { COMMUNITY_BUCKET, StorageService } from '../storage/storage.service';
 import { User } from '../common/types/user.types';
+import { CommunityVideosService } from './videos/community-videos.service';
+import { isStreamUrl } from './videos/stream-url';
 
 /** How long an unattached upload is given before it is treated as abandoned. */
 const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
@@ -12,6 +17,20 @@ const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 /** Roughly a minute of 720p H.264. Longer than that nobody watches anyway. */
 const MAX_VIDEO_BYTES = 30 * 1024 * 1024;
+
+/** A long slide deck with pictures. Documents are read on phones, page by page. */
+const MAX_DOCUMENT_BYTES = 15 * 1024 * 1024;
+const MAX_DOCUMENT_PAGES = 300;
+
+/**
+ * Where an uploaded document is kept: the uploader's folder, and a name that
+ * carries the page count read from the file, `{uuid}-{pages}p.pdf`.
+ *
+ * Only the server writes to the bucket and it chooses every name, so a post
+ * that names such a file can be told its page count without the file being
+ * fetched and read again — and without taking the writer's word for it.
+ */
+const DOCUMENT_PATH = /^posts\/([0-9a-f-]{36})\/[0-9a-f-]{36}-(\d{1,4})p\.pdf$/i;
 
 /**
  * Accepted image formats, keyed by the bytes a file actually starts with.
@@ -99,6 +118,8 @@ export class CommunityMediaService {
   constructor(
     private readonly storage: StorageService,
     private readonly prisma: PrismaService,
+    /** Streamed videos (Mux). Optional so the media rules can be tested alone. */
+    @Optional() private readonly videos?: CommunityVideosService,
   ) {}
 
   async upload(
@@ -150,6 +171,62 @@ export class CommunityMediaService {
   }
 
   /**
+   * A PDF to share as a post, read page by page in the feed.
+   *
+   * Checked like the pictures: by its own first bytes, never its name or
+   * declared type. Then opened, to count its pages — which also turns away
+   * files that only start like a PDF, and ones locked with a password nobody
+   * reading the feed would have. The suggested title is the file's name,
+   * which people choose; a PDF's own title field is more often "Microsoft
+   * Word - Document1".
+   */
+  async uploadDocument(
+    user: User,
+    file: Express.Multer.File,
+  ): Promise<{ url: string; path: string; pages: number; title: string }> {
+    if (!file?.buffer?.length) throw new BadRequestException('No file received.');
+    if (file.buffer.subarray(0, 5).toString('latin1') !== '%PDF-') {
+      throw new BadRequestException('Documents must be PDFs. Save or export it as a PDF and try again.');
+    }
+    if (file.size > MAX_DOCUMENT_BYTES) {
+      throw new BadRequestException('Documents must be 15MB or smaller.');
+    }
+
+    let pages = 0;
+    try {
+      // Only the count is needed, so no page's text is read. A plain byte
+      // array, not the Buffer: the PDF reader inside pdf-parse misreads a
+      // Buffer's cross-reference table and calls a sound file broken.
+      const bytes = new Uint8Array(file.buffer) as unknown as Buffer;
+      pages = (await pdfParse(bytes, { max: 1, pagerender: async () => '' })).numpages;
+    } catch {
+      throw new BadRequestException('That PDF could not be opened. If it has a password, remove it and try again.');
+    }
+    if (!pages) throw new BadRequestException('That PDF has no pages.');
+    if (pages > MAX_DOCUMENT_PAGES) {
+      throw new BadRequestException(`Documents can have up to ${MAX_DOCUMENT_PAGES} pages.`);
+    }
+
+    const path = `posts/${user.id}/${randomUUID()}-${pages}p.pdf`;
+    const url = await this.storage.uploadPublicFile(path, file.buffer, 'application/pdf', COMMUNITY_BUCKET);
+    return { url, path, pages, title: titleFromFileName(file.originalname) };
+  }
+
+  /**
+   * The page count a document URL carries, when it is a document this person
+   * uploaded here; null for anything else.
+   *
+   * Their own folder only: the hourly sweep keeps a file while its uploader's
+   * posts name it, so a post naming someone else's file would lose it.
+   */
+  documentPagesFor(url: string, authorId: string): number | null {
+    const path = this.isOwnMedia(url) ? this.pathFromUrl(url) : null;
+    const match = path ? DOCUMENT_PATH.exec(path) : null;
+    if (!match || match[1].toLowerCase() !== authorId.toLowerCase()) return null;
+    return Number(match[2]);
+  }
+
+  /**
    * An ISO-container file whose brand marks it as QuickTime.
    *
    * Only used to explain a refusal — nothing is accepted on this basis.
@@ -178,6 +255,21 @@ export class CommunityMediaService {
     }
   }
 
+  /**
+   * What a post may show: pictures and short clips from our storage, or one
+   * streamed video of the author's own — on its own, the way LinkedIn shows a
+   * video post.
+   */
+  async assertPostMedia(userId: string, urls: string[]): Promise<void> {
+    const streams = urls.filter(isStreamUrl);
+    this.assertOwnMedia(urls.filter((url) => !isStreamUrl(url)));
+    if (streams.length === 0) return;
+    if (streams.length > 1) throw new BadRequestException('A post can have one video.');
+    if (urls.length > 1) throw new BadRequestException('A video is posted on its own, without pictures.');
+    if (!this.videos) throw new BadRequestException('Videos have to be uploaded here.');
+    await this.videos.assertUsable(userId, streams);
+  }
+
   assertOwnMedia(urls: string[]): void {
     const foreign = urls.filter((u) => !this.isOwnMedia(u));
     if (foreign.length > 0) {
@@ -196,7 +288,10 @@ export class CommunityMediaService {
    * is preserved in the moderation record; the bytes are not.
    */
   async deleteForUrls(urls: string[]): Promise<void> {
-    for (const url of urls) {
+    // A streamed video lives at Mux, so the stream itself is deleted there.
+    const streams = urls.filter(isStreamUrl);
+    if (streams.length > 0) await this.videos?.deleteForUrls(streams);
+    for (const url of urls.filter((u) => !isStreamUrl(u))) {
       const path = this.pathFromUrl(url);
       if (!path) continue;
       try {
@@ -248,11 +343,36 @@ export class CommunityMediaService {
          * absolute URLs while these are storage paths, so an exact-match query
          * finds nothing and the sweep would then treat every file as an orphan.
          */
-        const referenced = await this.prisma.post.findMany({
-          where: { authorId: folder.name },
-          select: { mediaUrls: true },
-        });
-        const inUse = new Set(referenced.flatMap((p) => p.mediaUrls));
+        const [referenced, queued, listings, projects] = await Promise.all([
+          this.prisma.post.findMany({
+            where: { authorId: folder.name },
+            select: { mediaUrls: true, documentUrl: true },
+          }),
+          // A scheduled post's files are in use: it goes out later, not never.
+          this.prisma.scheduledPost.findMany({
+            where: { authorId: folder.name, status: { not: 'PUBLISHED' } },
+            select: { payload: true },
+          }),
+          // So are a service listing's pictures and video, uploaded here too.
+          this.prisma.serviceListing.findMany({
+            where: { ownerUserId: folder.name },
+            select: { mediaUrls: true },
+          }),
+          // And a profile project's.
+          this.prisma.profileProject.findMany({
+            where: { profile: { userId: folder.name } },
+            select: { mediaUrls: true },
+          }),
+        ]);
+        const inUse = new Set([
+          ...referenced.flatMap((p) => (p.documentUrl ? [...p.mediaUrls, p.documentUrl] : p.mediaUrls)),
+          ...listings.flatMap((listing) => listing.mediaUrls),
+          ...projects.flatMap((project) => project.mediaUrls),
+          ...queued.flatMap(({ payload }) => {
+            const draft = (payload ?? {}) as { mediaUrls?: string[]; document?: { url?: string } };
+            return [...(draft.mediaUrls ?? []), ...(draft.document?.url ? [draft.document.url] : [])];
+          }),
+        ]);
 
         for (const path of paths) {
           // Stored URLs are absolute, so a path is in use when some stored URL
@@ -279,4 +399,16 @@ export class CommunityMediaService {
       return null;
     }
   }
+}
+
+/**
+ * A title from an uploaded file's name: without ".pdf", with underscores as
+ * spaces. Browsers send the name as UTF-8 and multer reads it as Latin-1, so
+ * it is turned back first, or "Résumé.pdf" arrives as "RÃ©sumÃ©".
+ */
+function titleFromFileName(name: string | undefined): string {
+  if (!name) return '';
+  const utf8 = Buffer.from(name, 'latin1').toString('utf8');
+  const readable = utf8.includes('\uFFFD') ? name : utf8;
+  return readable.replace(/\.pdf$/i, '').replace(/[_]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 150);
 }

@@ -3,6 +3,7 @@ import { BadgeCheck, Building2, ExternalLink, Globe, MapPin, Users } from "lucid
 import { fetchPublicJobById } from "@/lib/jobs/fetchJobs";
 import type { Job } from "@/data/jobs";
 import { resolveJobIcon } from "@/lib/utils";
+import CompanyLogo from "@/components/company/CompanyLogo";
 import CompanyResearchPanel from "./CompanyResearchPanel";
 import EmployerBrandSections from "./EmployerBrandSections";
 
@@ -61,14 +62,7 @@ export default function AboutCompanySection({ job }: { job: Job }) {
   return (
     <section className="rounded-2xl border border-border bg-card p-5">
       <div className="mb-3 flex items-start gap-3">
-        <img
-          src={resolveJobIcon(job.icon)}
-          alt=""
-          className="h-11 w-11 shrink-0 rounded-xl object-contain"
-          onError={(e) => {
-            (e.currentTarget as HTMLImageElement).style.visibility = "hidden";
-          }}
-        />
+        <CompanyLogo company={job.company} src={resolveJobIcon(job.icon)} className="h-11 w-11 rounded-xl" />
         <div className="min-w-0 flex-1">
           <h2 className="flex items-center gap-1.5 font-display text-lg font-semibold text-foreground">
             About {job.company}

@@ -98,7 +98,7 @@ export function TideCard({ tide, compact = false }: { tide: Tide; compact?: bool
       </div>
 
       {!compact && tide.description && (
-        <p className="mt-3 line-clamp-3 whitespace-pre-wrap text-sm text-muted-foreground">
+        <p className="mt-3 line-clamp-3 whitespace-pre-wrap [overflow-wrap:anywhere] text-sm text-muted-foreground">
           {tide.description}
         </p>
       )}

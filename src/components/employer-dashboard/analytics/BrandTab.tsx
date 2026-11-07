@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { getBrand, getGeo, getSources } from '@/lib/api/employerAnalytics';
 import BrandScoreCard from './BrandScoreCard';
 import HiringResponsivenessCard from './HiringResponsivenessCard';
+import HiringCommitmentsCard from './HiringCommitmentsCard';
 import { useAnalyticsRange } from './AnalyticsRange';
 import EmployerLayout from '../Layout/EmployerLayout';
 import _CountUpLib from 'react-countup';
@@ -133,6 +134,12 @@ const BrandTab = () => {
             something an employer discovers from a candidate. */}
         <div className="lg:col-span-2">
           <HiringResponsivenessCard />
+        </div>
+
+        {/* Pay, real vacancies, AI and 45-day answers, as candidates see them
+            on the company page, plus what to fix (which they don't see). */}
+        <div className="lg:col-span-2">
+          <HiringCommitmentsCard />
         </div>
 
         <Card className="p-5">

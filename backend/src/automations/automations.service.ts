@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { ScheduledTask, ScheduledTaskType, TaskCadence } from '@prisma/client';
+import { PipelineStage, Prisma, ScheduledTask, ScheduledTaskType, TaskCadence } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
 import { CandidateSourcingService } from '../employer-hiring/candidate-sourcing.service';
@@ -10,6 +10,12 @@ import { TASK_DEFINITIONS, definitionFor } from './task-registry';
 const DAY_MS = 86_400_000;
 /** How many reported candidate ids a watcher remembers. See the handler. */
 const SEEN_CAP = 500;
+/**
+ * How long someone can sit saved before it counts as never contacted. Long
+ * enough for a team that saves on Friday and writes on Monday; short enough
+ * that the person has not moved on by the time anyone notices.
+ */
+const UNCONTACTED_GRACE_DAYS = 3;
 
 /** What a run found. `count: 0` means the task ran and there was nothing. */
 export interface TaskOutcome {
@@ -302,7 +308,7 @@ export class AutomationsService {
           };
         }
 
-        const matchIds = await this.sourcing.matchingIds({ query: shortlist.query });
+        const matchIds = await this.sourcing.matchingIds({ query: shortlist.query }, task.createdById);
         const config = (task.config ?? {}) as { seenIds?: string[] };
         const seen = new Set(config.seenIds ?? []);
 
@@ -338,9 +344,80 @@ export class AutomationsService {
         };
       }
 
+      case ScheduledTaskType.SAVED_NOT_CONTACTED: {
+        const count = await this.savedNotContacted(memberIds);
+        return {
+          count,
+          title: count ? 'Saved, never contacted' : 'Everyone saved has heard from you',
+          // No names, for the same reason as the saved-search watcher.
+          message: count
+            ? `${count} ${count === 1 ? 'person' : 'people'} your team saved more than ${UNCONTACTED_GRACE_DAYS} days ago ${count === 1 ? 'has' : 'have'} never been written to.`
+            : `Everyone your team saved has been written to, or was saved in the last ${UNCONTACTED_GRACE_DAYS} days.`,
+        };
+      }
+
       default:
         return { count: 0, title: 'Nothing to report', message: 'This task did nothing.' };
     }
+  }
+
+  /**
+   * People, not cards: someone saved into two projects counts once.
+   *
+   * Counted only while it is still something the team can act on. Someone who
+   * applied has made contact themselves (the waiting-applications task covers
+   * them), and someone who has since turned discovery off cannot be written to —
+   * outreach refuses them — so nagging about them would ask for the impossible.
+   */
+  private async savedNotContacted(memberIds: string[]): Promise<number> {
+    const items = await this.prisma.shortlistItem.findMany({
+      where: {
+        shortlist: { employerId: { in: memberIds } },
+        applicationId: null,
+        // Saved only, or sourced. Anything further along was moved there by
+        // someone who has already been in touch.
+        OR: [{ stage: null }, { stage: PipelineStage.SOURCED }],
+        addedAt: { lt: new Date(Date.now() - UNCONTACTED_GRACE_DAYS * DAY_MS) },
+      },
+      select: { candidateId: true },
+    });
+    const ids = [...new Set(items.map((i) => i.candidateId))];
+    if (ids.length === 0) return 0;
+
+    const [written, applied, reachable] = await Promise.all([
+      // A scheduled message counts: one is already on its way. The same rule
+      // as the "contacted" marker on the workspace cards.
+      this.prisma.outreachMessage.findMany({
+        where: { candidateId: { in: ids }, employerId: { in: memberIds }, status: { not: 'cancelled' } },
+        select: { candidateId: true },
+        distinct: ['candidateId'],
+      }),
+      // An application to any of the company's jobs. Only one card can carry
+      // the link, so a person saved twice leaves the other card unlinked.
+      this.prisma.application.findMany({
+        where: { applicantId: { in: ids }, job: { postedById: { in: memberIds } } },
+        select: { applicantId: true },
+        distinct: ['applicantId'],
+      }),
+      // The same test outreach applies before it will send.
+      this.prisma.jobSeekerProfile.findMany({
+        where: {
+          userId: { in: ids },
+          discoverable: true,
+          OR: [
+            { privacySettings: { equals: Prisma.DbNull } },
+            { privacySettings: { path: ['profileVisible'], not: false } },
+          ],
+        },
+        select: { userId: true },
+      }),
+    ]);
+
+    const settled = new Set([
+      ...written.map((r) => r.candidateId),
+      ...applied.map((r) => r.applicantId),
+    ]);
+    return reachable.filter((r) => !settled.has(r.userId)).length;
   }
 
   /* ------------------------------- helpers -------------------------------- */

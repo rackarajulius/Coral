@@ -1,4 +1,5 @@
 import supabase from "@/lib/supabase";
+import { deleteAccountAsAdmin } from "./accountDeletion";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001/api/v1";
 
@@ -24,7 +25,9 @@ async function send(path: string, method: "PATCH" | "DELETE"): Promise<void> {
 export const suspendJobseeker = (id: string) => send(`/admin/jobseekers/${id}/suspend`, "PATCH");
 export const activateJobseeker = (id: string) => send(`/admin/jobseekers/${id}/activate`, "PATCH");
 export const banJobseeker = (id: string) => send(`/admin/jobseekers/${id}/ban`, "PATCH");
-export const deleteJobseeker = (id: string) => send(`/admin/jobseekers/${id}`, "DELETE");
+/** Deletes the account. One account can act for a company, so its companies are handed over or deactivated. */
+export const deleteJobseekerAccount = (id: string) => deleteAccountAsAdmin(`/admin/jobseekers/${id}`);
+export const deleteJobseeker = async (id: string): Promise<void> => { await deleteJobseekerAccount(id); };
 
 /** Where a report about someone's content came from. */
 export type ReportSource = "posts" | "comments" | "reviews" | "listings" | "requests";

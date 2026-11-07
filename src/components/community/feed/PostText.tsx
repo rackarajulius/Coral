@@ -1,5 +1,10 @@
+import { Link } from "react-router-dom";
+import { cn } from "@/lib/utils";
+import { companyPath, personPath } from "@/lib/api/community";
+import { MENTION_SOURCE, type MentionKind } from "@/lib/mentions";
+
 /**
- * Post text with links and hashtags picked out, and nothing else.
+ * Post text with mentions, links and hashtags picked out, and nothing else.
  *
  * Built by splitting the string and returning React elements — never by
  * setting innerHTML. Post content is written by strangers, so the one rule
@@ -8,15 +13,27 @@
 export function PostText({
   text,
   onHashtag,
+  className,
 }: {
   text: string;
   /** Filters the feed. Without it hashtags render as colour only, not links. */
   onHashtag?: (tag: string) => void;
+  className?: string;
 }) {
   return (
-    <p className="whitespace-pre-wrap text-sm leading-relaxed">
+    <p className={cn("whitespace-pre-wrap [overflow-wrap:anywhere] text-sm leading-relaxed", className)}>
       {tokenise(text).map((token, i) =>
-        token.kind === "link" ? (
+        token.kind === "mention" ? (
+          // The name the server checked and saved, linked to their community
+          // page. Shown without the @, as a name in a sentence.
+          <Link
+            key={i}
+            to={token.mention === "person" ? personPath(token.id) : companyPath(token.id)}
+            className="font-medium text-link hover:underline"
+          >
+            {token.name}
+          </Link>
+        ) : token.kind === "link" ? (
           <a
             key={i}
             href={token.href}
@@ -52,6 +69,7 @@ export function PostText({
 
 type Token =
   | { kind: "text"; text: string }
+  | { kind: "mention"; mention: MentionKind; id: string; name: string }
   | { kind: "link"; href: string; label: string }
   | { kind: "hashtag"; tag: string };
 
@@ -59,7 +77,10 @@ type Token =
 const TRAILING = /[.,;:!?)\]]+$/;
 
 /**
- * URLs come first in the alternation deliberately.
+ * Mentions come first, then URLs, deliberately.
+ *
+ * A mention's name is shown as written, so a "#" or "www." inside a company's
+ * name must not be read as a hashtag or a link.
  *
  * A fragment like `#section` inside an address must be consumed as part of the
  * link, not turned into a hashtag that breaks the URL in half.
@@ -67,7 +88,10 @@ const TRAILING = /[.,;:!?)\]]+$/;
  * `\p{L}` rather than `\w` so tags in any script survive — `#技術` is a hashtag,
  * and `\w` would drop it.
  */
-const PATTERN = /https?:\/\/[^\s<>"']+|www\.[^\s<>"']+|#[\p{L}\p{N}_]{1,50}/giu;
+const PATTERN = new RegExp(
+  `${MENTION_SOURCE}|https?:\\/\\/[^\\s<>"']+|www\\.[^\\s<>"']+|#[\\p{L}\\p{N}_]{1,50}`,
+  "giu",
+);
 
 function tokenise(text: string): Token[] {
   const tokens: Token[] = [];
@@ -75,9 +99,15 @@ function tokenise(text: string): Token[] {
 
   for (const match of text.matchAll(PATTERN)) {
     const start = match.index ?? 0;
-    const raw = match[0].replace(TRAILING, "");
     if (start > last) tokens.push({ kind: "text", text: text.slice(last, start) });
 
+    if (match[1] !== undefined) {
+      tokens.push({ kind: "mention", name: match[1], mention: match[2] as MentionKind, id: match[3] });
+      last = start + match[0].length;
+      continue;
+    }
+
+    const raw = match[0].replace(TRAILING, "");
     if (raw.startsWith("#")) {
       tokens.push({ kind: "hashtag", tag: raw.slice(1) });
     } else {

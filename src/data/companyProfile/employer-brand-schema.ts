@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { COMPANY_SIZES as SIZE_BANDS } from "@/lib/companyFacts";
 
 export const socialLinkSchema = z.object({
   id: z.string(),
@@ -120,6 +121,8 @@ export const employerBrandSchema = z.object({
   tagline: z.string().max(120).optional(),
   industries: z.array(z.string()).min(1, "Pick at least one industry"),
   companySize: z.string().min(1, "Required"),
+  /** Organization type, a key from lib/companyFacts. */
+  companyType: z.string().optional(),
   foundedYear: z.string().regex(/^\d{4}$/, "4-digit year"),
   headquarters: z.string().min(1, "Required"),
   locations: z.array(locationSchema),
@@ -174,9 +177,8 @@ export const INDUSTRIES = [
   "Developer Tools", "Marketplace", "Climate", "Education", "Gaming", "Media",
 ];
 
-export const COMPANY_SIZES = [
-  "1–10", "11–50", "51–200", "201–500", "501–1,000", "1,001–5,000", "5,000+",
-];
+/** LinkedIn's size bands, the one list every form uses (lib/companyFacts). */
+export const COMPANY_SIZES: readonly string[] = SIZE_BANDS;
 
 export const BENEFIT_LIBRARY: { label: string; category: string }[] = [
   { label: "Unlimited PTO", category: "Time off" },
@@ -255,7 +257,8 @@ const legacyDemoEmployerBrand: EmployerBrand = {
   displayName: "Acme Technologies",
   tagline: "Building the operating system for modern teams.",
   industries: ["SaaS", "Developer Tools"],
-  companySize: "201–500",
+  companySize: "201-500",
+  companyType: "PRIVATELY_HELD",
   foundedYear: "2019",
   headquarters: "San Francisco, CA",
   locations: [
@@ -490,6 +493,7 @@ export const defaultEmployerBrand: EmployerBrand = {
   tagline: "",
   industries: [],
   companySize: "",
+  companyType: "",
   foundedYear: "",
   headquarters: "",
   locations: [],

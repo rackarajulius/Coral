@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { CompanyMemberStatus, CompanyRole, PostPurpose, Prisma } from '@prisma/client';
+import { CommentPolicy, CompanyMemberStatus, CompanyRole, PostPurpose, Prisma } from '@prisma/client';
 import { isUUID } from 'class-validator';
 import { MarketplaceService } from '../../marketplace/marketplace.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -16,11 +16,30 @@ import { CommunityMediaService } from '../media.service';
 import { PollsService } from '../polls.service';
 import { LinkPreviewService } from '../link-preview.service';
 import { User } from '../../common/types/user.types';
-import { AnnouncementReferenceDto, AnnouncementReferenceType, CommunityPostPurpose, CreatePostDto } from './dto/create-post.dto';
+import { AnnouncementReferenceDto, AnnouncementReferenceType, CommunityPostPurpose, CommunityPostType, CreatePostDto } from './dto/create-post.dto';
 import { ListPostsQueryDto } from './dto/list-posts-query.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
+import { personName } from '../../common/person-name';
+import { publicImageUrl } from '../../common/public-image-url';
+import { commentAccess } from '../comment-policy';
+import { announceMentions, plainText, resolveMentions, withoutMentions } from '../mentions';
+import { followStateFor } from '../follow-state';
 
 type AnnouncementCard = Awaited<ReturnType<MarketplaceService['projectAnnouncementReference']>>;
+
+/**
+ * The community's sections, as post purposes.
+ *
+ * One for each side of the community: Showcase is people offering, with their
+ * work and their services, and Opportunities is people asking, with open
+ * projects and live jobs. Services used to sit with the asking side, so someone
+ * advertising and someone hiring shared a tab. General posts and questions have
+ * no section: they are on Home, which shows every purpose.
+ */
+const SECTION_PURPOSES: Record<NonNullable<ListPostsQueryDto['section']>, PostPurpose[]> = {
+  showcase: [PostPurpose.SHOWCASE, PostPurpose.SERVICE_ANNOUNCEMENT],
+  opportunity: [PostPurpose.OPPORTUNITY],
+};
 
 @Injectable()
 export class PostsService {
@@ -62,12 +81,15 @@ export class PostsService {
       removedAt: null,
       ...personal,
       ...(query.spaceId ? { spaceId: query.spaceId } : {}),
-      ...(query.authorId ? { authorId: query.authorId } : {}),
+      // A person's posts are what they said as themselves: what they published
+      // in a company's name is the company's, and lives on its page.
+      ...(query.authorId ? { authorId: query.authorId, companyId: null } : {}),
       ...(query.companyId ? { companyId: query.companyId } : {}),
       ...(query.query
         ? { content: { contains: query.query, mode: 'insensitive' as const } }
         : {}),
       ...(query.hashtag ? { hashtags: { has: query.hashtag.toLowerCase() } } : {}),
+      ...(query.section ? { purpose: { in: SECTION_PURPOSES[query.section] } } : {}),
     };
 
     const [posts, total] = await Promise.all([
@@ -82,7 +104,7 @@ export class PostsService {
     ]);
 
     const normalized = await this.withPolls(
-      await this.withIdentity(await this.addViewerFlags(posts, currentUserId)),
+      await this.withIdentity(await this.addViewerFlags(posts, currentUserId), currentUserId),
       currentUserId,
     );
 
@@ -143,7 +165,7 @@ export class PostsService {
       throw new NotFoundException('Post not found');
     }
 
-    const [normalized] = await this.withIdentity(await this.addViewerFlags([post], currentUser?.id));
+    const [normalized] = await this.withIdentity(await this.addViewerFlags([post], currentUser?.id), currentUser?.id);
 
     return {
       ...normalized,
@@ -162,9 +184,25 @@ export class PostsService {
   async companyVoiceFor(userId: string): Promise<{ id: string; name: string } | null> {
     const context = await this.companyContext.forUser(userId);
     if (!context) return null;
+    // Nobody speaks for a company whose page is taken down.
+    if (context.deactivatedAt) return null;
     return CompanyContextService.canManageMembers(context.role)
       ? { id: context.companyId, name: context.companyName }
       : null;
+  }
+
+  /**
+   * The company voice as the composer's "Post as" menu shows it: with the
+   * page's logo, so the choice looks like what will be published.
+   */
+  async companyVoiceCardFor(userId: string): Promise<{ id: string; name: string; logoUrl: string | null } | null> {
+    const voice = await this.companyVoiceFor(userId);
+    if (!voice) return null;
+    const company = await this.prisma.company.findUnique({
+      where: { id: voice.id },
+      select: { page: { select: { companyLogo: true } } },
+    });
+    return { ...voice, logoUrl: publicImageUrl(company?.page?.companyLogo) };
   }
 
   private async selectedCompanyVoiceFor(userId: string, companyId?: string): Promise<{ id: string; name: string } | null> {
@@ -172,13 +210,16 @@ export class PostsService {
     if (typeof companyId !== 'string' || !isUUID(companyId)) throw new BadRequestException('Choose a valid company.');
     const membership = await this.prisma.companyMember.findUnique({
       where: { companyId_userId: { companyId, userId } },
-      select: { role: true, status: true, user: { select: { status: true } }, company: { select: { id: true, name: true } } },
+      select: { role: true, status: true, user: { select: { status: true } }, company: { select: { id: true, name: true, deactivatedAt: true } } },
     });
     if (!membership || membership.status !== CompanyMemberStatus.ACTIVE || membership.user.status !== 'ACTIVE' ||
       !CompanyContextService.canManageMembers(membership.role)) {
       throw new ForbiddenException('Only a current company owner or admin can publish in its name.');
     }
-    return membership.company;
+    if (membership.company.deactivatedAt) {
+      throw new ForbiddenException("This company's page is deactivated, so nobody can post in its name until an owner reactivates it.");
+    }
+    return { id: membership.company.id, name: membership.company.name };
   }
 
   async announcementOptions(userId: string, asCompany = false, selectedCompanyId?: string) {
@@ -195,14 +236,42 @@ export class PostsService {
     return this.marketplace.getAnnouncementOptions(userId, companyId);
   }
 
+  /**
+   * Every check `create` makes before it writes, without writing anything.
+   *
+   * For a post that will be created later by the job that publishes
+   * scheduled posts — which then runs `create` itself, so everything is
+   * checked again against how things stand at that moment. Returns the
+   * company the post would speak for.
+   */
+  async checkDraft(userId: string, dto: CreatePostDto): Promise<{ companyId: string | null }> {
+    if (dto.companyId !== undefined && dto.asCompany !== true) throw new BadRequestException('A company choice requires company publishing.');
+    const document = this.documentFor(userId, dto);
+    this.assertPostContent(dto.content, dto.mediaUrls, !!document);
+    if (dto.spaceId) await this.spaces.assertPostable(dto.spaceId);
+    await this.media.assertPostMedia(userId, dto.mediaUrls ?? []);
+    this.assertPurposeReference(dto.purpose ?? CommunityPostPurpose.GENERAL, dto.reference);
+    if (dto.poll && new Set(dto.poll.options.map((o) => o.trim()).filter(Boolean)).size < 2) {
+      throw new BadRequestException('A poll needs at least 2 different choices.');
+    }
+    // Refuses too many mentions now rather than at publishing time.
+    await resolveMentions(this.prisma, dto.content);
+    if (!dto.asCompany) return { companyId: null };
+    const company = await this.selectedCompanyVoiceFor(userId, dto.companyId);
+    if (!company) throw new ForbiddenException('Only an owner or admin of a company can post in its name.');
+    return { companyId: company.id };
+  }
+
   async create(userId: string, dto: CreatePostDto) {
     if (dto.companyId !== undefined && dto.asCompany !== true) throw new BadRequestException('A company choice requires company publishing.');
-    this.assertPostContent(dto.content, dto.mediaUrls);
-    // Refused at the door rather than producing a post attached to nothing.
-    await this.spaces.assertPostable(dto.spaceId);
+    const document = this.documentFor(userId, dto);
+    this.assertPostContent(dto.content, dto.mediaUrls, !!document);
+    // A space is optional; one that is named must exist and be open, refused
+    // at the door rather than producing a post in a room that is gone.
+    if (dto.spaceId) await this.spaces.assertPostable(dto.spaceId);
     // Refuses remote images: see CommunityMediaService for why an arbitrary
     // URL in a post is a tracking pixel with extra steps.
-    this.media.assertOwnMedia(dto.mediaUrls ?? []);
+    await this.media.assertPostMedia(userId, dto.mediaUrls ?? []);
 
     let companyId: string | null = null;
     if (dto.asCompany) {
@@ -217,20 +286,26 @@ export class PostsService {
       }
     }
 
+    // Every @mention checked and given its own name before anything is saved.
+    const content = await resolveMentions(this.prisma, dto.content);
     const hashtags = this.normalizeHashtags(dto.hashtags ?? []);
-    const contentHashtags = this.extractHashtags(dto.content);
+    const contentHashtags = this.extractHashtags(withoutMentions(content));
     const mergedHashtags = Array.from(new Set([...hashtags, ...contentHashtags]));
     const purpose = dto.purpose ?? CommunityPostPurpose.GENERAL;
     this.assertPurposeReference(purpose, dto.reference);
     const postData = {
       authorId: userId,
       companyId,
-      spaceId: dto.spaceId,
-      content: dto.content?.trim() || '',
-      postType: dto.poll ? 'POLL' as const : dto.postType || 'TEXT' as const,
+      // None means everyone: Home, the author's followers, their profile or
+      // the company's page.
+      spaceId: dto.spaceId ?? null,
+      content: content?.trim() || '',
+      postType: dto.poll ? 'POLL' as const : document ? 'DOCUMENT' as const : dto.postType || 'TEXT' as const,
+      ...document,
       purpose: purpose.toUpperCase() as PostPurpose,
       mediaUrls: dto.mediaUrls ?? [],
       hashtags: mergedHashtags,
+      commentPolicy: dto.commentPolicy ?? CommentPolicy.ANYONE,
     };
     // Validate the canonical record within the same transaction as publication.
     const created = dto.reference
@@ -262,6 +337,20 @@ export class PostsService {
       }
     }
 
+    // Posting in a space is taking part in it, so the author joins — after the
+    // post is safely written, so a refused post never leaves a membership
+    // behind.
+    if (dto.spaceId) await this.spaces.joinOnPost(userId, dto.spaceId);
+
+    // Told only once the post is safely there, poll and all.
+    void announceMentions(this.prisma, this.notifications, {
+      actorId: userId,
+      voiceCompanyId: companyId,
+      where: 'post',
+      postId: created.id,
+      content: created.content,
+    });
+
     /**
       * Unfurled after the post exists, and never allowed to fail it.
       *
@@ -269,7 +358,7 @@ export class PostsService {
       * hostile. The post is already saved by the time this runs; a preview
       * that does not arrive costs a card, not the thing someone wrote.
       */
-    const link = this.links.firstUrl(created.content);
+    const link = this.links.firstUrl(withoutMentions(created.content));
     if (link && !dto.poll) {
       const preview = await this.links.build(link, userId);
       if (preview) {
@@ -304,6 +393,7 @@ export class PostsService {
         linkedGigId: true,
         linkedJobId: true,
         tideId: true,
+        documentUrl: true,
         removedAt: true,
       },
     });
@@ -318,10 +408,27 @@ export class PostsService {
         : 'You can only edit your own post');
     }
 
-    const nextContent = dto.content !== undefined ? dto.content : existing.content;
+    // Changing who may comment is a setting, not an edit: the post keeps its
+    // words, its purpose and its links, and earns no "Edited" label for it.
+    const { commentPolicy, ...contentChanges } = dto;
+    if (commentPolicy !== undefined && Object.values(contentChanges).every((v) => v === undefined)) {
+      const updated = await this.prisma.post.update({
+        where: { id: postId },
+        data: { commentPolicy },
+        include: this.buildPostInclude(),
+      });
+      const [normalized] = await this.addViewerFlags([updated], currentUser.id);
+      return { success: true, data: normalized, message: 'Comment setting updated' };
+    }
+
+    const content = await resolveMentions(this.prisma, dto.content);
+    const nextContent = content !== undefined ? content : existing.content;
     const nextMediaUrls = dto.mediaUrls !== undefined ? dto.mediaUrls : existing.mediaUrls;
-    this.assertPostContent(nextContent, nextMediaUrls);
-    if (dto.mediaUrls !== undefined) this.media.assertOwnMedia(nextMediaUrls ?? []);
+    this.assertPostContent(nextContent, nextMediaUrls, !!existing.documentUrl);
+    if (dto.mediaUrls !== undefined) await this.media.assertPostMedia(existing.authorId, nextMediaUrls ?? []);
+    if (existing.documentUrl && ((dto.mediaUrls?.length ?? 0) > 0 || (dto.postType !== undefined && dto.postType !== CommunityPostType.DOCUMENT))) {
+      throw new BadRequestException('A document is shared on its own, without pictures or video.');
+    }
 
     const purpose = dto.purpose ?? (existing.purpose ?? 'GENERAL').toLowerCase() as CommunityPostPurpose;
     const reference = dto.reference === undefined ? this.referenceOf(existing) : dto.reference;
@@ -331,11 +438,11 @@ export class PostsService {
     }
 
     const hashtags = this.normalizeHashtags(dto.hashtags ?? existing.hashtags);
-    const contentHashtags = this.extractHashtags(nextContent);
+    const contentHashtags = this.extractHashtags(withoutMentions(nextContent));
     const mergedHashtags = Array.from(new Set([...hashtags, ...contentHashtags]));
 
     const updateData = {
-        ...(dto.content !== undefined ? { content: dto.content.trim() } : {}),
+        ...(content !== undefined ? { content: content.trim() } : {}),
         ...(dto.postType !== undefined ? { postType: dto.postType } : {}),
         ...(dto.mediaUrls !== undefined ? { mediaUrls: dto.mediaUrls } : {}),
         purpose: purpose.toUpperCase() as PostPurpose,
@@ -343,6 +450,7 @@ export class PostsService {
         linkedGigId: null,
         linkedJobId: null,
         hashtags: mergedHashtags,
+        ...(commentPolicy !== undefined ? { commentPolicy } : {}),
         isEdited: true,
     };
     const updated = reference
@@ -351,6 +459,18 @@ export class PostsService {
           return tx.post.update({ where: { id: postId }, data: { ...updateData, ...referenceData }, include: this.buildPostInclude() });
         })
       : await this.prisma.post.update({ where: { id: postId }, data: updateData, include: this.buildPostInclude() });
+
+    // Only someone the edit newly mentions is news; the rest were told the first time.
+    if (content !== undefined) {
+      void announceMentions(this.prisma, this.notifications, {
+        actorId: currentUser.id,
+        voiceCompanyId: existing.companyId,
+        where: 'post',
+        postId,
+        content: updated.content,
+        previous: existing.content,
+      });
+    }
 
     const [normalized] = await this.addViewerFlags([updated], currentUser.id);
     return {
@@ -421,7 +541,7 @@ export class PostsService {
       throw new NotFoundException('Post not found');
     }
 
-    const trimmed = content?.trim() || '';
+    const trimmed = (await resolveMentions(this.prisma, content?.trim() || '')).trim();
 
     const created = await this.prisma.$transaction(async (tx) => {
       const post = await tx.post.create({
@@ -452,10 +572,18 @@ export class PostsService {
         userId: target.authorId,
         type: 'community',
         title: `${await this.nameOf(userId)} shared your post`,
-        message: trimmed || 'They passed it on without adding anything.',
+        message: plainText(trimmed) || 'They passed it on without adding anything.',
         link: `/community/posts/${created.id}`,
       });
     }
+    // The original's author already heard about this share, so is not told twice.
+    void announceMentions(this.prisma, this.notifications, {
+      actorId: userId,
+      where: 'post',
+      postId: created.id,
+      content: trimmed,
+      alreadyTold: [target.authorId],
+    });
 
     const [visible] = await this.addViewerFlags([created], userId);
     return { success: true, data: visible, message: 'Post shared' };
@@ -467,11 +595,7 @@ export class PostsService {
       where: { id: userId },
       select: { displayName: true, firstName: true, lastName: true },
     });
-    return (
-      user?.displayName?.trim() ||
-      [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim() ||
-      'Someone'
-    );
+    return personName(user, 'Someone');
   }
 
   async like(postId: string, userId: string) {
@@ -704,6 +828,34 @@ export class PostsService {
         if (memberships.length === 0) return 'none';
         return { spaceId: { in: memberships.map((m) => m.spaceId) } };
       }
+      case 'following': {
+        /**
+         * What the people and companies you follow have posted.
+         *
+         * A person is followed for what they say as themselves, so their
+         * posts in a company's name are left to the company; a company is
+         * followed through its page, so its posts arrive whoever wrote them.
+         * The same two Follow buttons the post card shows.
+         */
+        const [people, companies] = await Promise.all([
+          this.prisma.userFollow.findMany({ where: { followerId: userId }, select: { followingId: true } }),
+          this.prisma.companyFollow.findMany({
+            where: { userId },
+            select: { company: { select: { companyId: true } } },
+          }),
+        ]);
+        const peopleIds = people.map((f) => f.followingId);
+        const companyIds = [...new Set(companies.flatMap((f) => (f.company.companyId ? [f.company.companyId] : [])))];
+        // Following nobody is a real state; the whole feed in its place would
+        // make the tab look like it did something.
+        if (peopleIds.length === 0 && companyIds.length === 0) return 'none';
+        return {
+          OR: [
+            ...(peopleIds.length ? [{ authorId: { in: peopleIds }, companyId: null }] : []),
+            ...(companyIds.length ? [{ companyId: { in: companyIds } }] : []),
+          ],
+        };
+      }
       default:
         return {};
     }
@@ -724,10 +876,10 @@ export class PostsService {
     return {
       space: { select: { id: true, slug: true, name: true } },
       // Present only on posts published in a company's name. The author is
-      // still included alongside it — see the byline in FeedPost.
-      company: { select: { id: true, name: true, profiles: {
-        where: { visibility: { not: 'private' } }, select: { id: true },
-        orderBy: { createdAt: 'asc' as const }, take: 1,
+      // still included alongside it — see the byline in FeedPost. The logo
+      // and link are the company's page (withCompanyLogos).
+      company: { select: { id: true, name: true, deactivatedAt: true, page: {
+        select: { id: true, companyLogo: true, visibility: true },
       } } },
       /**
        * The post being passed on, embedded.
@@ -741,6 +893,9 @@ export class PostsService {
           id: true,
           content: true,
           mediaUrls: true,
+          documentUrl: true,
+          documentTitle: true,
+          documentPages: true,
           postType: true,
           purpose: true,
           linkedServiceListingId: true,
@@ -752,9 +907,8 @@ export class PostsService {
           author: {
             select: { id: true, displayName: true, firstName: true, lastName: true, avatarUrl: true, role: true, createdAt: true },
           },
-          company: { select: { id: true, name: true, profiles: {
-            where: { visibility: { not: 'private' } }, select: { id: true },
-            orderBy: { createdAt: 'asc' as const }, take: 1,
+          company: { select: { id: true, name: true, deactivatedAt: true, page: {
+            select: { id: true, companyLogo: true, visibility: true },
           } } },
           space: { select: { id: true, slug: true, name: true } },
         },
@@ -809,32 +963,86 @@ export class PostsService {
     return posts.map((p) => ({ ...p, poll: byPost.get(p.id) ?? null }));
   }
 
-  private async withIdentity<T extends { authorId: string }>(posts: T[]) {
-    if (posts.length === 0) return posts as Array<T & { authorIdentity: AuthorIdentity }>;
-    const identities = await this.identity.resolve(posts.map((p) => p.authorId));
-    return posts.map((post) => ({
+  /**
+   * A company post's logo, from the page its byline links to, as `logoUrl`:
+   * a web address or null. The stored value never leaves as it is — older
+   * logos were saved inline, hundreds of kilobytes each, once per post.
+   */
+  private withCompanyLogos<T>(posts: T[]): T[] {
+    type Stored = {
+      id: string;
+      name: string;
+      deactivatedAt?: Date | null;
+      page?: { id: string; companyLogo?: string | null; visibility?: string | null } | null;
+    } | null | undefined;
+    // `profiles` keeps the shape clients read: the company's page, unless
+    // its page is private, in which case there is nowhere to link.
+    const shape = (company: Stored) => {
+      if (!company) return company;
+      // A private or deactivated page refuses visitors: nothing to link to.
+      const page = company.page && company.page.visibility !== 'private' && !company.deactivatedAt ? company.page : null;
+      return {
+        id: company.id,
+        name: company.name,
+        profiles: page ? [{ id: page.id }] : [],
+        logoUrl: publicImageUrl(page?.companyLogo),
+      };
+    };
+    return posts.map((post) => {
+      const record = post as T & { company?: Stored; resharedFrom?: ({ company?: Stored } & Record<string, unknown>) | null };
+      return {
+        ...record,
+        ...('company' in record ? { company: shape(record.company) } : {}),
+        ...(record.resharedFrom ? { resharedFrom: { ...record.resharedFrom, company: shape(record.resharedFrom.company) } } : {}),
+      } as T;
+    });
+  }
+
+  /**
+   * Who wrote each post, and whether the viewer follows its company or author
+   * — looked up side by side, so the follow state costs the feed no extra
+   * round trip.
+   */
+  private async withIdentity<T extends { authorId: string; company?: unknown }>(posts: T[], viewerId?: string) {
+    if (posts.length === 0) return posts as Array<T & { authorIdentity: AuthorIdentity; companyFollow: null; authorFollow: null }>;
+    const [identities, followed] = await Promise.all([
+      this.identity.resolve(posts.map((p) => p.authorId)),
+      followStateFor(this.prisma, posts, viewerId),
+    ]);
+    return followed.map((post) => ({
       ...post,
       authorIdentity: identities.get(post.authorId)!,
     }));
   }
 
-  private async addViewerFlags<T extends { id: string; authorId?: string; companyId?: string | null }>(
+  private async addViewerFlags<T extends { id: string; authorId?: string; companyId?: string | null; commentPolicy?: CommentPolicy | null }>(
     posts: T[],
     currentUserId?: string,
-  ): Promise<Array<T & { likedByMe: boolean; bookmarkedByMe: boolean; canEdit: boolean; linkedRecord: AnnouncementCard; linkedRecordUnavailable: boolean }>> {
+  ): Promise<Array<T & { likedByMe: boolean; bookmarkedByMe: boolean; canEdit: boolean; canComment: boolean; linkedRecord: AnnouncementCard; linkedRecordUnavailable: boolean }>> {
     // A live reshare may outlast its removed source. Retain the sharer's words,
     // but do not serialize the removed original into any ordinary read payload.
-    const visiblePosts = await this.withLinkedRecords(posts.map((post) => {
+    const visiblePosts = await this.withLinkedRecords(this.withCompanyLogos(posts).map((post) => {
       const source = (post as T & { resharedFrom?: { removedAt?: Date | null } }).resharedFrom;
       return source?.removedAt ? { ...post, resharedFrom: null } : post;
     }));
 
+    // Whether this viewer may comment, from the same rule the server enforces,
+    // so the comment box never offers what the server would refuse.
+    const commentable = await commentAccess(
+      this.prisma,
+      posts.map((post) => ({ ...post, authorId: post.authorId ?? '' })),
+      currentUserId,
+    );
+
     if (!currentUserId || posts.length === 0) {
       return visiblePosts.map((post) => ({
         ...post,
+        // Views are told only to whoever may manage the post.
+        viewsCount: undefined,
         likedByMe: false,
         bookmarkedByMe: false,
         canEdit: false,
+        canComment: commentable.get(post.id) ?? true,
       }));
     }
 
@@ -874,14 +1082,19 @@ export class PostsService {
     const bookmarkedPostIds = new Set(bookmarks.map((item) => item.postId));
     const managedCompanyIds = new Set(companySeats.map((seat) => seat.companyId));
 
-    return visiblePosts.map((post) => ({
-      ...post,
-      likedByMe: likedPostIds.has(post.id),
-      bookmarkedByMe: bookmarkedPostIds.has(post.id),
-      canEdit: post.companyId
+    return visiblePosts.map((post) => {
+      const canEdit = post.companyId
         ? managedCompanyIds.has(post.companyId)
-        : post.authorId === currentUserId,
-    }));
+        : post.authorId === currentUserId;
+      return {
+        ...post,
+        viewsCount: canEdit ? (post as { viewsCount?: number }).viewsCount : undefined,
+        likedByMe: likedPostIds.has(post.id),
+        bookmarkedByMe: bookmarkedPostIds.has(post.id),
+        canEdit,
+        canComment: commentable.get(post.id) ?? true,
+      };
+    });
   }
 
   /** Company attribution survives a seat change; permission to act does not. */
@@ -968,13 +1181,33 @@ export class PostsService {
     });
   }
 
-  private assertPostContent(content?: string, mediaUrls?: string[]) {
+  private assertPostContent(content?: string, mediaUrls?: string[], hasDocument = false) {
     const hasText = Boolean(content && content.trim().length > 0);
     const hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
 
-    if (!hasText && !hasMedia) {
+    if (!hasText && !hasMedia && !hasDocument) {
       throw new BadRequestException('A post requires content or media');
     }
+  }
+
+  /**
+   * The document a new post shares, checked, or null.
+   *
+   * Its page count comes from the file's stored name, which the server chose
+   * when it read the file (`CommunityMediaService.uploadDocument`); the writer
+   * sends only the address and a title. A document goes on its own — a deck
+   * with three photos under it is two posts.
+   */
+  private documentFor(userId: string, dto: CreatePostDto) {
+    if (!dto.document) return null;
+    if (dto.poll || (dto.mediaUrls?.length ?? 0) > 0) {
+      throw new BadRequestException('A document is shared on its own, without pictures, video or a poll.');
+    }
+    const documentPages = this.media.documentPagesFor(dto.document.url, userId);
+    if (!documentPages) throw new BadRequestException('Upload the document here before sharing it.');
+    const documentTitle = dto.document.title.replace(/\s+/g, ' ').trim().slice(0, 150);
+    if (!documentTitle) throw new BadRequestException('Give the document a title.');
+    return { documentUrl: dto.document.url, documentTitle, documentPages };
   }
 
   private normalizeHashtags(hashtags: string[]): string[] {

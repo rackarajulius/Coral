@@ -3,6 +3,7 @@ import { UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { Public } from '../common/decorators/public.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { User } from '../common/types/user.types';
 import { StripeClient } from '../billing/stripe.client';
@@ -11,7 +12,27 @@ import { SeekerBillingWebhookService } from './seeker-billing-webhook.service';
 import { SeekerPremiumService } from './seeker-premium.service';
 import { EmailModule } from '../services/email/email.module';
 import { NotificationsModule } from '../notifications/notifications.module';
-import { SeekerCheckoutDto, SeekerPortalDto } from './dto/seeker-billing.dto';
+import { SeekerCancelDto, SeekerCheckoutDto, SeekerPortalDto } from './dto/seeker-billing.dto';
+
+/**
+ * What Premium costs and includes. Public, and deliberately not under `/me`.
+ *
+ * It answers the same thing for everybody — Stripe's prices and the static tier
+ * registry — and holds nothing about the caller, so requiring a session only
+ * meant the page that explains Premium showed a sign-in error to anyone who
+ * wasn't already a member. Stripe is read at most once per ten minutes behind
+ * the service's own price cache, so being public costs no extra provider calls.
+ */
+@Controller('premium')
+export class PremiumPlansController {
+  constructor(private readonly billing: SeekerBillingService) {}
+
+  @Public()
+  @Get('plans')
+  async plans() {
+    return { success: true, data: await this.billing.plans() };
+  }
+}
 
 /** A job seeker's own Premium subscription. Own data only; no ids in the path. */
 @Controller('job-seekers/me/subscription')
@@ -23,12 +44,6 @@ export class SeekerBillingController {
   @Get()
   async mine(@CurrentUser() user: User) {
     return { success: true, data: await this.billing.subscription(user) };
-  }
-
-  /** Real prices from Stripe plus the tier table the server meters against. */
-  @Get('plans')
-  async plans() {
-    return { success: true, data: await this.billing.plans() };
   }
 
   /** Returns a Stripe-hosted URL. Premium starts only when Stripe confirms payment. */
@@ -43,6 +58,30 @@ export class SeekerBillingController {
   async portal(@CurrentUser() user: User, @Body() dto: SeekerPortalDto) {
     return { success: true, data: await this.billing.portal(user, dto.returnPath) };
   }
+
+  /** Ends Premium when the paid period runs out. Returns the subscription as it now stands. */
+  @Roles(UserRole.JOB_SEEKER)
+  @Post('cancel')
+  async cancel(@CurrentUser() user: User, @Body() dto: SeekerCancelDto) {
+    return { success: true, data: await this.billing.cancel(user, dto) };
+  }
+
+  /**
+   * Checks with Stripe directly, for the return from checkout — so Premium
+   * switches on even when Stripe's webhook is late or never arrives.
+   */
+  @Roles(UserRole.JOB_SEEKER)
+  @Post('sync')
+  async sync(@CurrentUser() user: User) {
+    return { success: true, data: await this.billing.sync(user) };
+  }
+
+  /** Undoes a cancellation before it takes effect. */
+  @Roles(UserRole.JOB_SEEKER)
+  @Post('keep')
+  async keep(@CurrentUser() user: User) {
+    return { success: true, data: await this.billing.keep(user) };
+  }
 }
 
 /**
@@ -51,7 +90,7 @@ export class SeekerBillingController {
  */
 @Module({
   imports: [EmailModule, NotificationsModule],
-  controllers: [SeekerBillingController],
+  controllers: [PremiumPlansController, SeekerBillingController],
   providers: [SeekerBillingService, SeekerBillingWebhookService, SeekerPremiumService, StripeClient],
   // SeekerPremiumService: the admin module grants and revokes comps through it.
   exports: [SeekerBillingWebhookService, SeekerPremiumService],

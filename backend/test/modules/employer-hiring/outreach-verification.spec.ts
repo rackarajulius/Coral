@@ -21,13 +21,20 @@ const draft: SendOutreachDto = {
 
 function harness(
   level: string | null = 'unverified',
-  seat: { role: CompanyRole; status: CompanyMemberStatus } = activeSeat(),
+  seat: { role: CompanyRole; status: CompanyMemberStatus } | null = activeSeat(),
 ) {
+  const profile = async ({ select }: { select: Record<string, unknown> }) => select.verificationStatus
+    ? (level === null ? null : { verificationStatus: level })
+    : { companyName: 'Synthetic QA company' };
   const prisma = {
-    employerProfile: {
-      findUnique: jest.fn().mockImplementation(async ({ select }) => select.verificationStatus
-        ? (level === null ? null : { verificationStatus: level })
-        : { companyName: 'Synthetic QA company' }),
+    employerProfile: { findUnique: jest.fn().mockImplementation(profile) },
+    // The employer and their company's page (company-page.ts). With no
+    // company page in these fixtures, their own profile is what they hire
+    // under, so the level above is still the one being tested.
+    user: {
+      findUnique: jest.fn().mockImplementation(async ({ select }) => select.employerProfile
+        ? { employerProfile: await profile({ select: select.employerProfile.select }), companyMemberships: [] }
+        : null),
     },
     jobSeekerProfile: {
       findUnique: jest.fn().mockResolvedValue({
@@ -51,6 +58,7 @@ function harness(
   const companyContext = {
     membershipFor: jest.fn().mockResolvedValue(seat),
     memberUserIds: jest.fn().mockResolvedValue(['employer-a', 'colleague-a']),
+    colleagueIds: jest.fn().mockResolvedValue(['employer-a', 'colleague-a']),
   };
   const notifications = { create: jest.fn().mockResolvedValue(undefined) };
   const email = { sendPlainText: jest.fn().mockResolvedValue(undefined) };
@@ -71,7 +79,7 @@ function harness(
     collaborator({}), verification, collaborator({}), collaborator({}),
   );
   const reflector = new Reflector();
-  const roles = new RolesGuard(reflector);
+  const roles = new RolesGuard(reflector, collaborator(companyContext));
   const capabilities = new CompanyCapabilityGuard(reflector, collaborator(companyContext));
 
   async function authorize(user: User, handler: 'sendOutreach' | 'cancelScheduledOutreach' | 'inviteScreen') {
@@ -80,7 +88,7 @@ function harness(
       getHandler: () => controller[handler],
       switchToHttp: () => ({ getRequest: () => ({ user }) }),
     } as unknown as ExecutionContext;
-    roles.canActivate(context);
+    await roles.canActivate(context);
     await capabilities.canActivate(context);
   }
 
@@ -131,7 +139,8 @@ describe('Employer outreach initiation: company verification boundary', () => {
     const { dispatch, prisma, verify, notifications, email } = harness(level, activeSeat(CompanyRole.RECRUITER));
     await expect(dispatch()).resolves.toMatchObject({ success: true, data: { id: 'outreach-a', channel: 'both' } });
     expect(verify).toHaveBeenCalledWith('employer-a');
-    expect(prisma.employerProfile.findUnique.mock.invocationCallOrder[0])
+    // The company page's level is read (company-page.ts) before anything is sent.
+    expect(prisma.user.findUnique.mock.invocationCallOrder[0])
       .toBeLessThan(prisma.outreachMessage.create.mock.invocationCallOrder[0]);
     expect(prisma.outreachMessage.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ employerId: 'employer-a', candidateId: 'candidate-a', status: 'sent' }),
@@ -165,10 +174,17 @@ describe('Employer outreach initiation: company verification boundary', () => {
     },
   );
 
-  it('keeps candidate accounts off the employer initiation route', async () => {
-    const { dispatch, verify, send } = harness('verified');
+  it('keeps a job seeker without a company seat off the employer initiation route', async () => {
+    const { dispatch, verify, send } = harness('verified', null);
     await expect(dispatch(draft, employer(UserRole.JOB_SEEKER))).rejects.toBeInstanceOf(ForbiddenException);
     expect(verify).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('puts a job seeker holding a seat through the same verification boundary', async () => {
+    const { dispatch, verify, send } = harness('unverified');
+    await expect(dispatch(draft, employer(UserRole.JOB_SEEKER))).rejects.toBeInstanceOf(ForbiddenException);
+    expect(verify).toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
   });
 
@@ -225,7 +241,8 @@ describe('Individual AI-screen invitation: company verification boundary', () =>
         success: true, data: { id: 'screen-a', candidateId: 'candidate-a', status: 'invited', mode },
       });
       expect(verify).toHaveBeenCalledWith('employer-a');
-      expect(prisma.employerProfile.findUnique.mock.invocationCallOrder[0])
+      // The company page's level is read (company-page.ts) before anything is sent.
+      expect(prisma.user.findUnique.mock.invocationCallOrder[0])
         .toBeLessThan(prisma.aiScreen.create.mock.invocationCallOrder[0]);
       expect(prisma.aiScreen.create).toHaveBeenCalledTimes(1);
       expect(notifications.create).toHaveBeenCalledWith(expect.objectContaining({ userId: 'candidate-a', type: 'ai_screen' }));
@@ -249,8 +266,8 @@ describe('Individual AI-screen invitation: company verification boundary', () =>
     expect(notifications.create).not.toHaveBeenCalled();
   });
 
-  it('keeps candidate accounts off the employer invitation route', async () => {
-    const { dispatchInvite, verify, invite } = harness('verified');
+  it('keeps a job seeker without a company seat off the employer invitation route', async () => {
+    const { dispatchInvite, verify, invite } = harness('verified', null);
     await expect(dispatchInvite({ candidateId: 'candidate-a' }, employer(UserRole.JOB_SEEKER)))
       .rejects.toBeInstanceOf(ForbiddenException);
     expect(verify).not.toHaveBeenCalled();

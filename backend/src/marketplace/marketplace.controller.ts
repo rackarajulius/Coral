@@ -16,7 +16,7 @@ export class ServicesController {
   @Public() @Get() async list(@Query() query: MarketplaceQueryDto) { return { success: true, ...await this.marketplace.list('service', query) }; }
   @Get('mine') async mine(@CurrentUser() user: User, @Query() query: MarketplaceQueryDto) { return { success: true, ...await this.marketplace.list('service', query, user.id) }; }
   @Get('mine/:id') async managed(@Param('id') id: string, @CurrentUser() user: User) { return { success: true, data: await this.marketplace.getManaged('service', id, user.id) }; }
-  @Public() @Get(':id') async detail(@Param('id') id: string) { return { success: true, data: await this.marketplace.getPublic('service', id) }; }
+  @Public() @Get(':id') async detail(@Param('id') id: string) { return { success: true, data: await this.marketplace.getPublicService(id) }; }
   @Post() async create(@CurrentUser() user: User, @Body() dto: CreateServiceDto) { return { success: true, data: await this.marketplace.create('service', user.id, dto) }; }
   @Patch(':id') async update(@Param('id') id: string, @CurrentUser() user: User, @Body() dto: ServiceFieldsDto) { return { success: true, data: await this.marketplace.update('service', id, user.id, dto) }; }
   @Post(':id/state') async state(@Param('id') id: string, @CurrentUser() user: User, @Body() dto: ListingStateDto) { return { success: true, data: await this.marketplace.transition('service', id, user.id, dto.status) }; }

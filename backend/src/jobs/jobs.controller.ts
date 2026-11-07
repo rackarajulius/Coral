@@ -33,6 +33,8 @@ import { JobsService } from './jobs.service';
 import { JobMatchService } from './job-match.service';
 import { JobFitService } from './job-fit.service';
 import { CompanyResearchService } from '../resume-matcher/company-research/company-research.service';
+import { SeekerEntitlementsService } from '../seeker-entitlements/seeker-entitlements.service';
+import { jobCompanyName } from './job-company-name';
 import { MatchJobsDto } from './dto/match-jobs.dto';
 import { CompanyCapabilityGuard, RequiresCapability } from '../company/company-capability.guard';
 
@@ -45,6 +47,7 @@ export class JobsController {
     private readonly jobMatchService: JobMatchService,
     private readonly jobFitService: JobFitService,
     private readonly companyResearchService: CompanyResearchService,
+    private readonly entitlements: SeekerEntitlementsService,
     private readonly analyticsEvents: AnalyticsEventsService,
     private readonly verification: EmployerVerificationService,
   ) {}
@@ -70,29 +73,39 @@ export class JobsController {
   @Post(':id/tailor-resume')
   @Roles(UserRole.JOB_SEEKER, UserRole.ADMIN)
   async tailorForJob(@CurrentUser() user: User, @Param('id', ParseUUIDPipe) id: string) {
-    return { success: true, data: await this.jobFitService.tailorForJob(user, id) };
+    // The same Premium resume tailoring as the matcher's, so the same allowance.
+    await this.entitlements.assertAllowed(user, 'assist.tailor');
+    const data = await this.jobFitService.tailorForJob(user, id);
+    await this.entitlements.record(user.id, 'assist.tailor');
+    return { success: true, data };
   }
 
   /**
    * What this company is actually like — summarised from real web sources.
    * Returns { configured: false } when Firecrawl isn't set up, so the UI can
    * say so rather than showing an empty panel.
+   *
+   * Company research is Premium wherever it's offered, so this route is
+   * metered like the matcher's. It used to be public, which let anyone run a
+   * live crawl and an AI call per company without an account.
    */
-  @Public()
   @Get(':id/company-research')
-  async companyResearch(@Param('id', ParseUUIDPipe) id: string, @Req() req: Request) {
+  @Roles(UserRole.JOB_SEEKER, UserRole.ADMIN)
+  async companyResearch(@CurrentUser() user: User, @Param('id', ParseUUIDPipe) id: string) {
     // Same visibility as the job page: an unpublished job's company and title
     // aren't anyone else's to look up.
-    const job = await this.jobsService.getVisibleJobEntity(id, this.viewer(req));
+    const job = await this.jobsService.getVisibleJobEntity(id, user);
     if (!job) throw new NotFoundException('Job not found');
-    const company = job.companyName?.trim();
+    // The name the job page shows: most postings carry it on the employer's profile.
+    const company = jobCompanyName(job);
     if (!company) {
       return { success: true, data: { configured: true, profile: null, sources: [] } };
     }
-    return {
-      success: true,
-      data: await this.companyResearchService.research(company, job.title),
-    };
+    await this.entitlements.assertAllowed(user, 'research.company');
+    const data = await this.companyResearchService.research(company, job.title);
+    // Only a real lookup counts, as on the matcher.
+    if (data.configured && data.profile) await this.entitlements.record(user.id, 'research.company');
+    return { success: true, data };
   }
 
   @Public()

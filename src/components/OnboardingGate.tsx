@@ -1,17 +1,19 @@
 import { useRef } from 'react';
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
-import { RedirectWithNotice } from '@/components/auth/RedirectWithNotice';
-import { EMPLOYER_ON_SEEKER_SIDE, accountSide } from '@/lib/accountSide';
+import { accountSide } from '@/lib/accountSide';
 
 /**
- * Route guard for the job-seeker's own pages.
+ * Route guard for a person's own pages — profile, saved jobs, applications.
  *
- * - Employer accounts are sent to their dashboard: these pages, and the API
- *   behind them, are for job seekers only.
- * - Signed-in users who haven't finished onboarding are sent to /onboarding —
+ * - Everyone has these, employer accounts included: one account does
+ *   everything, as on LinkedIn. An employer's personal profile starts hidden
+ *   from candidate search until they choose otherwise.
+ * - A new account that hasn't finished onboarding is sent to /onboarding —
  *   only once the backend has said so. A placeholder status (backend slow or
  *   briefly unreachable) used to send finished users back through onboarding.
+ *   An employer account still setting up its company is not: that setup is
+ *   the company's, not this form's.
  * - Signed-out visitors arriving fresh pass through, as before — several of
  *   these pages are browsable without an account.
  * - **A session that ends while you are on one of these pages sends you home.**
@@ -37,15 +39,11 @@ const OnboardingGate = () => {
     return <Navigate to="/" replace />;
   }
 
-  if (isAuthenticated && accountSide(user) === 'employer') {
-    return <RedirectWithNotice to="/employers/dashboard" message={EMPLOYER_ON_SEEKER_SIDE} />;
-  }
-
   if (isAuthenticated && accountSide(user) === 'provider') {
     return <Navigate to="/provider" replace />;
   }
 
-  if (isAuthenticated && user?.status === 'PENDING_ONBOARDING' && !user.provisional) {
+  if (isAuthenticated && accountSide(user) === 'undecided') {
     return <Navigate to="/onboarding" replace />;
   }
 

@@ -1,9 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AiService } from '../services/ai/ai.service';
+import { CompanyContextService } from '../company/company-context.service';
+import { personName } from '../common/person-name';
 import { SourceCandidatesDto } from './dto/source-candidates.dto';
 import { isEmptyQuery, parseQuery } from './search-query';
+import { buildSimilarQuery, SimilarQuery } from './similar-query';
 
 const FETCH_LIMIT = 40;
 /**
@@ -71,11 +74,70 @@ export class CandidateSourcingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly ai: AiService,
+    private readonly companyContext: CompanyContextService,
   ) {}
+
+  /**
+   * A search for people like this one, built from their role and main skills.
+   *
+   * The starting person must be someone this team could already see: in
+   * search, on one of its projects, or among its applicants. Otherwise any id
+   * would read back a stranger's title and skills through the query.
+   */
+  async similarTo(
+    viewerId: string,
+    candidateId: string,
+  ): Promise<SimilarQuery & { candidateId: string; name: string }> {
+    const profile = await this.prisma.jobSeekerProfile.findUnique({
+      where: { userId: candidateId },
+      select: {
+        currentTitle: true,
+        headline: true,
+        skills: true,
+        discoverable: true,
+        privacySettings: true,
+        user: { select: { firstName: true, lastName: true, displayName: true } },
+      },
+    });
+    if (!profile || !(await this.canSee(viewerId, candidateId, profile))) {
+      throw new NotFoundException('That profile is not available.');
+    }
+
+    const built = buildSimilarQuery(profile);
+    if (!built) {
+      throw new BadRequestException(
+        'This profile has no role or skills on it yet, so there is nothing to match on.',
+      );
+    }
+    return { ...built, candidateId, name: personName(profile.user, 'this candidate') };
+  }
+
+  private async canSee(
+    viewerId: string,
+    candidateId: string,
+    profile: { discoverable: boolean; privacySettings: Prisma.JsonValue },
+  ): Promise<boolean> {
+    // The same rule as matchWhere.
+    const privacy = (profile.privacySettings ?? {}) as { profileVisible?: boolean };
+    if (profile.discoverable && privacy.profileVisible !== false) return true;
+
+    const memberIds = await this.companyContext.memberUserIds(viewerId);
+    const [onProject, applied] = await Promise.all([
+      this.prisma.shortlistItem.count({
+        where: { candidateId, shortlist: { employerId: { in: memberIds } } },
+      }),
+      this.prisma.application.count({
+        where: { applicantId: candidateId, job: { postedById: { in: memberIds } } },
+      }),
+    ]);
+    return onProject > 0 || applied > 0;
+  }
 
   async source(
     dto: SourceCandidatesDto,
+    viewerId?: string,
   ): Promise<{ query: string; candidates: SourcedCandidate[]; pool: TalentPool }> {
+    dto = await this.withoutColleagues(dto, viewerId);
     const query = (dto.query || '').trim();
     const where = this.matchWhere(dto);
 
@@ -216,6 +278,7 @@ export class CandidateSourcingService {
         ? { experienceLevel: { contains: dto.seniority.trim(), mode: 'insensitive' as const } }
         : {}),
       ...(dto.remoteOnly ? { remoteWork: true } : {}),
+      ...(dto.excludeIds?.length ? { userId: { notIn: dto.excludeIds } } : {}),
       AND: and,
     };
   }
@@ -257,7 +320,7 @@ export class CandidateSourcingService {
    * Ranking costs an AI call per run per watcher and answers a question nobody
    * has asked yet; it happens when someone opens the workspace and looks.
    */
-  async matchingIds(dto: SourceCandidatesDto): Promise<string[]> {
+  async matchingIds(dto: SourceCandidatesDto, viewerId?: string): Promise<string[]> {
     /**
      * A search that asked for nothing matches nobody, not everybody.
      *
@@ -271,6 +334,7 @@ export class CandidateSourcingService {
      * asking to see who is around, and should get an answer.
      */
     if (this.asksForNothing(dto)) return [];
+    dto = await this.withoutColleagues(dto, viewerId);
 
     const rows = await this.prisma.jobSeekerProfile.findMany({
       where: this.matchWhere(dto),
@@ -284,6 +348,20 @@ export class CandidateSourcingService {
     return rows
       .filter((r) => this.withinYears(dto, this.yearsExp((r as { experiences?: [] }).experiences ?? [])))
       .map((r) => r.userId);
+  }
+
+  /**
+   * Leaves the searching company's own people out of what it finds.
+   *
+   * One account can act for a company and look for work, and a recruiter's
+   * search must not turn up the colleague at the next desk who is quietly
+   * looking. Their pool count leaves them out too, so it describes people the
+   * search could actually show.
+   */
+  private async withoutColleagues(dto: SourceCandidatesDto, viewerId?: string): Promise<SourceCandidatesDto> {
+    if (!viewerId) return dto;
+    const colleagues = await this.companyContext.colleagueIds(viewerId);
+    return { ...dto, excludeIds: [...new Set([...(dto.excludeIds ?? []), ...colleagues])] };
   }
 
   /** True when neither the query nor any filter narrows anything. */
@@ -326,7 +404,9 @@ export class CandidateSourcingService {
       yearsExp: this.yearsExp(p.experiences),
       education: edu ? [edu.degree, edu.institution].filter(Boolean).join(' · ') : '',
       connection: '3rd+',
-      openToWork: true,
+      // Their own answer. This was `true` for everyone, which badged every
+      // passive candidate "Open to Work" once discovery stopped requiring it.
+      openToWork: p.openToWork,
       lastActive: this.relative(p.user.lastLoginAt ?? p.updatedAt),
     };
   }

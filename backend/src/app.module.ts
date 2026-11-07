@@ -34,6 +34,7 @@ import { StorageModule } from './storage/storage.module';
 import { AdminModule } from './admin/admin.module';
 import { VerificationsModule } from './verifications/verifications.module';
 import { ResumeMatcherModule } from './resume-matcher/resume-matcher.module';
+import { LocationsModule } from './locations/locations.module';
 import { HiringModule } from './employer-hiring/hiring.module';
 import { IntegrationsModule } from './integrations/integrations.module';
 import { MessagingModule } from './messaging/messaging.module';
@@ -87,6 +88,7 @@ import { ReviewsModule } from './reviews/reviews.module';
     AdminModule,
     VerificationsModule,
     ResumeMatcherModule,
+    LocationsModule,
     HiringModule,
     IntegrationsModule,
     MessagingModule,

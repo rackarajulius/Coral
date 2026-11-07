@@ -1,6 +1,8 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { OutreachResponse } from '@prisma/client';
 import { CompanyContextService } from '../company/company-context.service';
+import { roleHasCapability } from '../company/capabilities';
+import { profileShownFor } from '../company/company-page';
 import { PrismaService } from '../prisma/prisma.service';
 import { AiService, OutreachDraft } from '../services/ai/ai.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -57,6 +59,7 @@ export class OutreachService {
 
   /** AI-draft an editable outreach message for a candidate. */
   async draft(user: User, dto: DraftOutreachDto): Promise<OutreachDraft> {
+    await this.assertNotColleague(user, dto.candidateId);
     const candidate = await this.loadCandidate(dto.candidateId);
     if (!candidate) throw new NotFoundException('Candidate not available.');
     const company = await this.employerCompany(user.id);
@@ -83,6 +86,7 @@ export class OutreachService {
     if (!template || template.companyId !== context.companyId) {
       throw new NotFoundException('Template not found');
     }
+    await this.assertNotColleague(user, dto.candidateId);
     const candidate = await this.loadCandidate(dto.candidateId);
     if (!candidate) throw new NotFoundException('Candidate not available.');
 
@@ -110,6 +114,7 @@ export class OutreachService {
       throw new BadRequestException(`Replace ${left.join(', ')} before sending.`);
     }
 
+    await this.assertNotColleague(user, dto.candidateId);
     const candidate = await this.loadCandidate(dto.candidateId);
     if (!candidate) throw new NotFoundException('Candidate not available.');
 
@@ -233,6 +238,12 @@ export class OutreachService {
       if (count === 0) continue; // cancelled, or claimed, since it was read
 
       try {
+        // Scheduling grants no lasting permission. Recheck the sender after
+        // claiming the row, including old queued messages and restart retries.
+        if (!await this.scheduledSenderAllowed(row.employerId)) {
+          await this.prisma.outreachMessage.update({ where: { id: row.id }, data: { status: 'cancelled' } });
+          continue;
+        }
         const candidate = await this.loadCandidate(row.candidateId);
         if (!candidate) {
           await this.prisma.outreachMessage.update({ where: { id: row.id }, data: { status: 'cancelled' } });
@@ -253,6 +264,25 @@ export class OutreachService {
         this.logger.error(`Scheduled outreach ${row.id} failed: ${err instanceof Error ? err.message : err}`);
       }
     }
+  }
+
+  private async scheduledSenderAllowed(userId: string): Promise<boolean> {
+    const sender = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true, status: true } });
+    if (!sender || sender.status !== 'ACTIVE') return false;
+    if (sender.role === 'ADMIN') return true;
+    const seat = await this.companyContext.membershipFor(userId);
+    // A seat, or an employer account that never joined a company. Anyone else
+    // has no company to send for.
+    if (!seat && sender.role !== 'EMPLOYER') return false;
+    if (seat && (seat.status !== 'ACTIVE' || !roleHasCapability(seat.role, 'messaging:write'))) return false;
+    // The company's verification, as when the message was scheduled.
+    const page = await profileShownFor(this.prisma, userId, {
+      verificationStatus: true,
+      pageOf: { select: { deactivatedAt: true } },
+    });
+    // Not while the company's page is deactivated.
+    if (page?.pageOf?.deactivatedAt) return false;
+    return !!page && ['domain_verified', 'verified'].includes(page.verificationStatus);
   }
 
   /** Stops a scheduled message before it goes out. Anyone in the company may. */
@@ -599,6 +629,20 @@ export class OutreachService {
   }
 
   /**
+   * No recruiting approaches to the people the sender works with.
+   *
+   * Search already leaves them out; this covers an id reached any other way.
+   * An approach from your own company is a conversation for a manager, not a
+   * sourcing message, and receiving one would tell the person their job search
+   * had been seen.
+   */
+  private async assertNotColleague(user: User, candidateId: string): Promise<void> {
+    if ((await this.companyContext.colleagueIds(user.id)).includes(candidateId)) {
+      throw new ForbiddenException("That's someone you work with. Coral doesn't send recruiting approaches to your own colleagues.");
+    }
+  }
+
+  /**
    * Loads a candidate for outreach — only if they can be discovered.
    *
    * This has to agree with `CandidateSourcingService.matchWhere`. When it
@@ -638,11 +682,9 @@ export class OutreachService {
     };
   }
 
+  /** The company the candidate is approached by: the sender's company page. */
   private async employerCompany(userId: string): Promise<string> {
-    const emp = await this.prisma.employerProfile.findUnique({
-      where: { userId },
-      select: { companyName: true },
-    });
-    return emp?.companyName?.trim() || '';
+    const page = await profileShownFor(this.prisma, userId, { companyName: true });
+    return page?.companyName?.trim() || '';
   }
 }

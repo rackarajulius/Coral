@@ -8,7 +8,9 @@ import {
   MaxLength,
   ValidateNested,
 } from 'class-validator';
+import { MaxReadableLength } from '../../readable-length.validator';
 import { Type } from 'class-transformer';
+import { CommentPolicy } from '@prisma/client';
 import { AnnouncementReferenceDto, CommunityPostPurpose, CommunityPostType } from './create-post.dto';
 
 export class UpdatePostDto {
@@ -24,7 +26,7 @@ export class UpdatePostDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(5000)
+  @MaxReadableLength(5000)
   content?: string;
 
   @IsOptional()
@@ -43,4 +45,9 @@ export class UpdatePostDto {
   @IsString({ each: true })
   @MaxLength(50, { each: true })
   hashtags?: string[];
+
+  /** Changeable after posting, as on LinkedIn. Changing only this is not an edit. */
+  @IsOptional()
+  @IsEnum(CommentPolicy)
+  commentPolicy?: CommentPolicy;
 }

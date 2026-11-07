@@ -20,6 +20,20 @@ export class StripeClient {
     return Boolean(this.config.get<string>('STRIPE_SECRET_KEY', '').trim());
   }
 
+  /**
+   * Whether this Stripe account can calculate tax automatically — a property of
+   * the account, not of either product billed through it, so both checkouts
+   * read it here.
+   *
+   * Off unless explicitly enabled, because turning it on without an origin
+   * address registered in Stripe Tax does not degrade: Stripe refuses every
+   * session with "a valid head office address" or, once a customer exists,
+   * `customer_tax_location_invalid`.
+   */
+  get automaticTaxEnabled(): boolean {
+    return this.config.get<string>('STRIPE_AUTOMATIC_TAX') === 'true';
+  }
+
   async post<T = Record<string, unknown>>(
     path: string,
     form: Record<string, string | number | undefined>,

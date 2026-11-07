@@ -6,6 +6,11 @@ interface UseFollowCompanyArgs {
   companyId?: string;
   /** Follower count from the loaded company record — seeds the UI before the status fetch resolves. */
   initialFollowerCount?: number;
+  /**
+   * The whole status, when it came with what is on screen (a feed post).
+   * Fills the cache if it is empty, so no status fetch is made for a minute.
+   */
+  initialStatus?: FollowStatus | null;
 }
 
 /**
@@ -13,7 +18,7 @@ interface UseFollowCompanyArgs {
  * exposes an optimistic toggle. Status is only fetched when authenticated; for
  * signed-out visitors the button should route to login instead of calling toggle.
  */
-export function useFollowCompany({ companyId, initialFollowerCount = 0 }: UseFollowCompanyArgs) {
+export function useFollowCompany({ companyId, initialFollowerCount = 0, initialStatus }: UseFollowCompanyArgs) {
   const { isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
   const key = ["follow-status", companyId];
@@ -23,6 +28,9 @@ export function useFollowCompany({ companyId, initialFollowerCount = 0 }: UseFol
     queryFn: () => getFollowStatus(companyId!),
     enabled: !!companyId && isAuthenticated,
     staleTime: 60 * 1000,
+    // Only used when nothing is cached: a follow made a moment ago wins.
+    initialData: initialStatus ?? undefined,
+    initialDataUpdatedAt: initialStatus ? Date.now() : undefined,
   });
 
   const mutation = useMutation({
@@ -42,6 +50,9 @@ export function useFollowCompany({ companyId, initialFollowerCount = 0 }: UseFol
     },
     onSuccess: (result) => {
       queryClient.setQueryData(key, result);
+      // A followed company's posts belong in the community's Following feed,
+      // which is cached for minutes.
+      void queryClient.invalidateQueries({ queryKey: ["community-posts", "feed", "following"] });
     },
   });
 

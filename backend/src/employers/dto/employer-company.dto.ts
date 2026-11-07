@@ -4,6 +4,7 @@ import {
   IsBoolean,
   IsIn,
   IsInt,
+  IsNotEmpty,
   IsOptional,
   IsString,
   IsUrl,
@@ -12,6 +13,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { COMPANY_TYPES } from '../../company/company-facts';
 
 export class CompanyLocationDto {
   @IsString()
@@ -156,6 +158,11 @@ export class CreateEmployerCompanyDto {
   @IsString()
   @MaxLength(100)
   companySize?: string;
+
+  /** Organization type, as on LinkedIn: a key from company/company-facts.ts. */
+  @IsOptional()
+  @IsIn(COMPANY_TYPES)
+  companyType?: string;
 
   @IsOptional()
   @IsString()
@@ -329,8 +336,10 @@ export class CreateEmployerCompanyDto {
 }
 
 export class UpdateEmployerCompanyDto {
+  // Omit it to leave the name alone; a blank one is a wipe, not an edit.
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MaxLength(255)
   companyName?: string;
 
@@ -351,6 +360,11 @@ export class UpdateEmployerCompanyDto {
   @IsString()
   @MaxLength(100)
   companySize?: string;
+
+  /** Organization type, as on LinkedIn: a key from company/company-facts.ts. */
+  @IsOptional()
+  @IsIn(COMPANY_TYPES)
+  companyType?: string;
 
   @IsOptional()
   @IsString()

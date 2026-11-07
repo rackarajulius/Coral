@@ -31,7 +31,20 @@ export function accountSide(user: User | null | undefined): AccountSide {
   return "other";
 }
 
-export const SEEKER_ON_EMPLOYER_SIDE =
-  "You're signed in as a job seeker. Employer pages need an employer account.";
-export const EMPLOYER_ON_SEEKER_SIDE =
-  "You're signed in as an employer. Job seeker pages need a job seeker account.";
+/**
+ * Whether this person may open the company dashboard.
+ *
+ * One account does everything, as on LinkedIn, so this is not the account
+ * type alone: an employer account (including one still setting up its
+ * company), an admin, or anyone holding an active seat on a company team.
+ * Everyone signed in has a personal side; this is the company side.
+ */
+export function actsForCompany(user: User | null | undefined): boolean {
+  const side = accountSide(user);
+  return side === "employer" || side === "admin" || !!user?.company;
+}
+
+/** The name to show for the company someone acts for, when it is known. */
+export function companyLabel(user: User | null | undefined): string {
+  return user?.company?.name?.trim() || "Your company";
+}

@@ -84,6 +84,27 @@ transition-all duration-200"
         <div className="pt-8 border-t border-border flex flex-col md:flex-row justify-between items-center gap-4">
           <p className="text-muted-foreground text-sm">
             © {new Date().getFullYear()} {BRAND_NAME}. All rights reserved.
+            {/* Required by Logo.dev's free plan for commercial use: a visible link on a
+                public page. Job match cards show logos from it. Paid plans drop this. */}
+            <span className="mx-2" aria-hidden="true">·</span>
+            <a
+              href="https://logo.dev"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-foreground transition-colors"
+            >
+              Logos provided by Logo.dev
+            </a>
+            {/* GeoNames place names (CC BY) power the city suggestions; the licence asks for credit with a link. */}
+            <span className="mx-2" aria-hidden="true">·</span>
+            <a
+              href="https://www.geonames.org"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-foreground transition-colors"
+            >
+              Place names from GeoNames
+            </a>
           </p>
           <div className="flex gap-6">
             <ul className="flex items-center gap-6 text-sm text-muted-foreground">

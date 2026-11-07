@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { useParams, Link, useLocation, useNavigate } from 'react-router-dom';
+import { ArrowLeft } from 'lucide-react';
 import Header from '@/components/Header';
 import { Skeleton } from '@/components/ui/skeleton';
 import CompanyHero from '@/components/company/CompanyHero';
@@ -13,7 +14,10 @@ import CompanyMediaGallery from '@/components/company/CompanyMediaGallery';
 import CompanyBenefits from '@/components/company/CompanyBenefits';
 import CompanyJobs from '@/components/company/CompanyJobs';
 import CompanyHiringStats from '@/components/company/CompanyHiringStats';
+import CompanyHiringCommitments from '@/components/company/CompanyHiringCommitments';
 import CompanyTides from '@/components/company/CompanyTides';
+import CompanyCommunityPosts from '@/components/company/CompanyCommunityPosts';
+import { companyPath } from '@/lib/api/community';
 import InView from '@/components/common/InView';
 import Awards from '@/components/company/Awards&Certs';
 import CompanyReviews from '@/components/company/CompanyReviews';
@@ -26,12 +30,20 @@ import { trackPageSource } from '@/lib/api/analyticsEvents';
 
 const CompanyProfile = () => {
   const { id } = useParams<{ id?: string }>();
+  const location = useLocation();
+  const navigate = useNavigate();
+  // Set by the company's community page, so this page can offer the way back.
+  const cameFromCommunity = (location.state as { from?: string } | null)?.from === 'community';
   const [company, setCompany] = useState<EmployerCompany | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(!!id);
   const [error, setError] = useState<string | null>(null);
+  // The page on screen, by id and address, so moving the address bar onto it
+  // doesn't load it twice.
+  const shownPage = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!id) return;
+    if (shownPage.current.has(id)) return;
     let cancelled = false;
     setIsLoading(true);
     setError(null);
@@ -40,6 +52,14 @@ const CompanyProfile = () => {
         const data = await getCompanyById(id);
         if (!cancelled) {
           setCompany(data);
+          shownPage.current = new Set([id, data.id, data.slug].filter(Boolean) as string[]);
+          // Show the page's own address — /company/<slug>, or the page's id
+          // when it has none — so what gets shared is the company's page,
+          // not a teammate's copy of it or an id nobody can read.
+          const address = data.slug ? `/company/${data.slug}` : `/company-profile/${data.id}`;
+          if (data.id && location.pathname !== address) {
+            navigate(address, { replace: true, state: location.state });
+          }
           // Attribute to the owning user the API resolved — the route param
           // may be a slug or a profile id, neither of which is the employer.
           const ownerId = (data as { userId?: string }).userId;
@@ -65,7 +85,7 @@ const CompanyProfile = () => {
 
   if (id && isLoading) {
     return (
-      <div className="min-h-screen bg-white dark:bg-gray-900">
+      <div className="min-h-screen bg-background">
         <Header />
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
           {/* Hero skeleton */}
@@ -113,7 +133,7 @@ const CompanyProfile = () => {
 
   if (id && error) {
     return (
-      <div className="min-h-screen bg-white dark:bg-gray-900">
+      <div className="min-h-screen bg-background">
         <Header />
         <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-32 pb-20 text-center">
           <h1 className="text-xl font-semibold mb-2">Company not found</h1>
@@ -127,11 +147,20 @@ const CompanyProfile = () => {
   }
 
   return (
-    <div className="min-h-screen bg-white dark:bg-gray-900">
+    <div className="min-h-screen bg-background">
       <Header />
 
       <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
         <section className="pt-20 w-full">
+          {cameFromCommunity && id && (
+            <Link
+              to={companyPath(id)}
+              className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+            >
+              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+              Back to the community
+            </Link>
+          )}
           <CompanyHero company={company} />
         </section>
 
@@ -157,6 +186,12 @@ const CompanyProfile = () => {
                 dozen sections and several fetch on mount, so opening it fired
                 half a dozen requests at once for material most readers never
                 scroll to. */}
+            {/* What the company says in the community, beside what it is
+                holding there. Hides itself when it has posted nothing. */}
+            <InView>
+              <CompanyCommunityPosts company={company} />
+            </InView>
+
             <InView>
               <CompanyTides company={company} />
             </InView>
@@ -166,6 +201,12 @@ const CompanyProfile = () => {
                 this is the one no employer can write. */}
             <InView>
               <CompanyHiringStats company={company} />
+            </InView>
+
+            {/* The same kind of evidence: read from postings and interviews,
+                where a careers page would carry the company's own claims. */}
+            <InView>
+              <CompanyHiringCommitments company={company} />
             </InView>
 
             <section id="reviews" className="space-y-4">

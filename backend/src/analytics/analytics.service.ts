@@ -1,15 +1,27 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { PipelineStage, UserRole } from '@prisma/client';
+import { CompanyMemberStatus, PipelineStage, UserRole } from '@prisma/client';
 import { ApplicationStatus } from '../applications/dto/update-application-status.dto';
 import { stagesFromStatuses } from '../common/pipeline-stage';
 import { User } from '../common/types/user.types';
 import { PrismaService } from '../prisma/prisma.service';
+import { CompanyContextService } from '../company/company-context.service';
 
 @Injectable()
 export class AnalyticsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly companyContext: CompanyContextService,
+  ) {}
 
-  async getMyAnalytics(user: User) {
+  /**
+   * The caller's figures. `side: 'company'` is the company dashboard asking:
+   * one account can look for work and act for a company through a seat, so
+   * the account's role says nothing about which figures are wanted. It used to
+   * answer a job seeker with a seat with job-seeker figures, and the
+   * dashboard crashed reading trends they don't have.
+   */
+  async getMyAnalytics(user: User, side?: string) {
+    if (side === 'company') return this.getEmployerAnalytics(user.id);
     switch (user.role) {
       case UserRole.EMPLOYER:
         return this.getEmployerAnalytics(user.id);
@@ -124,20 +136,24 @@ export class AnalyticsService {
   }
 
   async getCompanyAnalytics(companyId: string, actor: User) {
+    // Membership, not a profile row: a teammate who joined from a personal
+    // account has a seat and no employer profile of their own.
     if (actor.role !== UserRole.ADMIN) {
-      const actorCompany = await this.prisma.employerProfile.findUnique({
-        where: { userId: actor.id },
-        select: { companyId: true },
+      const seat = await this.prisma.companyMember.findFirst({
+        where: { userId: actor.id, companyId, status: CompanyMemberStatus.ACTIVE },
+        select: { id: true },
       });
 
-      if (!actorCompany || actorCompany.companyId !== companyId) {
+      if (!seat) {
         throw new ForbiddenException('You can only view analytics for your own company');
       }
     }
 
-    const owners = await this.prisma.employerProfile.findMany({
+    // Everyone whose records are the company's (the fan-out rule).
+    const owners = await this.prisma.companyMember.findMany({
       where: {
         companyId,
+        status: { in: [CompanyMemberStatus.ACTIVE, CompanyMemberStatus.SUSPENDED, CompanyMemberStatus.REMOVED] },
       },
       select: {
         userId: true,
@@ -297,7 +313,9 @@ export class AnalyticsService {
     };
   }
 
+  /** The company's figures: every member's jobs (the fan-out rule), or the caller's own with no company. */
   private async getEmployerAnalytics(userId: string) {
+    const memberIds = await this.companyContext.memberUserIds(userId);
     const startOfToday = this.daysAgo(0);
     const sevenDaysAgo = this.daysAgo(7);
     const fourteenDaysAgo = this.daysAgo(14);
@@ -312,7 +330,7 @@ export class AnalyticsService {
       applicationsPrevWeek,
     ] = await Promise.all([
       this.prisma.job.findMany({
-        where: { postedById: userId },
+        where: { postedById: { in: memberIds } },
         select: {
           id: true,
           title: true,
@@ -327,7 +345,7 @@ export class AnalyticsService {
       this.prisma.savedJob.count({
         where: {
           job: {
-            postedById: userId,
+            postedById: { in: memberIds },
           },
         },
       }),
@@ -335,7 +353,7 @@ export class AnalyticsService {
         by: ['status'],
         where: {
           job: {
-            postedById: userId,
+            postedById: { in: memberIds },
           },
         },
         _count: { _all: true },
@@ -343,7 +361,7 @@ export class AnalyticsService {
       this.prisma.application.findMany({
         where: {
           job: {
-            postedById: userId,
+            postedById: { in: memberIds },
           },
         },
         select: {
@@ -372,14 +390,14 @@ export class AnalyticsService {
         take: 12,
       }),
       this.prisma.application.count({
-        where: { job: { postedById: userId }, appliedAt: { gte: startOfToday } },
+        where: { job: { postedById: { in: memberIds } }, appliedAt: { gte: startOfToday } },
       }),
       this.prisma.application.count({
-        where: { job: { postedById: userId }, appliedAt: { gte: sevenDaysAgo } },
+        where: { job: { postedById: { in: memberIds } }, appliedAt: { gte: sevenDaysAgo } },
       }),
       this.prisma.application.count({
         where: {
-          job: { postedById: userId },
+          job: { postedById: { in: memberIds } },
           appliedAt: { gte: fourteenDaysAgo, lt: sevenDaysAgo },
         },
       }),
@@ -466,28 +484,19 @@ export class AnalyticsService {
     };
   }
 
+  /**
+   * Not completed projects, rating or earnings: those were typed in by the
+   * freelancer and never measured. How they reply to requests is measured,
+   * at GET /freelancers/me/responsiveness.
+   */
   private async getFreelancerAnalytics(userId: string) {
-    const [profile, postsCount] = await Promise.all([
-      this.prisma.freelancerProfile.findUnique({
-        where: { userId },
-        select: {
-          id: true,
-          completedProjects: true,
-          rating: true,
-          totalEarnings: true,
-        },
-      }),
-      this.prisma.post.count({
-        where: { authorId: userId },
-      }),
-    ]);
+    const postsCount = await this.prisma.post.count({
+      where: { authorId: userId },
+    });
 
     return {
       role: UserRole.FREELANCER,
       counters: {
-        completedProjects: profile?.completedProjects ?? 0,
-        rating: profile?.rating ?? 0,
-        totalEarnings: profile?.totalEarnings ?? 0,
         postsCount,
       },
     };

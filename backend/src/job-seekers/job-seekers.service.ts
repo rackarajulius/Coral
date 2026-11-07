@@ -11,7 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CompanyContextService } from '../company/company-context.service';
 import { MatchScoreService } from '../applications/match-score.service';
 import { isValidTimezone } from '../employer-hiring/outreach-timing';
-import { Prisma } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
 import pdfParse from 'pdf-parse';
 import * as mammoth from 'mammoth';
 import { AiService, ParsedResume } from '../services/ai/ai.service';
@@ -28,6 +28,9 @@ import {
 } from './dto/interview-prep.dto';
 import { UpdateJobSeekerProfileDto } from './dto/update-job-seeker-profile.dto';
 import { User } from '../common/types/user.types';
+import { publicFeaturedItems } from './featured-items';
+import { PROJECT_ORDER, PROJECT_SELECT, publicProjects } from './profile-projects';
+import { doneWorkFor } from '../marketplace/done-work';
 import { ProfileImpressionsService } from './profile-impressions.service';
 
 @Injectable()
@@ -68,6 +71,7 @@ export class JobSeekersService {
         certifications: { orderBy: { issueDate: 'desc' } },
         portfolioItems: { orderBy: { createdAt: 'desc' } },
         recommendations: { orderBy: { createdAt: 'desc' } },
+        projects: { select: PROJECT_SELECT, orderBy: PROJECT_ORDER },
       },
     });
     // 404 (not 403) on every denial so we don't leak whether a profile exists.
@@ -80,7 +84,9 @@ export class JobSeekersService {
     const hidden = privacy.profileVisible === false;
 
     let appliedToViewerJobs = false;
+    let viewerIsColleague = false;
     if (!isOwner && !isAdmin) {
+      viewerIsColleague = (await this.companyContext.colleagueIds(actor.id)).includes(targetUserId);
       // Consent runs to the company: applying to a job hands contact details to
       // the employer that posted it, and every colleague working that pipeline
       // sees the same application. Keeping this to the actor alone would show a
@@ -119,7 +125,9 @@ export class JobSeekersService {
       headline: profile.headline,
       about: profile.summary,
       location: [profile.city, profile.country].filter(Boolean).join(', '),
-      openToWork: profile.openToWork,
+      // Never to the people they work with: a job search is not their
+      // employer's business.
+      openToWork: profile.openToWork && !viewerIsColleague,
       avatarUrl: profile.avatarUrl || profile.user.avatarUrl,
       bannerUrl: profile.bannerUrl,
       introVideoUrl: profile.introVideoUrl,
@@ -167,12 +175,9 @@ export class JobSeekersService {
         issueDate: c.issueDate,
         credentialUrl: c.credentialUrl,
       })),
-      portfolioItems: profile.portfolioItems.map((p) => ({
-        id: p.id,
-        title: p.title,
-        description: p.description,
-        link: p.projectUrl ?? p.videoUrl ?? p.imageUrl,
-      })),
+      portfolioItems: publicFeaturedItems(profile.portfolioItems, targetUserId),
+      projects: await publicProjects(this.prisma, profile.projects, targetUserId),
+      doneWork: await doneWorkFor(this.prisma, targetUserId),
       recommendations: profile.recommendations.map((r) => ({
         id: r.id,
         text: r.text,
@@ -981,6 +986,15 @@ export class JobSeekersService {
 
   private async deleteProfileMedia(userId: string, field: 'avatarUrl' | 'bannerUrl') {
     const profile = await this.getOrCreateProfile(userId, false);
+    if (field === 'avatarUrl') {
+      // Removing the photo removes it everywhere. Before, the sign-in photo
+      // on the account stayed behind and the profile went straight back to it.
+      const accountPhoto = await this.accountPhoto(userId);
+      const updated = await this.setAvatar(userId, profile.id, null);
+      await this.deleteOwnAvatarFiles(userId, [profile.avatarUrl, accountPhoto]);
+      return updated;
+    }
+
     const oldPath = this.storageService.pathFromPublicUrl(profile[field], PROFILE_BUCKET);
 
     const updated = await this.prisma.jobSeekerProfile.update({
@@ -993,6 +1007,39 @@ export class JobSeekersService {
     }
 
     return updated;
+  }
+
+  /**
+   * The profile photo is also the account photo.
+   *
+   * Posts, comments, chat, the team list and every other page read the
+   * account's photo, not the job-seeker profile's. Kept apart, an uploaded
+   * photo showed on the profile and nowhere else.
+   */
+  private setAvatar(userId: string, profileId: string, url: string | null) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id: userId }, data: { avatarUrl: url } });
+      return tx.jobSeekerProfile.update({ where: { id: profileId }, data: { avatarUrl: url } });
+    });
+  }
+
+  private async accountPhoto(userId: string): Promise<string | null> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { avatarUrl: true } });
+    return user?.avatarUrl ?? null;
+  }
+
+  /**
+   * Deletes replaced photos, but only this person's own files. The account
+   * photo can be set to any address, so one naming someone else's file in
+   * our bucket must not get that file deleted.
+   */
+  private async deleteOwnAvatarFiles(userId: string, urls: Array<string | null>) {
+    const paths = new Set(
+      urls
+        .map((url) => this.storageService.pathFromPublicUrl(url, PROFILE_BUCKET))
+        .filter((path): path is string => !!path && path.startsWith(`avatars/${userId}-`)),
+    );
+    for (const path of paths) await this.storageService.deletePublicFile(path, PROFILE_BUCKET);
   }
 
   private async uploadProfileMedia(
@@ -1011,6 +1058,13 @@ export class JobSeekersService {
       file.mimetype,
       PROFILE_BUCKET,
     );
+    if (field === 'avatarUrl') {
+      const accountPhoto = await this.accountPhoto(userId);
+      const updated = await this.setAvatar(userId, profile.id, publicUrl);
+      await this.deleteOwnAvatarFiles(userId, [profile.avatarUrl, accountPhoto]);
+      return updated;
+    }
+
     const oldPath = this.storageService.pathFromPublicUrl(profile[field], PROFILE_BUCKET);
 
     const updated = await this.prisma.jobSeekerProfile.update({
@@ -1191,12 +1245,25 @@ export class JobSeekersService {
           jobTypes: [],
           skills: [],
           languages: [],
+          discoverable: await this.discoverableByDefault(userId),
         },
         include,
       });
     }
 
     return profile;
+  }
+
+  /**
+   * Whether a new personal profile starts findable in candidate search.
+   *
+   * A job seeker opts out; anyone else opts in. Since one account can now act
+   * for a company, a recruiter who opens their own profile must not appear in
+   * every other company's search the moment they add a headline.
+   */
+  private async discoverableByDefault(userId: string): Promise<boolean> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+    return user?.role === UserRole.JOB_SEEKER;
   }
 
   private parseDate(dateString: string, fieldName: string): Date {

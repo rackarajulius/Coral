@@ -1,5 +1,4 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
-import Header from '@/components/Header';
 import { Button } from '@/components/ui/button';
 import { AccountCheckPending } from '@/components/auth/AccountCheckPending';
 import { RedirectWithNotice } from '@/components/auth/RedirectWithNotice';
@@ -12,7 +11,7 @@ export default function ProviderAreaGate() {
   const { openAuth } = useAuthModal();
   const location = useLocation();
   if (isLoading || user?.provisional) return <AccountCheckPending />;
-  if (!user) return <><Header /><main className="mx-auto max-w-xl px-4 pb-16 pt-28">
+  if (!user) return <><main className="mx-auto max-w-xl px-4 pb-16 pt-10">
     <h1 className="text-2xl font-semibold">Introduce your professional work</h1>
     <p className="mt-3 text-sm leading-6 text-muted-foreground">Sign in to build your provider profile and choose what to share with companies and clients.</p>
     <Button className="mt-6" onClick={() => openAuth({ redirectTo: location.pathname })}>Sign in to continue</Button>
@@ -25,7 +24,7 @@ export default function ProviderAreaGate() {
     if (location.pathname !== '/provider') return <Navigate to="/provider" replace />;
     return <Outlet />;
   }
-  if (user.status !== 'ACTIVE') return <><Header /><main className="mx-auto max-w-xl px-4 pb-16 pt-28">
+  if (user.status !== 'ACTIVE') return <><main className="mx-auto max-w-xl px-4 pb-16 pt-10">
     <h1 className="text-2xl font-semibold">Provider setup is unavailable</h1>
     <p className="mt-3 text-sm text-muted-foreground">An active personal account is required to manage a provider profile.</p>
   </main></>;

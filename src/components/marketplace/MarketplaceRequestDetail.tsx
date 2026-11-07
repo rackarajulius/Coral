@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { WorkDonePanel } from "@/components/marketplace/WorkDonePanel";
 import { marketplacePath, type MarketplaceOwner, type MarketplaceReportReason } from "@/lib/api/marketplace";
 import { getMarketplaceRequest, getMarketplaceRequestMessages, markMarketplaceRequestRead, marketplaceRequestStatusLabel, marketplaceVisiblePolling, reportMarketplaceRequest, safeMarketplaceWorkSample, sendMarketplaceRequestMessage, setMarketplaceRequestState, type MarketplaceRequestAction, type MarketplaceRequestDetail as RequestDetail } from "@/lib/api/marketplaceRequests";
 
@@ -99,6 +100,7 @@ export default function MarketplaceRequestDetail({ requestId, owner, onBack }: {
         {record.permissions.canBlock && <Button variant="outline" disabled={busy} onClick={() => { transition.reset(); setConfirmAction("block"); }}>Block participant</Button>}
         {record.permissions.canReport && <Button variant="ghost" disabled={busy || reported} onClick={() => { report.reset(); setReportOpen(true); }}><Flag className="mr-2 h-4 w-4" aria-hidden="true" />{reported ? "Report submitted" : "Report"}</Button>}
       </div>
+      <WorkDonePanel record={record} owner={owner} detailKey={detailKey} onChanged={refresh} />
       <div className="space-y-3" aria-label="Conversation messages">
         {messages.isPending && <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status"><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />Loading messages…</p>}
         {messages.isError && <div className="rounded-lg border border-destructive/30 p-4" role="alert"><p className="text-sm">We couldn't refresh your conversation messages.</p><Button variant="outline" size="sm" className="mt-3" onClick={() => void messages.refetch()}>Try again</Button></div>}

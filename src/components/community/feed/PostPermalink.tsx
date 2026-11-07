@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { AlertTriangle, ArrowLeft } from "lucide-react";
-import { Skeleton } from "@/components/ui/skeleton";
+import { PermalinkSkeleton } from "./skeletons";
 import { getPost } from "@/lib/api/community";
 import { FeedPost } from "./FeedPost";
 
@@ -32,7 +32,7 @@ export function PostPermalink({ postId }: { postId: string }) {
         Back to the community
       </Link>
 
-      {post.isLoading && <Skeleton className="h-60 rounded-2xl" />}
+      {post.isLoading && <PermalinkSkeleton />}
 
       {post.isError && (
         <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 p-5">

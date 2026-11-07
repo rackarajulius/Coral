@@ -1,0 +1,105 @@
+{
+  "runId": "cd10c4a651384f14b50cb97542962b0b",
+  "projectRef": "gyhmergopdlqygsgjpyb",
+  "startedAt": "2026-10-10T12:37:09.930Z",
+  "finishedAt": "2026-10-10T12:44:54.875Z",
+  "evidence": "Real Supabase password authentication + compiled local staging API + hosted PostgreSQL; synthetic participants, not browser or pilot acceptance.",
+  "build": {
+    "builtAt": "2026-10-09T15:47:21.435Z",
+    "frontendFingerprint": "0c716cb04b07f9164cb1bce1a6ba620f80d1dcc1b79c72acccc30ec8a07c43df"
+  },
+  "backendArtifactSha256": "96d49bd37afcb07d870cff23dc5a33bdd5b39f62d042cb16f4ea27745f3aeafd",
+  "checks": [
+    {
+      "name": "compiled staging artifacts and database migration status",
+      "passed": true,
+      "durationMs": 2895
+    },
+    {
+      "name": "flags-off anonymous reads and private denial",
+      "passed": true,
+      "durationMs": 20512
+    },
+    {
+      "name": "six separate real password sessions and candidate/company onboarding",
+      "passed": true,
+      "durationMs": 54261
+    },
+    {
+      "name": "provider opt-in retains employment role and explicit public consent",
+      "passed": true,
+      "durationMs": 7833
+    },
+    {
+      "name": "service draft privacy, publication and owner isolation",
+      "passed": true,
+      "durationMs": 33327
+    },
+    {
+      "name": "service enquiry retry, consent, first reply and private participant isolation",
+      "passed": true,
+      "durationMs": 56511
+    },
+    {
+      "name": "company project response, colleague denial and seat revocation",
+      "passed": true,
+      "durationMs": 58787
+    },
+    {
+      "name": "notification outage persists retries, restart delivers exactly one notification",
+      "passed": true,
+      "durationMs": 89382
+    },
+    {
+      "name": "unverified hiring denial and synthetic verified application-to-conversation journey",
+      "passed": true,
+      "durationMs": 21419
+    },
+    {
+      "name": "provider-enabled jobseeker closure removes profile/listing and rejects the old session",
+      "passed": true,
+      "durationMs": 38519
+    },
+    {
+      "name": "listing pause, block/report and flags-off preserve authorized history and safety actions",
+      "passed": true,
+      "durationMs": 70274
+    }
+  ],
+  "notificationRecovery": {
+    "outage": {
+      "ran": true,
+      "status": "ok",
+      "durationMs": 30405
+    },
+    "retainedFailures": 4,
+    "restart": {
+      "ran": true,
+      "status": "ok",
+      "durationMs": 26133
+    },
+    "repeat": {
+      "ran": true,
+      "status": "ok",
+      "durationMs": 319
+    },
+    "delivery": {
+      "total": 4,
+      "delivered": 4,
+      "notifications": 4
+    },
+    "states": [
+      {
+        "status": "delivered",
+        "last_error": null,
+        "count": 4
+      }
+    ]
+  },
+  "cleanup": [
+    "owned API stopped",
+    "owned application records removed",
+    "owned auth identities removed"
+  ],
+  "passed": true
+}

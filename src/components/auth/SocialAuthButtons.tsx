@@ -107,7 +107,7 @@ const SocialAuthButtons = ({
                 {isLoading ? (
                   <Loader2 className="h-7 w-7 shrink-0 animate-spin text-muted-foreground p-1" />
                 ) : lastGoogle.avatarUrl ? (
-                  <img src={lastGoogle.avatarUrl} alt="" className="h-7 w-7 shrink-0 rounded-full object-cover" />
+                  <img src={lastGoogle.avatarUrl} alt="" referrerPolicy="no-referrer" className="h-7 w-7 shrink-0 rounded-full object-cover" />
                 ) : (
                   <span className="h-7 w-7 shrink-0 rounded-full bg-coral/10 text-coral flex items-center justify-center text-xs font-semibold">
                     {firstName.charAt(0).toUpperCase()}

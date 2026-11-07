@@ -1,5 +1,7 @@
 # Coral staging setup and guided review
 
+**9 October continuation:** the active release checklist and subsequent fixes/evidence are in [Core marketplace staging gates](core-marketplace-gates.md). The account and setup observations below remain the historical 7–8 October record; they are not a claim that the cohort release has passed.
+
 Prepared 7 October 2026. Coral currently runs locally. This starter prepares a production-build review on this computer, using a separate Supabase staging project for database, authentication and storage. It has no public hosted URL yet. Phase 3A Public Broadcasts and Private Events remain the next development phase after this checkpoint.
 
 Staging review means using test identities and realistic test records to check the complete journeys and failure cases before releasing them to real members. A passing build or synthetic browser demo is only part of that evidence.

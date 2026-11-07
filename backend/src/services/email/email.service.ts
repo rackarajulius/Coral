@@ -48,6 +48,15 @@ export class EmailService {
 
   constructor(private readonly configService: ConfigService) {}
 
+  /**
+   * Whether anything can be sent at all. For saying up front that a route
+   * which depends on email is unavailable, rather than failing it after a click.
+   */
+  canSend(): boolean {
+    return !!this.configService.get<string>('RESEND_API_KEY')?.trim()
+      && !!this.configService.get<string>('EMAIL_FROM', '')?.trim();
+  }
+
   async send(input: SendEmailInput): Promise<EmailSendResult> {
     const to = this.normalizeRecipients(input.to);
     const subject = input.subject.trim();

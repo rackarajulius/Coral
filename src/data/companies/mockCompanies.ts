@@ -18,6 +18,8 @@ export interface Company {
   benefits: string[];
   followerGrowth?: number;
   isVerified?: boolean;
+  /** A real page's own address, /company/<slug>. */
+  slug?: string | null;
 }
 
 export const industries = [

@@ -1,12 +1,20 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { WRITE_TRANSACTION } from '../common/database-transaction';
 import { isPublicProviderReady } from '../freelancers/provider-profile-policy';
 import { LIVE_JOB_STATUSES } from '../jobs/job-lifecycle.service';
 import { CATEGORIES, CURRENCIES, ListingReportDto, MarketplaceQueryDto } from './dto/marketplace.dto';
-import { defaults, ListingKind, ListingReference, normalizedLabels, PROJECT_FIELDS, safeWorkUrl, SERVICE_FIELDS, validateFields, validateTransition } from './marketplace-policy';
+import { assertListingMedia, defaults, ListingKind, ListingReference, normalizedLabels, ownListingMedia, PROJECT_FIELDS, publicServiceWhere, safeWorkUrl, SERVICE_FIELDS, validateFields, validateTransition } from './marketplace-policy';
+import { VideoPreviewService } from './video-preview.service';
+import { doneWorkFor } from './done-work';
+import { personName } from '../common/person-name';
+// Projects on a person's profile, not the project briefs this service also lists.
+import { PROJECT_ORDER as PROFILE_PROJECT_ORDER, PROJECT_SELECT as PROFILE_PROJECT_SELECT, publicProjects } from '../job-seekers/profile-projects';
 
 type Database = Prisma.TransactionClient | PrismaService;
+/** As many of its projects as a service's page shows. */
+const SERVICE_PAGE_PROJECTS = 12;
 const OWNER_SELECT = {
   id: true, displayName: true, firstName: true, lastName: true, avatarUrl: true, status: true, role: true,
   freelancerProfile: { select: { providerEnabled: true, publicPreviewEnabled: true, category: true, headline: true, summary: true, skills: true, portfolioUrl: true, githubUrl: true } },
@@ -17,7 +25,7 @@ const SHARED_SELECT = {
   publishedAt: true, createdAt: true, updatedAt: true,
   owner: { select: OWNER_SELECT }, company: { select: { id: true, name: true } },
 };
-const SERVICE_SELECT = { ...SHARED_SELECT, deliverables: true, workSamples: true, availability: true, pricingMode: true, amountMinor: true } satisfies Prisma.ServiceListingSelect;
+const SERVICE_SELECT = { ...SHARED_SELECT, deliverables: true, workSamples: true, mediaUrls: true, availability: true, pricingMode: true, amountMinor: true } satisfies Prisma.ServiceListingSelect;
 const PROJECT_SELECT = { ...SHARED_SELECT, scope: true, budgetMode: true, minBudgetMinor: true, maxBudgetMinor: true, deadline: true } satisfies Prisma.ProjectBriefSelect;
 type ServiceRecord = Prisma.ServiceListingGetPayload<{ select: typeof SERVICE_SELECT }>;
 type ProjectRecord = Prisma.ProjectBriefGetPayload<{ select: typeof PROJECT_SELECT }>;
@@ -25,7 +33,11 @@ type RecordValue = ServiceRecord | ProjectRecord;
 
 @Injectable()
 export class MarketplaceService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    /** Preview cards for YouTube and Vimeo work samples. */
+    @Optional() private readonly videos?: VideoPreviewService,
+  ) {}
   isListingWritesEnabled() { return process.env.MARKETPLACE_LISTING_WRITES_ENABLED === 'true'; }
   assertListingWritesEnabled() {
     if (!this.isListingWritesEnabled()) throw new ForbiddenException('Marketplace publishing is not enabled yet. Existing listings can still be paused or closed.');
@@ -90,6 +102,7 @@ export class MarketplaceService {
       ${query.country?.trim() ? Prisma.sql`AND lower(listing.country) = lower(${query.country.trim()})` : Prisma.empty}
       ${query.city?.trim() ? Prisma.sql`AND lower(listing.city) = lower(${query.city.trim()})` : Prisma.empty}
       ${kind === 'service' && query.availability ? Prisma.sql`AND listing.availability = ${query.availability}` : Prisma.empty}
+      ${query.ownerId ? Prisma.sql`AND listing.owner_user_id = ${query.ownerId} AND listing.company_id IS NULL` : Prisma.empty}
       ${pattern ? Prisma.sql`AND (listing.title ILIKE ${pattern} ESCAPE ${escape} OR listing.description ILIKE ${pattern} ESCAPE ${escape})` : Prisma.empty}
     `;
     const joins = Prisma.sql`FROM ${table} AS listing JOIN users AS account ON account.id = listing.owner_user_id
@@ -113,22 +126,54 @@ export class MarketplaceService {
     if (!record || !await this.isPublic(kind, record, database)) throw new NotFoundException('Listing not available');
     return this.serialize(kind, record);
   }
+  /**
+   * A service's own page: the listing, and the projects its owner did as this
+   * service, from their profile — none while they've hidden that profile.
+   */
+  async getPublicService(id: string) {
+    const listing = await this.getPublic('service', id);
+    const ownerId = listing.owner.id;
+    const profile = await this.prisma.jobSeekerProfile.findUnique({
+      where: { userId: ownerId },
+      select: {
+        privacySettings: true,
+        projects: { where: { serviceListingId: id }, select: PROFILE_PROJECT_SELECT, orderBy: PROFILE_PROJECT_ORDER, take: SERVICE_PAGE_PROJECTS },
+      },
+    });
+    const hidden = (profile?.privacySettings as { profileVisible?: boolean } | null)?.profileVisible === false;
+    return {
+      ...listing,
+      projects: profile && !hidden ? await publicProjects(this.prisma, profile.projects, ownerId) : [],
+      // Confirmed by both sides, so not a profile setting: shown whatever the profile.
+      doneWork: await doneWorkFor(this.prisma, ownerId, id),
+    };
+  }
   async create(kind: ListingKind, userId: string, dto: Record<string, any>) {
     this.assertListingWritesEnabled();
     const data = this.writable(kind, dto, true), companyId = dto.companyId ?? null;
-    const candidate = { ...defaults(kind), ...data }; validateFields(kind, candidate);
+    const candidate: Record<string, any> = { ...defaults(kind), ...data }; validateFields(kind, candidate);
+    if (kind === 'service') {
+      assertListingMedia(candidate.mediaUrls, userId);
+      // Fetched before the transaction: nobody waits on a video site with rows locked.
+      candidate.workSamples = await this.withVideoPreviews(candidate.workSamples, userId);
+    }
     return this.prisma.$transaction(async tx => {
       await this.lockActor(tx, userId); await this.assertCreator(tx, kind, userId, companyId);
       const record = kind === 'service'
         ? await tx.serviceListing.create({ data: { ...candidate, ownerUserId: userId, companyId } as Prisma.ServiceListingUncheckedCreateInput, select: SERVICE_SELECT })
         : await tx.projectBrief.create({ data: { ...candidate, ownerUserId: userId, companyId } as Prisma.ProjectBriefUncheckedCreateInput, select: PROJECT_SELECT });
       return this.serialize(kind, record, true);
-    });
+    }, WRITE_TRANSACTION);
   }
   async update(kind: ListingKind, id: string, userId: string, dto: Record<string, any>) {
     this.assertListingWritesEnabled(); const data = this.writable(kind, dto);
+    if (kind === 'service' && data.workSamples) {
+      const current = await this.prisma.serviceListing.findUnique({ where: { id }, select: { ownerUserId: true, workSamples: true } });
+      if (current) data.workSamples = await this.withVideoPreviews(data.workSamples, current.ownerUserId, current.workSamples);
+    }
     return this.prisma.$transaction(async tx => {
       await this.lockRecord(tx, kind, id); const existing = await this.requireManaged(tx, kind, id, userId);
+      if (kind === 'service') assertListingMedia(data.mediaUrls, existing.ownerUserId);
       if (existing.status === 'archived' || existing.removedAt) throw new BadRequestException('Archived or removed records cannot be edited');
       await this.assertCreator(tx, kind, userId, existing.companyId);
       const candidate = { ...existing, ...data };
@@ -137,7 +182,7 @@ export class MarketplaceService {
       if (data.status !== 'paused' && existing.status === 'published') await this.assertProviderPublic(tx, existing.ownerUserId);
       const record = kind === 'service' ? await tx.serviceListing.update({ where: { id }, data, select: SERVICE_SELECT }) : await tx.projectBrief.update({ where: { id }, data, select: PROJECT_SELECT });
       return this.serialize(kind, record, true);
-    });
+    }, WRITE_TRANSACTION);
   }
   async transition(kind: ListingKind, id: string, userId: string, next: string) {
     const publishing = next === (kind === 'service' ? 'published' : 'open'); if (publishing) this.assertListingWritesEnabled();
@@ -146,13 +191,14 @@ export class MarketplaceService {
       validateTransition(kind, existing.status, next);
       if (existing.removedAt && next !== 'archived') throw new BadRequestException('Removed records cannot be republished');
       if (publishing) {
-        await this.assertCreator(tx, kind, userId, existing.companyId); await this.assertCreator(tx, kind, existing.ownerUserId, existing.companyId);
+        await this.assertCreator(tx, kind, userId, existing.companyId);
+        if (existing.ownerUserId !== userId) await this.assertCreator(tx, kind, existing.ownerUserId, existing.companyId);
         validateFields(kind, existing, true); if (kind === 'service') await this.assertProviderPublic(tx, existing.ownerUserId);
       }
       const data = { status: next, ...(publishing ? { publishedAt: new Date() } : {}) };
       const record = kind === 'service' ? await tx.serviceListing.update({ where: { id }, data, select: SERVICE_SELECT }) : await tx.projectBrief.update({ where: { id }, data, select: PROJECT_SELECT });
       return this.serialize(kind, record, true);
-    });
+    }, WRITE_TRANSACTION);
   }
   async report(kind: ListingKind, id: string, userId: string, dto: ListingReportDto) {
     if (Object.keys(dto).some(k => !['reason', 'details'].includes(k)) || !['spam', 'fraud', 'harassment', 'inappropriate', 'other'].includes(dto.reason)
@@ -167,7 +213,7 @@ export class MarketplaceService {
       await tx.marketplaceReport.upsert({ where: unique, create: { reporterId: userId, ...target, reason: dto.reason, details },
         update: { reason: dto.reason, details, ...(changed ? { status: 'open', reviewedAt: null, reviewedById: null } : {}) } });
       return { reported: true };
-    });
+    }, WRITE_TRANSACTION);
   }
   async validateAnnouncementReference(userId: string, reference: ListingReference, companyId?: string | null, database: Database = this.prisma) {
     this.assertListingWritesEnabled();
@@ -214,7 +260,7 @@ export class MarketplaceService {
     return { services: serviceCards, projects: projectCards, jobs: jobCards };
   }
   private publicWhere(kind: ListingKind): any {
-    const base = { publicConsent: true, removedAt: null, status: kind === 'service' ? 'published' : 'open', owner: { status: 'ACTIVE', ...(kind === 'service' ? { role: { in: ['JOB_SEEKER', 'FREELANCER'] }, freelancerProfile: { is: { providerEnabled: true, publicPreviewEnabled: true, category: { in: [...CATEGORIES] }, headline: { not: '' }, summary: { not: '' }, skills: { isEmpty: false }, OR: [{ portfolioUrl: { not: '' } }, { githubUrl: { not: '' } }] } } } : {}) } };
+    const base = kind === 'service' ? publicServiceWhere() : { publicConsent: true, removedAt: null, status: 'open', owner: { status: 'ACTIVE' } };
     return { AND: [base, ...(kind === 'project' ? [{ OR: [{ deadline: null }, { deadline: { gt: new Date() } }] }] : [])] };
   }
   private async isPublic(kind: ListingKind, record: RecordValue, database: Database) {
@@ -280,16 +326,32 @@ export class MarketplaceService {
     for (const key of allowed) if (dto[key] !== undefined) data[key] = typeof dto[key] === 'string' ? dto[key].trim() : dto[key];
     if (data.skills) { data.skills = normalizedLabels(data.skills); data.normalizedSkills = data.skills.map((value: string) => value.toLocaleLowerCase('en')); }
     if (data.deliverables) data.deliverables = normalizedLabels(data.deliverables);
-    if (data.workSamples) data.workSamples = data.workSamples.map((sample: any) => ({ ...sample, label: typeof sample.label === 'string' ? sample.label.trim() : sample.label }));
+    if (data.workSamples) data.workSamples = data.workSamples.map((sample: any) => ({ label: typeof sample?.label === 'string' ? sample.label.trim() : sample?.label, url: sample?.url }));
     if (data.deadline !== undefined) data.deadline = data.deadline === null || data.deadline === '' ? null : new Date(data.deadline); return data;
   }
+  /**
+   * Work samples with a preview card for each YouTube or Vimeo link. A link
+   * whose preview was made before keeps it, so saving a listing doesn't ask
+   * the video site again for every unchanged sample.
+   */
+  private async withVideoPreviews(samples: Array<{ label: string; url: string }>, ownerId: string, previous?: unknown) {
+    const before = new Map((Array.isArray(previous) ? previous : [])
+      .filter((sample: any) => sample?.preview && typeof sample.url === 'string')
+      .map((sample: any) => [sample.url, sample.preview]));
+    return Promise.all(samples.map(async (sample) => {
+      const kept = before.get(sample.url);
+      if (kept) return { ...sample, preview: kept };
+      const preview = this.videos ? await this.videos.preview(sample.url, ownerId) : null;
+      return preview ? { ...sample, preview } : sample;
+    }));
+  }
   private publicOwner(owner: RecordValue['owner']) {
-    return { id: owner.id, displayName: owner.displayName || `${owner.firstName ?? ''} ${owner.lastName ?? ''}`.trim() || 'Coral member', avatarUrl: safeWorkUrl(owner.avatarUrl), profileUrl: isPublicProviderReady(owner.freelancerProfile, owner) ? `/providers/${owner.id}` : null };
+    return { id: owner.id, displayName: personName(owner, 'Coral member'), avatarUrl: safeWorkUrl(owner.avatarUrl), profileUrl: isPublicProviderReady(owner.freelancerProfile, owner) ? `/providers/${owner.id}` : null };
   }
   private serialize(kind: ListingKind, record: RecordValue, managed = false) {
     const common = { id: record.id, title: record.title, description: record.description, category: record.category, skills: record.skills, workMode: record.workMode, country: record.country, city: record.city, currency: record.currency, status: record.status,
       publishedAt: record.publishedAt, createdAt: record.createdAt, updatedAt: record.updatedAt, owner: this.publicOwner(record.owner), company: record.company };
-    const fields = kind === 'service' ? { deliverables: (record as ServiceRecord).deliverables, workSamples: Array.isArray((record as ServiceRecord).workSamples) ? ((record as ServiceRecord).workSamples as any[]).filter(sample => safeWorkUrl(sample?.url)).map(sample => ({ label: sample.label, url: safeWorkUrl(sample.url) })) : [], availability: (record as ServiceRecord).availability, pricingMode: (record as ServiceRecord).pricingMode, amountMinor: (record as ServiceRecord).amountMinor }
+    const fields = kind === 'service' ? { deliverables: (record as ServiceRecord).deliverables, workSamples: Array.isArray((record as ServiceRecord).workSamples) ? ((record as ServiceRecord).workSamples as any[]).filter(sample => safeWorkUrl(sample?.url)).map(sample => ({ label: sample.label, url: safeWorkUrl(sample.url), ...(sample.preview ? { preview: { title: typeof sample.preview.title === 'string' ? sample.preview.title : null, siteName: String(sample.preview.siteName ?? ''), imageUrl: safeWorkUrl(sample.preview.imageUrl) } } : {}) })) : [], mediaUrls: ((record as ServiceRecord).mediaUrls ?? []).flatMap(url => ownListingMedia(url, record.ownerUserId) ?? []), availability: (record as ServiceRecord).availability, pricingMode: (record as ServiceRecord).pricingMode, amountMinor: (record as ServiceRecord).amountMinor }
       : { scope: (record as ProjectRecord).scope, budgetMode: (record as ProjectRecord).budgetMode, minBudgetMinor: (record as ProjectRecord).minBudgetMinor, maxBudgetMinor: (record as ProjectRecord).maxBudgetMinor, deadline: (record as ProjectRecord).deadline };
     return { ...common, ...fields, ...(managed ? { ownerUserId: record.ownerUserId, companyId: record.companyId, publicConsent: record.publicConsent, removed: !!record.removedAt,
       permissions: { canEdit: this.isListingWritesEnabled() && record.status !== 'archived' && !record.removedAt, canPublish: this.isListingWritesEnabled() && record.status !== 'archived' && !record.removedAt,

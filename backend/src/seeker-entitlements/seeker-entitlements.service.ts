@@ -24,6 +24,8 @@ export interface MetricStatus {
   limit: number | null;
   /** Null when there is nothing left to reset — unlimited, or not included. */
   resetsAt: string | null;
+  /** Whether this limit is applied yet. Features go live one at a time. */
+  enforced: boolean;
   /** Whether one more use fits the allowance. */
   allowed: boolean;
   /** Set only when not allowed. */
@@ -34,9 +36,9 @@ export interface MetricStatus {
  * Measures jobseeker usage against the tier registry.
  *
  * Usage is always counted. Refusing is separate, and only happens through
- * `assertAllowed` once `PREMIUM_ENFORCEMENT` is on — the same flag the Premium
- * guard honours. Before that the numbers are real and visible, which is what
- * lets pricing be set from actual usage instead of guesses.
+ * `assertAllowed` once `PREMIUM_ENFORCEMENT` covers the feature — the same
+ * flag the Premium guard honours. Before that the numbers are real and
+ * visible, which is what lets pricing be set from actual usage instead of guesses.
  */
 @Injectable()
 export class SeekerEntitlementsService {
@@ -51,9 +53,12 @@ export class SeekerEntitlementsService {
     return isPremiumUser(user) ? 'premium' : 'free';
   }
 
-  /** Whether limits are actually applied yet. */
-  isEnforced(): boolean {
-    return isPremiumEnforced(this.config);
+  /**
+   * Whether a feature's limit is applied yet; without one, whether every
+   * limit is. See `isPremiumEnforced` for switching features on one at a time.
+   */
+  isEnforced(metric?: SeekerMetric): boolean {
+    return isPremiumEnforced(this.config, metric);
   }
 
   async status(user: User, metric: SeekerMetric, at = new Date()): Promise<MetricStatus> {
@@ -78,6 +83,7 @@ export class SeekerEntitlementsService {
       used,
       limit,
       resetsAt: limit === null || limit === 0 ? null : windowEnd(rule.window, at).toISOString(),
+      enforced: this.isEnforced(metric),
       allowed: reason === null,
       reason,
     };
@@ -89,7 +95,7 @@ export class SeekerEntitlementsService {
    * nothing; `record` keeps counting either way.
    */
   async assertAllowed(user: User, metric: SeekerMetric): Promise<void> {
-    if (!this.isEnforced()) return;
+    if (!this.isEnforced(metric)) return;
     const status = await this.status(user, metric);
     if (status.allowed) return;
 
@@ -116,7 +122,10 @@ export class SeekerEntitlementsService {
     });
   }
 
-  /** Every metric at once, for the account's own usage view. */
+  /**
+   * Every metric at once, for the account's own usage view. `enforced` says
+   * whether every limit is applied; each metric says whether its own is.
+   */
   async snapshot(user: User) {
     const metrics = await Promise.all(SEEKER_METRIC_KEYS.map((m) => this.status(user, m)));
     return { tier: this.tierOf(user), enforced: this.isEnforced(), metrics };

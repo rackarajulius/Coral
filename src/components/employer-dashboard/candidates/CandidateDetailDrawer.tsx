@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { UserRound, Video as VideoIcon, Bot, Loader2 } from "lucide-react";
+import { UserRound, UsersRound, Video as VideoIcon, Bot, Loader2 } from "lucide-react";
 import { startConversation } from "@/lib/api/messaging";
 import { useMessageStore } from "@/stores/messageStore";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -200,6 +200,14 @@ export function CandidateDetailPanel({
               </Button>
             )}
             {c.applicantId && <MessageCandidateButton candidateId={c.applicantId} />}
+            {/* A strong applicant is the best brief there is. */}
+            {c.applicantId && (
+              <Button size="sm" variant="outline" asChild>
+                <Link to={`/employers/hiring?similar=${c.applicantId}`}>
+                  <UsersRound className="h-3.5 w-3.5" /> Find similar
+                </Link>
+              </Button>
+            )}
             {/* Advancing and rejecting are decisions. Everything else in this
                 row — viewing, messaging, scheduling, joining a room — a
                 comment-only seat may legitimately do. */}
