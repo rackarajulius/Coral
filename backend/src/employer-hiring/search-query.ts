@@ -10,7 +10,8 @@
  *
  * Rules:
  *  - `"two words"` is one phrase.
- *  - `A OR B` puts A and B in one group; any of them satisfies it.
+ *  - `A OR B` puts A and B in one group; any of them satisfies it. `A OR B OR C`
+ *    is one group of three.
  *  - `-term` or `NOT term` excludes.
  *  - everything else must appear.
  *
@@ -110,30 +111,43 @@ export function parseQuery(query: string): ParsedQuery {
   }
 
   let negateNext = false;
+  // The group the last OR built, so the next OR extends it. Without this the
+  // third term of `a OR b OR c` reaches back for whatever required term came
+  // before the chain and starts a second group with it.
+  let chain: string[] | null = null;
+  // Whether the last token was a required term: the only thing an OR can join.
+  let joinable = false;
 
   for (let i = 0; i < tokens.length; i++) {
     const raw = tokens[i];
     const upper = raw.toUpperCase();
 
-    if (upper === 'AND') continue;
-    if (upper === 'NOT') {
-      negateNext = true;
+    if (upper === 'OR') {
+      // Joins what came before to what comes next. A leading or trailing OR is
+      // someone mid-sentence, not an instruction, and so is one with only an
+      // exclusion before it: it is ignored, and what follows is read as an
+      // ordinary term.
+      const next = tokens[i + 1];
+      if (!next || next.toUpperCase() === 'OR') continue;
+      if (chain) {
+        chain.push(clean(next));
+      } else if (joinable) {
+        chain = [all.pop() as string, clean(next)];
+        any.push(chain);
+      } else {
+        continue;
+      }
+      i += 1;
       continue;
     }
 
-    if (upper === 'OR') {
-      // Joins what came before to what comes next. A leading or trailing OR is
-      // someone mid-sentence, not an instruction.
-      const next = tokens[i + 1];
-      if (!next || next.toUpperCase() === 'OR') continue;
-      const previous = all.pop();
-      const group = any.length && previous === undefined ? any[any.length - 1] : [];
-      if (previous !== undefined) {
-        group.push(previous);
-        any.push(group);
-      }
-      group.push(clean(next));
-      i += 1;
+    // Anything but OR ends a chain.
+    chain = null;
+    joinable = false;
+
+    if (upper === 'AND') continue;
+    if (upper === 'NOT') {
+      negateNext = true;
       continue;
     }
 
@@ -147,8 +161,12 @@ export function parseQuery(query: string): ParsedQuery {
 
     const value = clean(term);
     if (!value) continue;
-    if (negated) none.push(value);
-    else all.push(value);
+    if (negated) {
+      none.push(value);
+    } else {
+      all.push(value);
+      joinable = true;
+    }
   }
 
   return {
