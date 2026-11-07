@@ -1,5 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import pdfParse from 'pdf-parse';
+// pdf-parse is CommonJS, and this project compiles without esModuleInterop, so a
+// default import of it would be undefined at run time; this one is the function.
+import * as pdfParse from 'pdf-parse';
 import * as mammoth from 'mammoth';
 import { PrismaService } from '../prisma/prisma.service';
 import { AiService, ResumeTailoring } from '../services/ai/ai.service';
@@ -191,14 +193,21 @@ export class JobFitService {
   private async extractText(buffer: Buffer, fileName: string): Promise<string> {
     const lower = fileName.toLowerCase();
     try {
-      if (lower.endsWith('.pdf')) return (await pdfParse(buffer)).text ?? '';
+      if (lower.endsWith('.pdf')) {
+        // A plain byte array, not the Buffer: the PDF reader inside pdf-parse
+        // misreads a Buffer's cross-reference table and calls a sound file broken.
+        return (await pdfParse(new Uint8Array(buffer) as unknown as Buffer)).text ?? '';
+      }
       if (lower.endsWith('.docx') || lower.endsWith('.doc')) {
         return (await mammoth.extractRawText({ buffer })).value ?? '';
       }
       return buffer.toString('utf8');
-    } catch {
-      // Unknown/!corrupt format — fall back to a plain read rather than failing hard.
-      return buffer.toString('utf8');
+    } catch (err) {
+      // A PDF or Word file that will not open has no text to give. Its bytes
+      // read as UTF-8 are not a resume, and used to be sent to the AI as one;
+      // empty text asks the person to upload it again instead.
+      this.logger.warn(`Could not read a stored resume: ${err instanceof Error ? err.message : err}`);
+      return '';
     }
   }
 }

@@ -12,7 +12,9 @@ import { CompanyContextService } from '../company/company-context.service';
 import { MatchScoreService } from '../applications/match-score.service';
 import { isValidTimezone } from '../employer-hiring/outreach-timing';
 import { Prisma, UserRole } from '@prisma/client';
-import pdfParse from 'pdf-parse';
+// pdf-parse is CommonJS, and this project compiles without esModuleInterop, so a
+// default import of it would be undefined at run time; this one is the function.
+import * as pdfParse from 'pdf-parse';
 import * as mammoth from 'mammoth';
 import { AiService, ParsedResume } from '../services/ai/ai.service';
 import { PROFILE_BUCKET, RESUME_BUCKET, StorageService } from '../storage/storage.service';
@@ -946,8 +948,14 @@ export class JobSeekersService {
   private async extractResumeText(file: Express.Multer.File): Promise<string> {
     const mime = file.mimetype;
     if (mime === 'application/pdf') {
-      const data = await pdfParse(file.buffer);
-      return data.text || '';
+      try {
+        // A plain byte array, not the Buffer: the PDF reader inside pdf-parse
+        // misreads a Buffer's cross-reference table and calls a sound file broken.
+        const data = await pdfParse(new Uint8Array(file.buffer) as unknown as Buffer);
+        return data.text || '';
+      } catch {
+        throw new BadRequestException('That PDF could not be opened. If it has a password, remove it and try again.');
+      }
     }
     if (
       mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
