@@ -28,7 +28,8 @@ export interface Application {
   applicant: {
     name: string;
     email: string;
-    phone: string;
+    /** null when they haven't added one. */
+    phone: string | null;
     /** Their photo, if any. Drawn with ApplicantAvatar, which falls back to initials. */
     avatarUrl: string | null;
     /** Name parts for the initials fallback (personInitials). */

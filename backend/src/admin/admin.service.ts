@@ -1403,7 +1403,8 @@ export class AdminService {
         applicant: {
           name: app.applicant.displayName || `${app.applicant.firstName || ''} ${app.applicant.lastName || ''}`.trim() || 'Unknown',
           email: app.applicant.email,
-          phone: profile?.phone || 'Unknown',
+          // null, not 'Unknown': the drawer leaves the line out when there's no number.
+          phone: profile?.phone || null,
           // The photo and the name parts separately. One field used to hold the
           // URL *or* two letters, and the page drew it as text — so people with
           // a photo got a clipped fragment of its URL in the circle. Initials

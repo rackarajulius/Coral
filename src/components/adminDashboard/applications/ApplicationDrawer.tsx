@@ -84,7 +84,7 @@ export function ApplicationDrawer({ application, open, onClose, onAction }: Appl
                 <div className="flex-1 space-y-1">
                   <p className="text-base font-semibold text-card-foreground">{applicant.name}</p>
                   <p className="text-sm text-muted-foreground">{applicant.email}</p>
-                  <p className="text-sm text-muted-foreground">{applicant.phone}</p>
+                  {applicant.phone && <p className="text-sm text-muted-foreground">{applicant.phone}</p>}
                   <p className="text-sm text-muted-foreground">{applicant.location}</p>
                   <div className="flex items-center gap-2 mt-2">
                     <span className="text-xs text-muted-foreground">Profile:</span>
