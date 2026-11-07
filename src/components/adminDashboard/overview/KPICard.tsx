@@ -5,16 +5,18 @@ import { cn } from "@/lib/utils";
 interface KPICardProps {
   label: string;
   value: string;
-  change: number;
+  /** % change over the snapshot window; null/undefined until history exists, and then nothing is shown. */
+  change?: number | null;
   icon: ReactNode;
-  trend: number[];
+  trend?: number[];
   /** "negative" forces a red trend (for watch metrics like Suspended/Pending). */
   tone?: "auto" | "negative";
 }
 
-export function KPICard({ label, value, change, icon, trend, tone = "auto" }: KPICardProps) {
-  const isPositive = change >= 0;
-  const negative = tone === "negative" || change < 0;
+export function KPICard({ label, value, change = null, icon, trend = [], tone = "auto" }: KPICardProps) {
+  const hasChange = change != null;
+  const isPositive = hasChange && change >= 0;
+  const negative = tone === "negative" || (hasChange && change < 0);
 
   // Mini sparkline (needs at least 2 points to draw a line)
   const hasTrend = trend.length > 1;
@@ -49,28 +51,25 @@ export function KPICard({ label, value, change, icon, trend, tone = "auto" }: KP
         </div>
       </div>
 
+      {(hasChange || hasTrend) && (
       <div className="mt-4 flex items-center justify-between">
-       <div
-              className={cn(
-             "flex items-center gap-1 text-xs font-medium",
-                 negative
-                ? "text-rose-600 dark:text-rose-400"
-                 : "text-emerald-600 dark:text-emerald-400"
-              )}
-        >
-                {negative ? (
-                  <TrendingDown className="h-3.5 w-3.5" />
-                ) : (
-               <TrendingUp className="h-3.5 w-3.5" />
-              )}
-             <span>
+        {hasChange ? (
+          <div
+            className={cn(
+              "flex items-center gap-1 text-xs font-medium",
+              negative ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400"
+            )}
+          >
+            {negative ? <TrendingDown className="h-3.5 w-3.5" /> : <TrendingUp className="h-3.5 w-3.5" />}
+            <span>
               {isPositive ? "+" : ""}
               {change}%
-                 </span>
-                  <span className="text-muted-foreground font-normal ml-1">
-                 vs last week
-              </span>
+            </span>
+            <span className="text-muted-foreground font-normal ml-1">vs last week</span>
           </div>
+        ) : (
+          <span />
+        )}
         {hasTrend && (
           <svg width={width} height={height} className="overflow-visible">
             <polyline
@@ -84,6 +83,7 @@ export function KPICard({ label, value, change, icon, trend, tone = "auto" }: KP
           </svg>
         )}
       </div>
+      )}
     </div>
   );
 }

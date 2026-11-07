@@ -1,4 +1,4 @@
-import { ApplicationStatus, RiskLevel } from "@/data/admin/applications/applications";
+import { ApplicationStatus } from "@/data/admin/applications/applications";
 import { cn } from "@/lib/utils";
 
 
@@ -30,37 +30,6 @@ export function StatusBadge({ status }: { status: ApplicationStatus }) {
     <span className={cn("inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium", statusStyles[status])}>
       {status}
     </span>
-  );
-}
-
-const riskStyles: Record<RiskLevel, { dot: string; text: string }> = {
-  Low: {
-    dot: "bg-emerald-500",
-    text: "text-emerald-600 dark:text-emerald-400",
-  },
-  Medium: {
-    dot: "bg-amber-500",
-    text: "text-amber-600 dark:text-amber-400",
-  },
-  High: {
-    dot: "bg-rose-500",
-    text: "text-rose-600 dark:text-rose-400",
-  },
-};
-
-
-export function RiskBadge({ level, reason }: { level: RiskLevel; reason: string }) {
-  const style = riskStyles[level];
-  return (
-    <div className="flex items-center gap-1.5 group relative">
-      <span className={cn("h-2 w-2 rounded-full", style.dot)} />
-      <span className={cn("text-xs font-medium", style.text)}>{level}</span>
-      <div className="absolute bottom-full left-0 mb-2 hidden group-hover:block z-50">
-        <div className="rounded-lg bg-popover border border-border px-3 py-2 text-xs shadow-elevated max-w-[200px]">
-          {reason}
-        </div>
-      </div>
-    </div>
   );
 }
 

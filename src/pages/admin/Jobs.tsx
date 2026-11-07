@@ -1,23 +1,27 @@
 import { useState, useEffect } from "react";
-import { Search, SlidersHorizontal, Download, Plus } from "lucide-react";
+import { Search, SlidersHorizontal, Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Job } from "@/data/admin/job/jobs";
+import type { AdminSettableJobStatus, Job } from "@/data/admin/job/jobs";
 import { defaultFilters, FilterPanel, Filters } from "@/components/adminDashboard/job/FilterPanel";
 import { JobDetailDrawer } from "@/components/adminDashboard/job/JobDetailDrawer";
 import { JobsTable } from "@/components/adminDashboard/job/JobsTable";
 import { KpiRow } from "@/components/adminDashboard/job/KpiRow";
 import supabase from "@/lib/supabase";
 import { toast } from "sonner";
-import { setJobStatus, deleteJob } from "@/lib/api/adminJobs";
+import { setJobStatus, deleteJob, STATUS_ACTION_COPY } from "@/lib/api/adminJobs";
 import { useJobsMetrics, useJobsList, useJobActions } from "@/hooks/admin/useAdminJobs";
 
 export default function Jobs() {
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
-  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  // What the drawer showed when opened — used only if the job drops out of
+  // the current page (e.g. a status filter no longer matches it).
+  const [selectedSnapshot, setSelectedSnapshot] = useState<Job | null>(null);
+  const [busyJobId, setBusyJobId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -43,6 +47,9 @@ export default function Jobs() {
   const total = listData?.meta?.total ?? 0;
   const totalPages = listData?.meta?.totalPages ?? 1;
   const metrics = metricsData;
+  // Read the open job from the latest list, so its badge and actions follow a
+  // status change instead of showing what it was when the drawer opened.
+  const selectedJob = jobs.find((j) => j.id === selectedJobId) ?? selectedSnapshot;
 
   useEffect(() => {
     const t = setTimeout(() => { setDebouncedSearch(search); setPage(1); }, 400);
@@ -57,11 +64,11 @@ export default function Jobs() {
     (filters.salaryMin || filters.salaryMax ? 1 : 0) +
     (filters.minApplications ? 1 : 0) +
     (filters.company ? 1 : 0) +
-    (filters.industry ? 1 : 0) +
-    (filters.flaggedOnly ? 1 : 0);
+    (filters.industry ? 1 : 0);
 
   const handleSelectJob = (job: Job) => {
-    setSelectedJob(job);
+    setSelectedJobId(job.id);
+    setSelectedSnapshot(job);
     setDrawerOpen(true);
   };
 
@@ -85,47 +92,61 @@ export default function Jobs() {
     setPage(1);
   };
 
-  const handleUpdateStatus = async (jobId: string, status: Job["status"]) => {
+  const titleOf = (jobId: string) => jobs.find((j) => j.id === jobId)?.title ?? "The job";
+
+  const handleUpdateStatus = async (jobId: string, status: AdminSettableJobStatus) => {
+    setBusyJobId(jobId);
     try {
       await setJobStatus(jobId, status);
-      toast.success(`Job marked ${status}`);
+      toast.success(`${titleOf(jobId)} ${STATUS_ACTION_COPY[status].done}`);
       invalidateJobs();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update job");
+      toast.error(err instanceof Error ? err.message : "Couldn't update the job");
+    } finally {
+      setBusyJobId(null);
     }
   };
 
   const handleDelete = async (jobId: string) => {
+    setBusyJobId(jobId);
     try {
+      const title = titleOf(jobId);
       await deleteJob(jobId);
-      toast.success("Job deleted");
+      toast.success(`${title} was deleted`);
+      if (selectedJobId === jobId) setDrawerOpen(false);
+      setSelectedIds((prev) => prev.filter((id) => id !== jobId));
       invalidateJobs();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete job");
+      toast.error(err instanceof Error ? err.message : "Couldn't delete the job");
+    } finally {
+      setBusyJobId(null);
     }
   };
 
-  const handleBulkUpdateStatus = async (jobIds: string[], status: Job["status"]) => {
-    try {
-      await Promise.all(jobIds.map((id) => setJobStatus(id, status)));
-      toast.success(`${jobIds.length} job${jobIds.length !== 1 ? "s" : ""} marked ${status}`);
-      setSelectedIds([]);
-      invalidateJobs();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update jobs");
+  /**
+   * Runs one call per job and reports what actually happened. Promise.all
+   * would stop at the first refusal and say nothing about the jobs that had
+   * already changed.
+   */
+  const runBulk = async (jobIds: string[], run: (id: string) => Promise<void>, verb: string) => {
+    const results = await Promise.allSettled(jobIds.map(run));
+    const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    const done = jobIds.length - failed.length;
+    const jobsWord = (n: number) => `${n} job${n !== 1 ? "s" : ""}`;
+    if (done > 0) toast.success(`${jobsWord(done)} ${verb}`);
+    if (failed.length > 0) {
+      const reason = failed[0].reason instanceof Error ? failed[0].reason.message : "Unknown error";
+      toast.error(`${jobsWord(failed.length)} couldn't be ${verb}`, { description: reason });
     }
+    // Keep the ones that failed selected so they can be looked at.
+    setSelectedIds(jobIds.filter((_, i) => results[i].status === "rejected"));
+    invalidateJobs();
   };
 
-  const handleBulkDelete = async (jobIds: string[]) => {
-    try {
-      await Promise.all(jobIds.map((id) => deleteJob(id)));
-      toast.success(`${jobIds.length} job${jobIds.length !== 1 ? "s" : ""} deleted`);
-      setSelectedIds([]);
-      invalidateJobs();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete jobs");
-    }
-  };
+  const handleBulkUpdateStatus = (jobIds: string[], status: AdminSettableJobStatus) =>
+    runBulk(jobIds, (id) => setJobStatus(id, status), STATUS_ACTION_COPY[status].done.replace(/^is /, ""));
+
+  const handleBulkDelete = (jobIds: string[]) => runBulk(jobIds, deleteJob, "deleted");
 
   return (
     <div  className="p-6 space-y-6 max-w-[1600px] mx-auto">
@@ -148,9 +169,6 @@ export default function Jobs() {
           <Button variant="outline" size="sm" className="h-10 bg-card rounded-full" onClick={() => setFilterOpen(true)}>
             <SlidersHorizontal className="mr-1.5 h-4 w-4" />
             Filters
-          </Button>
-          <Button variant="outline" size="sm" className="h-10 gap-2 hidden sm:flex rounded-full">
-            <Download className="h-4 w-4" /> Export
           </Button>
           <Button  variant="default" size="sm" className="h-10 gap-2 rounded-full" onClick={() => navigate("/admin/jobs/create")}>
             <Plus className="h-4 w-4" /> Create Job
@@ -187,7 +205,14 @@ export default function Jobs() {
         />
 
       {/* Drawers */}
-      <JobDetailDrawer job={selectedJob} open={drawerOpen} onOpenChange={(v) => setDrawerOpen(v)} />
+      <JobDetailDrawer
+        job={selectedJob}
+        open={drawerOpen}
+        onOpenChange={(v) => setDrawerOpen(v)}
+        onUpdateStatus={handleUpdateStatus}
+        onDelete={handleDelete}
+        busy={busyJobId !== null && busyJobId === selectedJobId}
+      />
       <FilterPanel open={filterOpen} onClose={() => setFilterOpen(false)} filters={filters} onChange={(f) => { setFilters(f); setPage(1); }} />
     </div>
   );

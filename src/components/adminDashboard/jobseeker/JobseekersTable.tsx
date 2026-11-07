@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { ArrowUpDown, MoreHorizontal, CheckCircle2, ShieldOff, Trash2, Flag, Star, ShieldCheck } from "lucide-react";
-import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Jobseeker, JobseekerStatus, RiskLevel } from "@/data/admin/jobseeker/jobs-data";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -339,9 +338,6 @@ export function JobseekersTable({
                      <DropdownMenuContent align="end" className="bg-popover">
                       <DropdownMenuItem onClick={() => onJobseekerClick(js)}>
                         View Profile
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => toast.info("Edit mode coming soon")}>
-                        Edit
                       </DropdownMenuItem>
                       {onMakeAdmin && (
                         <DropdownMenuItem onClick={() => onMakeAdmin(js)}>

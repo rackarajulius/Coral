@@ -22,8 +22,6 @@ import {
   Ban,
   CheckCircle2,
   Search,
-  Plus,
-  Download,
   MoreHorizontal,
   ArrowUpDown,
 } from "lucide-react";
@@ -44,7 +42,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { Separator } from "@/components/ui/separator";
 import supabase from "@/lib/supabase";
@@ -74,7 +71,6 @@ const actionConfig = {
 };
 
 export default function Employers() {
-  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [drawerEmployer, setDrawerEmployer] = useState<Employer | null>(null);
@@ -171,9 +167,14 @@ export default function Employers() {
     setDestructiveAction({ type: "ban", label: "Ban", employerName: `${selected.size} employer${selected.size !== 1 ? "s" : ""}`, ids: [...selected] });
   };
 
-  // Sparkline data for a KPI card, looked up from the backend metrics by label.
-  const trendFor = (cardLabel: string): number[] =>
-    metrics?.kpis?.find((k: any) => k.label === cardLabel)?.trend ?? [];
+  // Change + sparkline for a KPI card, from the server's daily snapshots. Both
+  // are empty until two days of history exist, and the card then shows neither.
+  const historyFor = (cardLabel: string): { change: number | null; trend: number[] } => {
+    const k = metrics?.kpis?.find((x: any) => x.label === cardLabel);
+    return { change: k?.change ?? null, trend: k?.trend ?? [] };
+  };
+  // A dash while loading, never a 0 that reads as a real count.
+  const countOf = (n: number | undefined) => (n == null ? "—" : n.toLocaleString());
 
   return (
     <>
@@ -199,12 +200,6 @@ export default function Employers() {
             />
           </div>
           <EmployersFilters filters={filters} onFiltersChange={(f) => { setFilters(f); setPage(1); }} />
-          <Button variant="outline" size="sm" className="gap-2 rounded-full">
-            <Download className="h-4 w-4" /> Export
-          </Button>
-          <Button size="sm" className="gap-2 rounded-full" variant="default" onClick={() => navigate("/admin/employers/add")}>
-            <Plus className="h-4 w-4" /> Add Employer
-          </Button>
         </div>
        </div>
 
@@ -214,32 +209,28 @@ export default function Employers() {
          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
            <KPICard
              label="Active Employers"
-             value={(metrics?.summary?.activeEmployers ?? 0).toLocaleString()}
-             change={0}
+             value={countOf(metrics?.summary?.activeEmployers)}
              icon={<Building2 className="h-4 w-4" />}
-             trend={[]}
+             {...historyFor("Active Employers")}
            />
            <KPICard
              label="Pending Approval"
-             value={(metrics?.summary?.pendingApproval ?? 0).toLocaleString()}
-             change={0}
+             value={countOf(metrics?.summary?.pendingApproval)}
              icon={<Clock className="h-4 w-4" />}
-             trend={trendFor("Pending Approval")}
+             {...historyFor("Pending Approval")}
              tone="negative"
            />
            <KPICard
              label="Verified"
-             value={(metrics?.summary?.verified ?? 0).toLocaleString()}
-             change={0}
+             value={countOf(metrics?.summary?.verified)}
              icon={<CheckCircle2 className="h-4 w-4" />}
-             trend={[]}
+             {...historyFor("Verified")}
            />
            <KPICard
              label="Suspended Employers"
-             value={(metrics?.summary?.suspendedEmployers ?? 0).toLocaleString()}
-             change={0}
+             value={countOf(metrics?.summary?.suspendedEmployers)}
              icon={<Ban className="h-4 w-4" />}
-             trend={trendFor("Suspended Employers")}
+             {...historyFor("Suspended Employers")}
              tone="negative"
            />
          </div>

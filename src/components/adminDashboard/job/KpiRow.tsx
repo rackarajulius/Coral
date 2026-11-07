@@ -1,5 +1,6 @@
-import { Briefcase, CheckCircle2, Clock, Flag, XCircle, Archive, LucideIcon } from "lucide-react";
+import { Briefcase, LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ADMIN_JOB_STATUSES } from "@/data/admin/job/jobs";
 
 interface KpiCardProps {
   label: string;
@@ -44,14 +45,9 @@ export function KpiCard({ label, value, change, changeType = "neutral", icon: Ic
 }
 
 export function KpiRow({ metrics }: KpiRowProps) {
-  const kpis: KpiCardProps[] = (metrics?.kpis || [
-    { label: "Total Jobs", value: "0", changeType: "neutral" as const, icon: Briefcase },
-    { label: "Active Jobs", value: "0", changeType: "neutral" as const, icon: CheckCircle2 },
-    { label: "Pending Approval", value: "0", changeType: "neutral" as const, icon: Clock },
-    { label: "Flagged", value: "0", changeType: "neutral" as const, icon: Flag },
-    { label: "Expired", value: "0", changeType: "neutral" as const, icon: Archive },
-    { label: "Rejected", value: "0", changeType: "neutral" as const, icon: XCircle },
-  ]).map((kpi: any) => ({
+  // Until the counts arrive, show the labels with a dash — never a 0 that
+  // reads as a real count.
+  const kpis: KpiCardProps[] = (metrics?.kpis || ADMIN_JOB_STATUSES.map((label) => ({ label, value: "—" }))).map((kpi: any) => ({
     label: kpi.label,
     value: kpi.value,
     change: kpi.change ? `${kpi.change > 0 ? '+' : ''}${kpi.change}%` : undefined,

@@ -1,12 +1,12 @@
+import { useEffect, useState } from "react";
 import { RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Job, mockJobs } from "@/data/admin/job/jobs";
+import { ADMIN_JOB_STATUSES, Job } from "@/data/admin/job/jobs";
 
 export interface Filters {
   statuses: Job["status"][];
@@ -19,7 +19,6 @@ export interface Filters {
   minApplications: string;
   company: string;
   industry: string;
-  flaggedOnly: boolean;
 }
 
 export const defaultFilters: Filters = {
@@ -33,7 +32,6 @@ export const defaultFilters: Filters = {
   minApplications: "",
   company: "",
   industry: "",
-  flaggedOnly: false,
 };
 
 interface FilterPanelProps {
@@ -43,7 +41,7 @@ interface FilterPanelProps {
   onChange: (filters: Filters) => void;
 }
 
-const statuses: Job["status"][] = ["Active", "Pending", "Flagged", "Rejected", "Expired"];
+const statuses = ADMIN_JOB_STATUSES;
 const types: Job["type"][] = ["Full-time", "Part-time", "Contract", "Internship"];
 const locations = [
   { label: "All locations", value: "" },
@@ -57,8 +55,28 @@ const locations = [
   { label: "Remote", value: "remote" },
 ];
 
-const companies = Array.from(new Set(mockJobs.map((j) => j.company))).sort();
-const industries = Array.from(new Set(mockJobs.map((j) => j.industry).filter(Boolean))).sort() as string[];
+/** A text filter that applies on Enter or blur, not on every keystroke. */
+function CommitInput({ value, onCommit, placeholder }: { value: string; onCommit: (v: string) => void; placeholder: string }) {
+  const [draft, setDraft] = useState(value);
+  // Follow outside changes, e.g. Reset.
+  useEffect(() => setDraft(value), [value]);
+  const commit = () => {
+    const next = draft.trim();
+    if (next !== value) onCommit(next);
+  };
+  return (
+    <Input
+      className="h-9 text-sm"
+      placeholder={placeholder}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+      }}
+    />
+  );
+}
 
 export function FilterPanel({ open, onClose, filters, onChange }: FilterPanelProps) {
   const toggleStatus = (s: Job["status"]) => {
@@ -83,8 +101,7 @@ export function FilterPanel({ open, onClose, filters, onChange }: FilterPanelPro
     (filters.salaryMin || filters.salaryMax ? 1 : 0) +
     (filters.minApplications ? 1 : 0) +
     (filters.company ? 1 : 0) +
-    (filters.industry ? 1 : 0) +
-    (filters.flaggedOnly ? 1 : 0);
+    (filters.industry ? 1 : 0);
 
   return (
     <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
@@ -209,50 +226,24 @@ export function FilterPanel({ open, onClose, filters, onChange }: FilterPanelPro
             />
           </div>
 
-          {/* Company */}
+          {/* Company — free text: the options used to come from a mock list
+              of companies that don't exist, so picking one matched nothing. */}
           <div>
             <Label className="text-sm font-medium text-foreground mb-3 block">Company</Label>
-            <Select
+            <CommitInput
+              placeholder="Any company"
               value={filters.company}
-              onValueChange={(v) => onChange({ ...filters, company: v === "__all" ? "" : v })}
-            >
-              <SelectTrigger className="h-9">
-                <SelectValue placeholder="All companies" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all">All companies</SelectItem>
-                {companies.map((c) => (
-                  <SelectItem key={c} value={c}>{c}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              onCommit={(v) => onChange({ ...filters, company: v })}
+            />
           </div>
 
           {/* Industry */}
           <div>
             <Label className="text-sm font-medium text-foreground mb-3 block">Industry</Label>
-            <Select
+            <CommitInput
+              placeholder="Any industry"
               value={filters.industry}
-              onValueChange={(v) => onChange({ ...filters, industry: v === "__all" ? "" : v })}
-            >
-              <SelectTrigger className="h-9">
-                <SelectValue placeholder="All industries" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all">All industries</SelectItem>
-                {industries.map((ind) => (
-                  <SelectItem key={ind} value={ind}>{ind}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Flagged Only */}
-          <div className="flex items-center justify-between">
-            <Label className="text-sm font-medium text-foreground">Flagged Only</Label>
-            <Switch
-              checked={filters.flaggedOnly}
-              onCheckedChange={(v) => onChange({ ...filters, flaggedOnly: v })}
+              onCommit={(v) => onChange({ ...filters, industry: v })}
             />
           </div>
         </div>

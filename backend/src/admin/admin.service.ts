@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { computeProfileCompletion } from '../common/profile-completion';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -7,9 +7,17 @@ import { AdminListQueryDto } from './dto/admin-list-query.dto';
 import { JobsListQueryDto } from './dto/jobs-list-query.dto';
 import { ApplicationsListQueryDto } from './dto/applications-list-query.dto';
 import { AuditLogsQueryDto } from './dto/audit-logs-query.dto';
+import type { AdminSettableJobStatus } from './dto/update-job-status.dto';
 import { MetricSnapshotService } from './metric-snapshot.service';
 import { AuditLogService } from './audit-log.service';
 import { SeekerPremiumService } from '../seeker-billing/seeker-premium.service';
+
+/** A KPI card's history: a sparkline and % change, or null change when there's none. */
+type KpiTrend = { trend: number[]; change: number | null };
+const NO_TREND: KpiTrend = { trend: [], change: null };
+
+/** What the admin jobs page calls each status. See `jobStatusWhere`. */
+export type AdminJobStatusLabel = 'Active' | 'Expired' | 'Draft' | 'Paused' | 'Closed' | 'Archived';
 
 @Injectable()
 export class AdminService {
@@ -23,23 +31,22 @@ export class AdminService {
   ) {}
 
   /**
-   * Real trend + change from daily snapshots, falling back to a decorative
-   * sparkline until at least two days of history have accumulated.
+   * Trend + change from daily snapshots, or nothing at all until two days of
+   * history exist. `change: null` tells the card to say nothing — it used to
+   * get a random sparkline and a ratio against a guessed baseline instead.
    */
-  private async trendWithFallback(key: string, currentValue: number) {
+  private async snapshotTrend(key: string): Promise<KpiTrend> {
     const real = await this.snapshots.getTrend(key, 7);
-    if (real.trend.length >= 2) return real;
-    return { trend: this.generateTrendData(currentValue), change: 0 };
+    return real.trend.length >= 2 ? real : NO_TREND;
   }
 
   /**
-   * Like {@link trendWithFallback} but for flow metrics — uses the day-over-day
+   * Like {@link snapshotTrend} but for flow metrics — uses the day-over-day
    * deltas of a cumulative snapshot (e.g. new applications per day).
    */
-  private async deltaTrendWithFallback(key: string, currentValue: number) {
+  private async snapshotDeltaTrend(key: string): Promise<KpiTrend> {
     const real = await this.snapshots.getDeltaTrend(key, 7);
-    if (real.trend.length >= 2) return real;
-    return { trend: this.generateTrendData(currentValue), change: 0 };
+    return real.trend.length >= 2 ? real : NO_TREND;
   }
 
   async getAllUsers(): Promise<User[]> {
@@ -163,34 +170,28 @@ export class AdminService {
       `,
     ]);
 
-    const jobseekersChange = totalJobseekers > 0 ? Math.round((totalJobseekers / Math.max(totalUsers * 0.6, 1)) * 100 - 100) : 0;
-    const employersChange = totalEmployers > 0 ? Math.round((totalEmployers / Math.max(totalUsers * 0.3, 1)) * 100 - 100) : 0;
-    const listingsChange = activeListings > 0 ? Math.round((activeListings / Math.max(totalJobs * 0.8, 1)) * 100 - 100) : 0;
-    const applicationsChange = applicationsToday > 0 ? Math.round((applicationsToday / Math.max(totalApplications * 0.02, 1)) * 100 - 100) : 0;
-    const signupsChange = newSignups24h > 0 ? Math.round((newSignups24h / Math.max(totalUsers * 0.001, 1)) * 100 - 100) : 0;
-    const revenueChange = Math.round(Math.random() * 40 - 20);
-
-    // Real trends from daily snapshots (decorative fallback until history builds).
+    // Trends only from recorded daily snapshots; until there are two days of
+    // them, a card shows its value and nothing else.
     const [jobseekersTrend, employersTrend, listingsTrend, applicationsTrend, revenueTrend] = await Promise.all([
-      this.trendWithFallback('jobseekers.total', totalJobseekers),
-      this.trendWithFallback('employers.total', totalEmployers),
-      this.trendWithFallback('listings.active', activeListings),
+      this.snapshotTrend('jobseekers.total'),
+      this.snapshotTrend('employers.total'),
+      this.snapshotTrend('listings.active'),
       // "Applications Today" is a flow metric — track daily-new, not the running total.
-      this.deltaTrendWithFallback('applications.total', applicationsToday),
-      this.trendWithFallback('revenue.mtd', revenueMTD._sum.amount || 0),
+      this.snapshotDeltaTrend('applications.total'),
+      this.snapshotTrend('revenue.mtd'),
     ]);
-    const pick = (t: { trend: number[]; change: number }, fallbackChange: number) =>
-      t.trend.length >= 2 ? t.change : fallbackChange;
 
+    // No "Reports & Flags" card: it was a hardcoded 0. It comes back with the
+    // reports inbox, counted from the real report tables.
     return {
       kpis: [
-        { label: "Total Jobseekers", value: totalJobseekers.toLocaleString(), change: pick(jobseekersTrend, jobseekersChange), icon: "Users", trend: jobseekersTrend.trend },
-        { label: "Total Employers", value: totalEmployers.toLocaleString(), change: pick(employersTrend, employersChange), icon: "Building2", trend: employersTrend.trend },
-        { label: "Active Listings", value: activeListings.toLocaleString(), change: pick(listingsTrend, listingsChange), icon: "Briefcase", trend: listingsTrend.trend },
-        { label: "Applications Today", value: applicationsToday.toLocaleString(), change: pick(applicationsTrend, applicationsChange), icon: "FileText", trend: applicationsTrend.trend },
-        { label: "New Signups (24h)", value: newSignups24h.toLocaleString(), change: signupsChange, icon: "UserPlus", trend: this.generateTrendData(newSignups24h) },
-        { label: "Reports & Flags", value: "0", change: 0, icon: "Flag", trend: this.generateTrendData(0) },
-        { label: "Revenue (MTD)", value: `$${(revenueMTD._sum.amount || 0).toLocaleString()}`, change: pick(revenueTrend, revenueChange), icon: "DollarSign", trend: revenueTrend.trend },
+        { label: "Total Jobseekers", value: totalJobseekers.toLocaleString(), icon: "Users", ...jobseekersTrend },
+        { label: "Total Employers", value: totalEmployers.toLocaleString(), icon: "Building2", ...employersTrend },
+        { label: "Active Listings", value: activeListings.toLocaleString(), icon: "Briefcase", ...listingsTrend },
+        { label: "Applications Today", value: applicationsToday.toLocaleString(), icon: "FileText", ...applicationsTrend },
+        // Nothing snapshots signups yet, so no trend.
+        { label: "New Signups (24h)", value: newSignups24h.toLocaleString(), icon: "UserPlus", ...NO_TREND },
+        { label: "Revenue (MTD)", value: `$${(revenueMTD._sum.amount || 0).toLocaleString()}`, icon: "DollarSign", ...revenueTrend },
       ],
       summary: {
         totalUsers,
@@ -391,12 +392,12 @@ export class AdminService {
     // Anyone not yet verified is awaiting approval.
     const pendingApproval = Math.max(totalEmployers - verified, 0);
 
-    // Trends/change from real daily snapshots (decorative fallback until history builds).
+    // Trends/change from recorded daily snapshots only.
     const [activeTrend, pendingTrend, verifiedTrend, suspendedTrend] = await Promise.all([
-      this.trendWithFallback('employers.active', active30d),
-      this.trendWithFallback('employers.pending', pendingApproval),
-      this.trendWithFallback('employers.verified', verified),
-      this.trendWithFallback('employers.suspended', suspended),
+      this.snapshotTrend('employers.active'),
+      this.snapshotTrend('employers.pending'),
+      this.snapshotTrend('employers.verified'),
+      this.snapshotTrend('employers.suspended'),
     ]);
 
     return {
@@ -507,7 +508,6 @@ export class AdminService {
         logoUrl: profile?.companyLogo || null,
         website: profile?.companyWebsite || '',
         companySize: profile?.companySize || '',
-        phone: '', // no phone field on the employer profile yet
         location: profile?.headquarters || 'Unknown',
         industry: profile?.industry || profile?.industries?.[0] || 'Unknown',
         jobsPosted: totalJobs,
@@ -519,8 +519,6 @@ export class AdminService {
         joinedDate: user.createdAt.toISOString(),
         lastActive: user.lastLoginAt?.toISOString() || user.createdAt.toISOString(),
         status,
-        reports: 0, // no reports/flags model yet
-        riskScore: 0,
         isVerified: profile?.verificationStatus === 'verified',
       };
     });
@@ -609,20 +607,38 @@ export class AdminService {
 
   /** Loads a job with the fields the audit trail needs, or 404s. */
   private async assertJob(jobId: string) {
-    const job = await this.prisma.job.findUnique({ where: { id: jobId }, select: { id: true, title: true, status: true } });
+    const job = await this.prisma.job.findUnique({
+      where: { id: jobId },
+      select: { id: true, title: true, status: true, publishedAt: true, applicationDeadline: true },
+    });
     if (!job) {
       throw new NotFoundException('Job not found');
     }
     return job;
   }
 
-  async setJobStatus(adminId: string, jobId: string, status: string) {
+  async setJobStatus(adminId: string, jobId: string, status: AdminSettableJobStatus) {
     const before = await this.assertJob(jobId);
+    if (before.status === status) return;
+
+    if (status === 'active') {
+      // Publishing a job its employer never published would put an unfinished
+      // posting in front of candidates on the admin's say-so.
+      if (!before.publishedAt) {
+        throw new BadRequestException('This job has never been published. Only its employer can publish a draft.');
+      }
+      // The expiry cron would archive it again within a day, and search
+      // already hides it, so "active" would only be a label.
+      if (before.applicationDeadline && before.applicationDeadline < new Date()) {
+        throw new BadRequestException('Its application deadline has passed. The employer needs to extend it before it can go live again.');
+      }
+    }
+
     await this.prisma.job.update({ where: { id: jobId }, data: { status } });
     this.logger.log(`Set job ${jobId} status to ${status}`);
     await this.audit.record({
       adminId,
-      action: status === 'rejected' ? 'Reject' : 'Update',
+      action: 'Update',
       entityType: 'Job',
       entityId: jobId,
       entityName: before.title,
@@ -793,33 +809,39 @@ export class AdminService {
     return this.audit.list(query);
   }
 
-  async getJobsMetrics() {
-    const now = new Date();
-
-    const [totalJobs, activeJobs, pendingJobs, flaggedJobs, expiredJobs, rejectedJobs] = await Promise.all([
-      this.prisma.job.count(),
-      // Active = published and still accepting (no deadline, or deadline in the future).
-      this.prisma.job.count({
-        where: { status: 'active', OR: [{ applicationDeadline: null }, { applicationDeadline: { gte: now } }] },
-      }),
-      this.prisma.job.count({ where: { status: 'pending' } }),
-      this.prisma.job.count({ where: { status: 'flagged' } }),
-      // Expired = the application deadline has passed.
-      this.prisma.job.count({ where: { applicationDeadline: { lt: now } } }),
-      this.prisma.job.count({ where: { status: 'rejected' } }),
-    ]);
-
+  /**
+   * The admin jobs page's status vocabulary, as `where` clauses.
+   *
+   * These are the schema's own statuses, plus Expired — a job still marked
+   * active whose deadline has passed. Search already hides those, and the
+   * expiry cron archives them a day later, so calling them Active would
+   * overstate what is live.
+   *
+   * The six buckets don't overlap and together cover every job, so the KPI
+   * cards add up to the total. The list, its filter and the cards all read
+   * from here, so a label can't mean one thing in the table and another in a
+   * count.
+   */
+  private jobStatusWhere(now: Date): Record<AdminJobStatusLabel, Prisma.JobWhereInput> {
     return {
-      // change: 0 → the KpiRow hides the delta line (no historical data to compute it).
-      kpis: [
-        { label: "Total Jobs", value: totalJobs.toLocaleString(), change: 0, icon: "Briefcase", trend: this.generateTrendData(totalJobs) },
-        { label: "Active Jobs", value: activeJobs.toLocaleString(), change: 0, icon: "CheckCircle", trend: this.generateTrendData(activeJobs) },
-        { label: "Pending Approval", value: pendingJobs.toLocaleString(), change: 0, icon: "Clock", trend: this.generateTrendData(pendingJobs) },
-        { label: "Flagged", value: flaggedJobs.toLocaleString(), change: 0, icon: "Flag", trend: this.generateTrendData(flaggedJobs) },
-        { label: "Expired", value: expiredJobs.toLocaleString(), change: 0, icon: "Archive", trend: this.generateTrendData(expiredJobs) },
-        { label: "Rejected", value: rejectedJobs.toLocaleString(), change: 0, icon: "XCircle", trend: this.generateTrendData(rejectedJobs) },
-      ],
-      summary: { totalJobs, activeJobs, pendingJobs, flaggedJobs, expiredJobs, rejectedJobs },
+      Active: { status: 'active', OR: [{ applicationDeadline: null }, { applicationDeadline: { gte: now } }] },
+      Expired: { status: 'active', applicationDeadline: { lt: now } },
+      Draft: { status: 'draft' },
+      Paused: { status: 'paused' },
+      Closed: { status: 'closed' },
+      Archived: { status: 'archived' },
+    };
+  }
+
+  async getJobsMetrics() {
+    const where = this.jobStatusWhere(new Date());
+    const labels = Object.keys(where) as AdminJobStatusLabel[];
+    const counts = await Promise.all(labels.map((label) => this.prisma.job.count({ where: where[label] })));
+
+    // No change figures or sparklines: nothing records these counts over time.
+    return {
+      kpis: labels.map((label, i) => ({ label, value: counts[i].toLocaleString() })),
+      summary: Object.fromEntries(labels.map((label, i) => [label, counts[i]])),
     };
   }
 
@@ -843,19 +865,16 @@ export class AdminService {
       });
     }
 
-    // Status filter — reverse-map the UI vocabulary back to stored statuses.
+    // Status filter — the same buckets the KPI cards count.
+    const statusWhere = this.jobStatusWhere(now);
     const statuses = (query.statuses || '').split(',').map((x: string) => x.trim()).filter(Boolean);
     if (statuses.length) {
-      const conds: Prisma.JobWhereInput[] = [];
-      for (const s of statuses) {
-        if (s === 'Active') conds.push({ status: 'active', OR: [{ applicationDeadline: null }, { applicationDeadline: { gte: now } }] });
-        else if (s === 'Expired') conds.push({ status: 'active', applicationDeadline: { lt: now } });
-        else if (s === 'Pending') conds.push({ status: { in: ['pending', 'draft'] } });
-        else if (s === 'Flagged') conds.push({ status: 'flagged' });
-        else if (s === 'Rejected') conds.push({ status: 'rejected' });
-        else if (s === 'Suspended') conds.push({ status: 'suspended' });
-      }
-      if (conds.length) and.push({ OR: conds });
+      const conds = statuses
+        .filter((s): s is AdminJobStatusLabel => s in statusWhere)
+        .map((s) => statusWhere[s]);
+      // Every requested status unknown → match nothing, rather than silently
+      // dropping the filter and showing everything.
+      and.push(conds.length ? { OR: conds } : { id: { in: [] } });
     }
 
     const types = (query.types || '').split(',').map((x: string) => x.trim()).filter(Boolean);
@@ -874,9 +893,11 @@ export class AdminService {
     if (query.salaryMin) and.push({ salaryMin: { gte: Number(query.salaryMin) } });
     if (query.salaryMax) and.push({ salaryMax: { lte: Number(query.salaryMax) } });
     if (query.minApplications) and.push({ applicationsCount: { gte: Number(query.minApplications) } });
-    if (query.company?.trim()) and.push({ postedBy: { employerProfile: { companyName: query.company.trim() } } });
-    if (query.industry?.trim()) and.push({ category: query.industry.trim() });
-    if (query.flaggedOnly === 'true') and.push({ status: 'flagged' });
+    // Typed, not picked from a list, so match loosely.
+    if (query.company?.trim()) {
+      and.push({ postedBy: { employerProfile: { companyName: { contains: query.company.trim(), mode: 'insensitive' } } } });
+    }
+    if (query.industry?.trim()) and.push({ category: { contains: query.industry.trim(), mode: 'insensitive' } });
 
     const where: Prisma.JobWhereInput = and.length ? { AND: and } : {};
 
@@ -919,16 +940,16 @@ export class AdminService {
     const currencySymbol = (code: string): string =>
       (({ USD: '$', EUR: '€', GBP: '£', CAD: 'C$', AUD: 'A$' } as Record<string, string>)[code] || `${code} `);
 
-    // Map the stored job status to the admin badge vocabulary; published jobs
-    // past their deadline read as Expired.
+    // Stored status → admin label, matching jobStatusWhere. An unrecognised
+    // status is shown as stored rather than relabelled as something it isn't.
     const mapStatus = (status: string, deadline: Date | null): string => {
       switch (status) {
-        case 'flagged': return 'Flagged';
-        case 'rejected': return 'Rejected';
-        case 'pending': return 'Pending';
-        case 'suspended': return 'Suspended';
         case 'active': return deadline && deadline < now ? 'Expired' : 'Active';
-        default: return 'Pending'; // draft and anything unknown
+        case 'draft': return 'Draft';
+        case 'paused': return 'Paused';
+        case 'closed': return 'Closed';
+        case 'archived': return 'Archived';
+        default: return status;
       }
     };
 
@@ -948,7 +969,9 @@ export class AdminService {
         postedDate: job.publishedAt?.toISOString().split('T')[0] || job.createdAt.toISOString().split('T')[0],
         applications: job.applicationsCount,
         status: mapStatus(job.status, job.applicationDeadline),
-        risk: job.urgent ? 'High' : job.featured ? 'Medium' : 'Low',
+        // Whatever the status, a job past its deadline can't be made live again
+        // from here — the admin UI uses this to not offer it.
+        deadlinePassed: !!job.applicationDeadline && job.applicationDeadline < now,
         industry: job.category || 'General',
         expiryDate: job.applicationDeadline?.toISOString().split('T')[0],
         views: job.viewsCount,
@@ -980,12 +1003,13 @@ export class AdminService {
 
     return {
       kpis: [
-        { label: "Total Applications", value: totalApplications.toLocaleString(), change: Math.round(Math.random() * 20 - 10), icon: "FileText", trend: this.generateTrendData(totalApplications) },
-        { label: "Today", value: applicationsToday.toLocaleString(), change: Math.round(Math.random() * 40 - 20), icon: "Calendar", trend: this.generateTrendData(applicationsToday) },
-        { label: "Pending Review", value: pendingReview.toLocaleString(), change: Math.round(Math.random() * 30 - 15), icon: "Clock", trend: this.generateTrendData(pendingReview) },
-        { label: "Flagged", value: flagged.toLocaleString(), change: flagged > 0 ? Math.round(Math.random() * 20 - 10) : 0, icon: "Flag", trend: this.generateTrendData(flagged) },
-        { label: "Withdrawn", value: withdrawn.toLocaleString(), change: withdrawn > 0 ? Math.round(Math.random() * 15 - 7) : 0, icon: "XCircle", trend: this.generateTrendData(withdrawn) },
-        { label: "Interviews Scheduled", value: interviewsScheduled.toLocaleString(), change: Math.round(Math.random() * 25 - 12), icon: "UserCheck", trend: this.generateTrendData(interviewsScheduled) },
+        // Counts only: nothing records these over time, so there is no change to show.
+        { label: "Total Applications", value: totalApplications.toLocaleString() },
+        { label: "Today", value: applicationsToday.toLocaleString() },
+        { label: "Pending Review", value: pendingReview.toLocaleString() },
+        { label: "Flagged", value: flagged.toLocaleString() },
+        { label: "Withdrawn", value: withdrawn.toLocaleString() },
+        { label: "Interviews Scheduled", value: interviewsScheduled.toLocaleString() },
       ],
       summary: { totalApplications, applicationsToday, pendingReview, flagged, withdrawn, interviewsScheduled },
     };
@@ -1117,11 +1141,8 @@ export class AdminService {
           app.status === 'flagged' ? 'Flagged' :
           'Submitted'
         ),
-        // No screening/risk model yet: surface profile completeness as the score
-        // and keep risk stable rather than fabricating it.
+        // No screening model behind this yet: it is profile completeness.
         screeningScore: profileCompletion,
-        riskLevel: 'Low' as const,
-        riskReason: 'No automated risk model',
         resume: !!app.resumeUrl,
         coverLetter: app.coverLetter || 'No cover letter provided',
         screeningQuestions: [],
@@ -1130,14 +1151,5 @@ export class AdminService {
     });
 
     return { data, meta: { page, limit, total, totalPages: Math.max(Math.ceil(total / limit), 1) } };
-  }
-
-  private generateTrendData(currentValue: number): number[] {
-    const trend = [];
-    for (let i = 6; i >= 0; i--) {
-      const variation = (Math.random() - 0.5) * 0.4;
-      trend.push(Math.max(0, Math.round(currentValue * (0.7 + variation))));
-    }
-    return trend;
   }
 }

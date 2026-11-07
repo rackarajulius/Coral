@@ -1,4 +1,5 @@
 import supabase from "@/lib/supabase";
+import type { AdminJobStatus, AdminSettableJobStatus, Job } from "@/data/admin/job/jobs";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001/api/v1";
 
@@ -25,39 +26,61 @@ async function send(path: string, method: "PATCH" | "DELETE", body?: unknown): P
 }
 
 /**
- * Admin UI label → the status actually stored on a Job.
+ * Admin label → the status stored on the Job.
  *
- * This map used to invent its own vocabulary — 'published', 'flagged',
- * 'suspended', 'rejected', 'pending' — none of which exist in the schema. Any
- * job an admin touched became invisible on the public site and could not
- * receive applications, because every other query filters on 'active'.
+ * The admin page used to speak a moderation vocabulary — Pending, Flagged,
+ * Suspended, Rejected — that has no states behind it. It was mapped onto
+ * draft/paused/closed/archived, which read back wrong: every job the expiry
+ * cron archived showed as "Rejected", and an employer pausing their own job
+ * showed as "Flagged". The labels are now the stored statuses themselves.
  *
- * The schema's statuses are the only ones written now:
- *   draft | active | paused | closed | archived
- *
- * Note the mapping is lossy in one direction: Flagged and Suspended are
- * different admin intentions that store as paused and closed. Distinguishing
- * them properly needs real moderation states on the model, which is a design
- * decision rather than a mapping.
+ * None of these is moderation the employer can't undo: they can reopen a job
+ * an admin paused or closed. Holding a job down needs its own state on the
+ * model.
  */
-const STORED_STATUS: Record<string, string> = {
+const STORED_STATUS: Record<AdminSettableJobStatus, string> = {
   Active: "active",
-  Pending: "draft",
-  // Reversible, under review.
-  Flagged: "paused",
-  // A harder stop than flagged.
-  Suspended: "closed",
-  Rejected: "archived",
+  Paused: "paused",
+  Closed: "closed",
+  Archived: "archived",
 };
 
-/** Stored status → the label the admin UI shows. */
-export const UI_STATUS: Record<string, string> = {
-  active: "Active",
-  draft: "Pending",
-  paused: "Flagged",
-  closed: "Suspended",
-  archived: "Rejected",
+/**
+ * The moves an admin is offered from each status — the employer's own
+ * transition graph (jobs.service assertStatusTransition) minus going back to
+ * draft, which is the employer's call.
+ */
+const NEXT_STATUSES: Record<AdminJobStatus, AdminSettableJobStatus[]> = {
+  Draft: ["Archived"],
+  Active: ["Paused", "Closed", "Archived"],
+  Expired: ["Paused", "Closed", "Archived"],
+  Paused: ["Active", "Closed", "Archived"],
+  Closed: ["Active", "Archived"],
+  Archived: ["Active"],
 };
+
+/**
+ * What an admin can do to this job right now.
+ *
+ * Activate is withheld once the deadline has passed: search hides the job
+ * and the expiry cron would archive it again, so the server refuses it.
+ */
+export function adminStatusActions(job: Pick<Job, "status" | "deadlinePassed">): AdminSettableJobStatus[] {
+  const next = NEXT_STATUSES[job.status] ?? [];
+  return job.deadlinePassed ? next.filter((s) => s !== "Active") : next;
+}
+
+/** The button label for each move, and what it does, in the admin's words. */
+export const STATUS_ACTION_COPY: Record<AdminSettableJobStatus, { label: string; done: string }> = {
+  Active: { label: "Activate", done: "is live again" },
+  Paused: { label: "Pause", done: "is paused" },
+  Closed: { label: "Close", done: "is closed to new applications" },
+  Archived: { label: "Archive", done: "is archived" },
+};
+
+/** Shown before archiving: what it does, and what it doesn't. */
+export const ARCHIVE_EXPLAINER =
+  "Archived jobs leave search and stop taking applications. The employer still sees them and can reopen them.";
 
 /**
  * Sets a job's status from the admin UI vocabulary.
@@ -65,7 +88,7 @@ export const UI_STATUS: Record<string, string> = {
  * Unknown labels throw rather than defaulting: silently publishing a job
  * because a label didn't match is how the original bug went unnoticed.
  */
-export const setJobStatus = (id: string, uiStatus: string) => {
+export const setJobStatus = (id: string, uiStatus: AdminSettableJobStatus) => {
   const status = STORED_STATUS[uiStatus];
   if (!status) throw new Error(`Unknown job status: ${uiStatus}`);
   return send(`/admin/jobs/${id}/status`, "PATCH", { status });

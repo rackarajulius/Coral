@@ -11,15 +11,11 @@ import {
   ShieldOff,
   ShieldCheck,
   Trash2,
-  Bell,
-  RefreshCw,
   AlertTriangle,
   Star,
   BadgeCheck,
 } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
-import { toastWithUndo } from "@/lib/toast-Undo";
 import { cn } from "@/lib/utils";
 import { Jobseeker } from "@/data/admin/jobseeker/jobs-data";
 import { Button } from "@/components/ui/button";
@@ -38,6 +34,10 @@ interface JobseekerDetailDrawerProps {
   jobseeker: Jobseeker | null;
   open: boolean;
   onClose: () => void;
+  /** The page's own handlers — the same calls its table menu makes. */
+  onActivate?: (js: Jobseeker) => Promise<void>;
+  onSuspend?: (js: Jobseeker) => Promise<void>;
+  onDelete?: (js: Jobseeker) => Promise<void>;
 }
 const statusStyles: Record<string, string> = {
   Active:
@@ -71,8 +71,20 @@ const appStatusStyles: Record<string, string> = {
 };
 
 
-export function JobseekerDetailDrawer({ jobseeker, open, onClose }: JobseekerDetailDrawerProps) {
+export function JobseekerDetailDrawer({ jobseeker, open, onClose, onActivate, onSuspend, onDelete }: JobseekerDetailDrawerProps) {
   const [modal, setModal] = useState<ConfirmModalVariant | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // The page reports success or failure; this only runs the call.
+  const run = async (action?: (js: Jobseeker) => Promise<void>) => {
+    if (!jobseeker || !action) return;
+    setBusy(true);
+    try {
+      await action(jobseeker);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   if (!jobseeker) return null;
 
@@ -299,7 +311,7 @@ export function JobseekerDetailDrawer({ jobseeker, open, onClose }: JobseekerDet
             <h3 className="mb-4 text-sm font-semibold text-foreground">Admin Controls</h3>
             <div className="flex flex-wrap gap-2">
               {jobseeker.status === "Suspended" ? (
-                <Button size="sm" variant="default" onClick={() => toastWithUndo(`"${jobseeker.name}" activated`, () => console.log(`Undo: activate ${jobseeker.name}`))}>
+                <Button size="sm" variant="default" disabled={busy} onClick={() => void run(onActivate)}>
                   <ShieldCheck className="mr-1.5 h-3.5 w-3.5" />
                   Activate Account
                 </Button>
@@ -307,20 +319,13 @@ export function JobseekerDetailDrawer({ jobseeker, open, onClose }: JobseekerDet
                 <Button
                   size="sm"
                   variant="outline"
+                  disabled={busy}
                   onClick={() => setModal("suspend")}
                 >
                   <ShieldOff className="mr-1.5 h-3.5 w-3.5" />
                   Suspend Account
                 </Button>
               )}
-              <Button variant="outline" size="sm" onClick={() => toastWithUndo(`Password reset link sent to ${jobseeker.email}`, () => console.log(`Undo: reset password ${jobseeker.email}`))}>
-                <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-                Reset Password
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => toastWithUndo(`Warning sent to "${jobseeker.name}"`, () => console.log(`Undo: warning ${jobseeker.name}`))}>
-                <Bell className="mr-1.5 h-3.5 w-3.5" />
-                Send Warning
-              </Button>
             </div>
 
             <Separator className="my-4 border-destructive/20" />
@@ -337,6 +342,7 @@ export function JobseekerDetailDrawer({ jobseeker, open, onClose }: JobseekerDet
                 variant="outline"
                 size="sm"
                 className="border-destructive/30 text-destructive hover:bg-destructive/10"
+                disabled={busy}
                 onClick={() => setModal("delete")}
               >
                 <Trash2 className="mr-1.5 h-3.5 w-3.5" />
@@ -378,7 +384,11 @@ export function JobseekerDetailDrawer({ jobseeker, open, onClose }: JobseekerDet
         open={!!modal}
         variant={modal}
         targetName={jobseeker.name}
-        onConfirm={() => setModal(null)}
+        onConfirm={() => {
+          const action = modal === "suspend" ? onSuspend : modal === "delete" ? onDelete : undefined;
+          setModal(null);
+          void run(action);
+        }}
         onCancel={() => setModal(null)}
       />
     )}

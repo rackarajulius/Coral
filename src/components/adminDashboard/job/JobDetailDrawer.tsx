@@ -1,8 +1,7 @@
 import { useState } from "react";
-import type { Job } from "@/data/admin/job/jobs";
-import { useToast } from "@/hooks/use-toast";
-import { ToastAction } from "@/components/ui/toast";
-import { StatusBadge, RiskBadge } from "./JobBadges";
+import type { AdminSettableJobStatus, Job } from "@/data/admin/job/jobs";
+import { adminStatusActions, ARCHIVE_EXPLAINER, STATUS_ACTION_COPY } from "@/lib/api/adminJobs";
+import { StatusBadge } from "./JobBadges";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -26,8 +25,6 @@ import {
   Briefcase,
   Calendar,
   Users,
-  AlertTriangle,
-  Shield,
   Copy,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -36,9 +33,10 @@ interface Props {
   job: Job | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onUpdateStatus?: (jobId: string, status: Job["status"]) => void;
+  onUpdateStatus?: (jobId: string, status: AdminSettableJobStatus) => void;
   onDelete?: (jobId: string) => void;
-  onUndoDelete?: (job: Job) => void;
+  /** A change for this job is in flight. */
+  busy?: boolean;
 }
 
 function StatBlock({ label, value }: { label: string; value: string | number }) {
@@ -58,13 +56,13 @@ function formatSalary(job: Job) {
   return `${job.currency ?? "$"}${job.salaryMin.toLocaleString()}`;
 }
 
-export function JobDetailDrawer({ job, open, onOpenChange, onUpdateStatus, onDelete, onUndoDelete }: Props) {
-  const [confirmAction, setConfirmAction] = useState<"reject" | "delete" | null>(null);
-  const { toast } = useToast();
+export function JobDetailDrawer({ job, open, onOpenChange, onUpdateStatus, onDelete, busy = false }: Props) {
+  const [confirmAction, setConfirmAction] = useState<"archive" | "delete" | null>(null);
 
   if (!job) return null;
 
   const timeline = job.timeline ?? [];
+  const actions = adminStatusActions(job);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -96,7 +94,6 @@ export function JobDetailDrawer({ job, open, onOpenChange, onUpdateStatus, onDel
 
             <div className="flex items-center gap-2 shrink-0">
               <StatusBadge status={job.status} />
-              <RiskBadge risk={job.risk} />
             </div>
           </div>
         </SheetHeader>
@@ -204,163 +201,74 @@ export function JobDetailDrawer({ job, open, onOpenChange, onUpdateStatus, onDel
             </div>
           )}
 
-          {/* Moderation */}
+          {/* Status — the page reports success or failure once the server
+              answers, so nothing here claims an outcome in advance. */}
           <div className="px-6 py-5 space-y-3">
-            <p className="text-sm font-semibold text-foreground">Moderation</p>
+            <p className="text-sm font-semibold text-foreground">Status</p>
             <div className="flex flex-wrap gap-2">
-              <Button variant="default" size="sm" className="h-8 text-xs" onClick={() => { const prev = job.status; onUpdateStatus?.(job.id, "Active"); toast({ title: "Job Approved", description: `"${job.title}" is now active.`, duration: 8000, action: <ToastAction altText="Undo" onClick={() => { onUpdateStatus?.(job.id, prev); toast({ title: "Undo successful", description: `"${job.title}" reverted to ${prev}.` }); }}>Undo</ToastAction> }); }}>
-                Approve
-              </Button>
-              <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => { const prev = job.status; onUpdateStatus?.(job.id, "Expired"); toast({ title: "Job Suspended", description: `"${job.title}" has been suspended.`, duration: 8000, action: <ToastAction altText="Undo" onClick={() => { onUpdateStatus?.(job.id, prev); toast({ title: "Undo successful", description: `"${job.title}" reverted to ${prev}.` }); }}>Undo</ToastAction> }); }}>
-                Suspend
-              </Button>
-              <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => { const prev = job.status; onUpdateStatus?.(job.id, "Flagged"); toast({ title: "Job Flagged", description: `"${job.title}" has been flagged.`, variant: "destructive", duration: 8000, action: <ToastAction altText="Undo" onClick={() => { onUpdateStatus?.(job.id, prev); toast({ title: "Undo successful", description: `"${job.title}" reverted to ${prev}.` }); }}>Undo</ToastAction> }); }}>
-                Flag
-              </Button>
-              <Button size="sm" variant="outline" className="h-8 text-xs">
-                Edit
-              </Button>
-            </div>
-            <div className="flex gap-2 pt-1 ">
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 text-xs"
-                onClick={() => setConfirmAction("reject")}
-              >
-                Reject
-              </Button>
+              {actions.map((next) => (
+                <Button
+                  key={next}
+                  size="sm"
+                  variant={next === "Active" ? "default" : "outline"}
+                  className="h-8 text-xs"
+                  disabled={busy}
+                  onClick={() => (next === "Archived" ? setConfirmAction("archive") : onUpdateStatus?.(job.id, next))}
+                >
+                  {STATUS_ACTION_COPY[next].label}
+                </Button>
+              ))}
               <Button
                 size="sm"
                 variant="destructive"
                 className="h-8 text-xs"
+                disabled={busy}
                 onClick={() => setConfirmAction("delete")}
               >
                 Delete
               </Button>
             </div>
+            {job.deadlinePassed && !actions.includes("Active") && job.status !== "Draft" && (
+              <p className="text-xs text-muted-foreground">
+                Its application deadline has passed, so it can't go live again until the employer extends it.
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              The employer can reverse a pause, close or archive from their own jobs page.
+            </p>
           </div>
 
           <AlertDialog open={confirmAction !== null} onOpenChange={(v) => !v && setConfirmAction(null)}>
             <AlertDialogContent>
               <AlertDialogHeader>
                 <AlertDialogTitle>
-                  {confirmAction === "delete" ? "Delete this job?" : "Reject this job?"}
+                  {confirmAction === "delete" ? "Delete this job?" : "Archive this job?"}
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   {confirmAction === "delete"
-                    ? "This will permanently remove the job listing. This action cannot be undone."
-                    : "This will reject the job listing and it will no longer be visible to applicants."}
+                    ? "This permanently removes the job listing and can't be undone."
+                    : ARCHIVE_EXPLAINER}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
-               <AlertDialogAction
-  className={cn(
-    confirmAction === "delete"
-      ? "bg-rose-500 text-white hover:bg-rose-500/90"
-      : "bg-amber-500 text-white hover:bg-amber-500/90"
-  )}
-  onClick={() => {
-    const prevStatus = job.status;
-    const jobSnapshot = { ...job };
-
-    if (confirmAction === "delete") {
-      onDelete?.(job.id);
-
-      toast({
-        title: "Job Deleted",
-        description: `"${job.title}" has been removed.`,
-        variant: "destructive",
-        duration: 8000,
-        action: (
-          <ToastAction
-            altText="Undo"
-            onClick={() => {
-              onUndoDelete?.(jobSnapshot);
-              toast({
-                title: "Undo successful",
-                description: `"${job.title}" has been restored.`,
-              });
-            }}
-          >
-            Undo
-          </ToastAction>
-        ),
-      });
-    } else {
-      onUpdateStatus?.(job.id, "Rejected");
-
-      toast({
-        title: "Job Rejected",
-        description: `"${job.title}" has been rejected.`,
-        variant: "destructive",
-        duration: 8000,
-        action: (
-          <ToastAction
-            altText="Undo"
-            onClick={() => {
-              onUpdateStatus?.(job.id, prevStatus);
-              toast({
-                title: "Undo successful",
-                description: `"${job.title}" reverted to ${prevStatus}.`,
-              });
-            }}
-          >
-            Undo
-          </ToastAction>
-        ),
-      });
-    }
-
-    setConfirmAction(null);
-  }}
->
-  {confirmAction === "delete" ? "Delete" : "Reject"}
-</AlertDialogAction>
+                <AlertDialogAction
+                  className={cn(
+                    confirmAction === "delete"
+                      ? "bg-rose-500 text-white hover:bg-rose-500/90"
+                      : "bg-amber-500 text-white hover:bg-amber-500/90"
+                  )}
+                  onClick={() => {
+                    if (confirmAction === "delete") onDelete?.(job.id);
+                    else onUpdateStatus?.(job.id, "Archived");
+                    setConfirmAction(null);
+                  }}
+                >
+                  {confirmAction === "delete" ? "Delete" : "Archive"}
+                </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
-
-          {/* Risk & Reports */}
-          <div className="px-6 py-5 space-y-3">
-            <p className="text-sm font-semibold text-foreground">Risk & Reports</p>
-
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Shield className="h-4 w-4" />
-                <span>Risk Level</span>
-              </div>
-              <RiskBadge risk={job.risk} />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-secondary rounded-lg p-3 flex items-start justify-between">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <AlertTriangle className="h-4 w-4 shrink-0" />
-                  <span className="text-xs">Duplicate Detection</span>
-                </div>
-                <span className={cn(
-                  "text-xs font-medium",
-                  job.duplicateDetected ? "text-[hsl(var(--status-flagged))]" : "text-[hsl(var(--status-active))]"
-                )}>
-                  {job.duplicateDetected ? "Detected" : "Clear"}
-                </span>
-              </div>
-              <div className="bg-secondary rounded-lg p-3 flex items-start justify-between">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <AlertTriangle className="h-4 w-4 shrink-0" />
-                  <span className="text-xs">Spam Keywords</span>
-                </div>
-                <span className={cn(
-                  "text-xs font-medium",
-                  job.spamKeywords ? "text-[hsl(var(--status-flagged))]" : "text-[hsl(var(--status-active))]"
-                )}>
-                  {job.spamKeywords ? "Detected" : "Clear"}
-                </span>
-              </div>
-            </div>
-          </div>
 
           {/* Activity Timeline */}
           {timeline.length > 0 && (

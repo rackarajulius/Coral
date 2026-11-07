@@ -23,7 +23,6 @@ export interface Filters {
   minApplications?: string;
   company?: string;
   industry?: string;
-  flaggedOnly?: boolean;
   [key: string]: any;
 }
 
@@ -82,7 +81,6 @@ export function useJobsList(params: {
       if (params.filters.minApplications) urlParams.set('minApplications', params.filters.minApplications);
       if (params.filters.company) urlParams.set('company', params.filters.company);
       if (params.filters.industry) urlParams.set('industry', params.filters.industry);
-      if (params.filters.flaggedOnly) urlParams.set('flaggedOnly', 'true');
 
       const res = await fetch(`${API_BASE_URL}/admin/jobs/list?${urlParams}`, {
         headers: {

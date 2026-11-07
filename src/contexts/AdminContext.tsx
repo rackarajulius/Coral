@@ -6,7 +6,8 @@ interface DashboardMetrics {
   kpis: Array<{
     label: string;
     value: string;
-    change: number;
+    /** null until two days of snapshots exist — the card then shows no change. */
+    change: number | null;
     icon: string;
     trend: number[];
   }>;

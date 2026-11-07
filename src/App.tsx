@@ -104,9 +104,7 @@ import ResetPassword from "./pages/ResetPassword";
 import { AppLayout } from "./components/adminDashboard/layout/AppLayout.tsx";
 import Overview from "./pages/admin/Overview.tsx";
 import JobSeekers from "./pages/admin/JobSeekers.tsx";
-import AddJobseekerPage from "./pages/admin/AddJobseekerPage.tsx";
 import Employers from "./pages/admin/Employers.tsx";
-import AddEmployerPage from "./pages/admin/AddEmployer.tsx";
 import Jobs from "./pages/admin/Jobs.tsx";
 import CreateJob from "./pages/admin/CreateJob.tsx";
 import ApplicationsPage from "./pages/admin/ApplicationsPage.tsx";
@@ -114,16 +112,7 @@ import Verifications from "./pages/admin/Verifications.tsx";
 import ReviewModeration from "./pages/admin/ReviewModeration.tsx";
 import ReportsPage from "./pages/admin/ReportsPage.tsx";
 import SystemHealthPage from "./pages/admin/SystemHealth.tsx";
-import General from "./pages/admin/settings/General.tsx";
-import TaxonomiesPage from "./pages/admin/settings/TaxonomiesPage.tsx";
-import SeoBranding from "./pages/admin/settings/SeoBranding.tsx";
-import RolesPermissions from "./pages/admin/settings/RolesPermissions.tsx";
-import AutomationPage from "./pages/admin/settings/Automation.tsx";
-import IntegrationsPage from "./pages/admin/settings/integrations.tsx";
-import AlertsPage from "./pages/admin/Alerts.tsx";
 import AuditLogsPage from "./pages/admin/AuditLogs.tsx";
-import EmailTemplates from "./pages/admin/settings/EmailTemplates.tsx";
-import IncidentDetailPage from "./pages/admin/IncidentDetail.tsx";
 
 
 
@@ -331,28 +320,15 @@ const App = () => (
               <Route path="/admin" element={<AdminProvider><AppLayout /></AdminProvider>}>
               <Route path="dashboard" element={<Overview />} />
               <Route path="jobseekers" element={<JobSeekers />} />
-              <Route path="jobseekers/add" element={<AddJobseekerPage />} />
               <Route path="employers" element={<Employers />} />
-              <Route path="employers/add" element={<AddEmployerPage />} />
               <Route path="jobs" element={<Jobs />} />
               <Route path="jobs/create" element={<CreateJob />} />
               <Route path="applications" element={<ApplicationsPage />} />
               <Route path="verifications" element={<Verifications />} />
               <Route path="reviews" element={<ReviewModeration />} />
               <Route path="reports" element={<ReportsPage />} />
-               <Route path="email-templates" element={<EmailTemplates />} />
-
               <Route path="system-health" element={<SystemHealthPage />} />
-              <Route path="system-health/incidents/:id" element={<IncidentDetailPage />}/>
               <Route path="audit-logs" element={<AuditLogsPage />} />
-              <Route path="alerts" element={<AlertsPage />} />
-
-              <Route path="general" element={<General/>} />
-              <Route path="taxonomies" element={<TaxonomiesPage />} />
-              <Route path="seo-branding" element={<SeoBranding />} />
-              <Route path="roles" element={<RolesPermissions />} />
-              <Route path="automation" element={<AutomationPage />} />
-              <Route path="integrations" element={<IntegrationsPage />} />
              </Route>
 
 

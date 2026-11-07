@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,72 +22,10 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { RefreshCw, CheckCircle2, ExternalLink, AlertTriangle } from "lucide-react";
-import { MiniChart } from "@/components/adminDashboard/system-health/MiniChart";
-import { IncidentPanel } from "@/components/adminDashboard/system-health/IncidentPanel";
-import type {
-  PerformanceMetric,
-  Incident,
-  QueueInfo,
-} from "@/data/admin/system-health/system-health";
+import { RefreshCw, CheckCircle2, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { runScheduledJob, useSystemHealth, type RunJobOutcome } from "@/hooks/admin/useAdminSystemHealth";
 import { toast } from "sonner";
-
-// ── Sample data (sections not yet instrumented) ──────────────────────────────
-
-const metrics: PerformanceMetric[] = [
-  { label: "API Response Time", value: "120", unit: "ms", change: "-4%", changeDirection: "down", data: [130, 128, 125, 122, 120, 118, 121, 119, 120, 122, 118, 120] },
-  { label: "Error Rate", value: "0.4", unit: "%", change: "+0.1%", changeDirection: "up", data: [0.3, 0.3, 0.4, 0.5, 0.4, 0.3, 0.4, 0.4, 0.5, 0.4, 0.3, 0.4] },
-  { label: "Requests / min", value: "2,847", unit: "rpm", change: "+12%", changeDirection: "up", data: [2400, 2500, 2600, 2700, 2800, 2900, 2847, 2800, 2750, 2900, 2847, 2847] },
-  { label: "Job Processing", value: "340", unit: "ms", change: "-8%", changeDirection: "down", data: [380, 370, 360, 350, 345, 340, 338, 342, 340, 335, 340, 340] },
-  { label: "Queue Size", value: "124", unit: "jobs", change: "+3", changeDirection: "neutral", data: [110, 115, 120, 118, 125, 130, 128, 124, 120, 122, 126, 124] },
-  { label: "Active Users", value: "1,842", unit: "", change: "+5%", changeDirection: "up", data: [1700, 1720, 1750, 1780, 1800, 1820, 1840, 1842, 1830, 1850, 1842, 1842] },
-];
-
-const incidents: Incident[] = [
-  {
-    id: "inc-1",
-    title: "Email delivery delay",
-    severity: "medium",
-    status: "resolved",
-    startedAt: "Mar 25, 14:32",
-    resolvedAt: "Mar 25, 15:10",
-    duration: "38 min",
-    description: "Outbound email queue experienced delays due to SMTP provider throttling.",
-    affectedSystems: ["Email Service", "Queue Workers"],
-    timeline: [
-      { time: "14:32", message: "Alert triggered: email queue depth > 500" },
-      { time: "15:10", message: "Queue cleared, normal operations resumed" },
-    ],
-    resolutionNotes: "Switched to backup SMTP relay. Primary provider ticket opened.",
-    assignedAdmin: "Sarah K.",
-  },
-  {
-    id: "inc-3",
-    title: "Database connection pool exhaustion",
-    severity: "critical",
-    status: "resolved",
-    startedAt: "Mar 23, 02:10",
-    resolvedAt: "Mar 23, 02:45",
-    duration: "35 min",
-    description: "Connection pool maxed out due to long-running analytics query.",
-    affectedSystems: ["Database", "API"],
-    timeline: [
-      { time: "02:10", message: "Connection pool utilization hit 100%" },
-      { time: "02:45", message: "All connections restored" },
-    ],
-    resolutionNotes: "Added query timeout limits. Analytics queries moved to read replica.",
-    assignedAdmin: "Sarah K.",
-  },
-];
-
-const queues: QueueInfo[] = [
-  { name: "email", pending: 23, processingRate: "120/min", failures: 0, status: "healthy" },
-  { name: "notifications", pending: 8, processingRate: "200/min", failures: 1, status: "healthy" },
-  { name: "file-processing", pending: 45, processingRate: "15/min", failures: 3, status: "degraded" },
-  { name: "analytics", pending: 312, processingRate: "50/min", failures: 0, status: "backlogged" },
-];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -123,37 +60,8 @@ function describeRun(outcome: RunJobOutcome): string {
   }
 }
 
-const queueStatusBadge: Record<string, string> = {
-  healthy: "bg-emerald-500/10 text-emerald-600 border border-emerald-500/20",
-  degraded: "bg-amber-500/10 text-amber-600 border border-amber-500/20",
-  backlogged: "bg-rose-500/10 text-rose-600 border border-rose-500/20",
-};
-
-const severityBadge: Record<string, string> = {
-  low: "bg-slate-100 text-slate-600 border border-slate-200",
-  medium: "bg-amber-500/10 text-amber-600 border border-amber-500/20",
-  high: "bg-orange-500/10 text-orange-600 border border-orange-500/20",
-  critical: "bg-rose-500/10 text-rose-600 border border-rose-500/20",
-};
-
-const incidentStatusBadge: Record<string, string> = {
-  investigating: "bg-amber-500/10 text-amber-600 border border-amber-500/20",
-  identified: "bg-blue-500/10 text-blue-600 border border-blue-500/20",
-  monitoring: "bg-emerald-500/10 text-emerald-600 border border-emerald-500/20",
-  resolved: "bg-slate-100 text-slate-600 border border-slate-200",
-};
-
-function SectionTitle({ children, sample }: { children: React.ReactNode; sample?: boolean }) {
-  return (
-    <div className="flex items-center gap-2">
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">{children}</h2>
-      {sample && (
-        <Badge variant="outline" className="text-[10px] font-normal text-amber-600 border-amber-300 bg-amber-50">
-          Sample data · not instrumented
-        </Badge>
-      )}
-    </div>
-  );
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">{children}</h2>;
 }
 
 function fmtRelative(iso: string | null): string {
@@ -180,9 +88,6 @@ const REFRESH_INTERVALS = [
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function SystemHealthPage() {
-  const navigate = useNavigate();
-  const [timeRange, setTimeRange] = useState("24h");
-  const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(10000);
 
@@ -239,7 +144,7 @@ export default function SystemHealthPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">System Health</h1>
             <p className="text-muted-foreground mt-1">
-              Monitor platform performance, uptime, and background systems
+              Live checks of the services, database, storage and scheduled jobs
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -272,19 +177,6 @@ export default function SystemHealthPage() {
               )}
             </div>
 
-            <Select value={timeRange} onValueChange={setTimeRange}>
-              <SelectTrigger className="w-[120px] h-9 text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="1h">Last 1h</SelectItem>
-                <SelectItem value="24h">Last 24h</SelectItem>
-                <SelectItem value="7d">Last 7d</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button variant="outline" size="sm" className="h-9 rounded-full" onClick={() => navigate("/system-health/logs")}>
-              <ExternalLink className="h-3.5 w-3.5 mr-1.5" /> Logs
-            </Button>
             <Button variant="outline" size="sm" className="h-9 rounded-full" onClick={() => refetch()} disabled={isFetching}>
               <RefreshCw className={cn("h-3.5 w-3.5 mr-1.5", isFetching && "animate-spin")} /> Refresh
             </Button>
@@ -303,7 +195,7 @@ export default function SystemHealthPage() {
           </p>
         </div>
 
-        {/* ── Section 1: System Status (real) ── */}
+        {/* ── System Status ── */}
         <section className="space-y-3">
           <SectionTitle>System Status</SectionTitle>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -341,77 +233,7 @@ export default function SystemHealthPage() {
           </div>
         </section>
 
-        {/* ── Section 2: Performance Metrics (sample) ── */}
-        <section className="space-y-3">
-          <SectionTitle sample>Performance Metrics</SectionTitle>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {metrics.map((m) => (
-              <div key={m.label} className="flex items-center justify-between rounded-lg border border-border bg-card p-4">
-                <div>
-                  <p className="text-xs text-muted-foreground">{m.label}</p>
-                  <p className="text-xl font-semibold tracking-tight mt-0.5">
-                    {m.value}
-                    {m.unit && <span className="text-xs font-normal text-muted-foreground ml-1">{m.unit}</span>}
-                  </p>
-                  {m.change && (
-                    <p className={cn(
-                      "text-xs mt-0.5",
-                      m.changeDirection === "down" ? "text-status-operational-foreground" : m.changeDirection === "up" && m.label === "Error Rate" ? "text-destructive" : "text-muted-foreground"
-                    )}>
-                      {m.change}
-                    </p>
-                  )}
-                </div>
-                <MiniChart data={m.data} className="opacity-60" />
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* ── Section 3: Incidents & Alerts (sample) ── */}
-        <section className="space-y-3">
-          <SectionTitle sample>Incidents &amp; Alerts</SectionTitle>
-          <div className="rounded-lg border border-border bg-card shadow-card overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-secondary/50">
-                  <TableHead>Incident</TableHead>
-                  <TableHead>Severity</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Started</TableHead>
-                  <TableHead>Resolved</TableHead>
-                  <TableHead>Duration</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {incidents.map((inc) => (
-                  <TableRow
-                    key={inc.id}
-                    className="cursor-pointer"
-                    onClick={() => navigate(`/admin/system-health/incidents/${inc.id}`)}
-                  >
-                    <TableCell className="font-medium">{inc.title}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className={cn("text-xs capitalize", severityBadge[inc.severity])}>
-                        {inc.severity}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className={cn("text-xs capitalize", incidentStatusBadge[inc.status])}>
-                        {inc.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-sm">{inc.startedAt}</TableCell>
-                    <TableCell className="text-muted-foreground text-sm">{inc.resolvedAt ?? "—"}</TableCell>
-                    <TableCell className="text-muted-foreground text-sm">{inc.duration}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </section>
-
-        {/* ── Section 4: Background Jobs (real) ── */}
+        {/* ── Background Jobs ── */}
         <section className="space-y-3">
           <SectionTitle>Background Jobs</SectionTitle>
           <div className="rounded-lg border border-border bg-card shadow-card overflow-hidden">
@@ -472,7 +294,7 @@ export default function SystemHealthPage() {
           </div>
         </section>
 
-        {/* ── Section 5 & 6: Database / Storage (real) & Auth (sample) ── */}
+        {/* ── Database / Storage / Auth ── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Database */}
           <section className="space-y-3">
@@ -500,7 +322,7 @@ export default function SystemHealthPage() {
             </div>
           </section>
 
-          {/* Auth & Security (real) */}
+          {/* Auth & Security */}
           <section className="space-y-3">
             <SectionTitle>Auth &amp; Security</SectionTitle>
             <div className="rounded-lg border border-border bg-card p-4 space-y-3">
@@ -514,46 +336,7 @@ export default function SystemHealthPage() {
           </section>
         </div>
 
-        {/* ── Section 7: Queue & Workers (sample) ── */}
-        <section className="space-y-3">
-          <SectionTitle sample>Queue &amp; Workers</SectionTitle>
-          <div className="rounded-lg border border-border bg-card shadow-card overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-secondary/50">
-                  <TableHead>Queue</TableHead>
-                  <TableHead>Pending</TableHead>
-                  <TableHead>Processing Rate</TableHead>
-                  <TableHead>Failures</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {queues.map((q) => (
-                  <TableRow key={q.name}>
-                    <TableCell className="font-medium font-mono text-sm">{q.name}</TableCell>
-                    <TableCell className="text-sm">{q.pending}</TableCell>
-                    <TableCell className="text-muted-foreground text-sm">{q.processingRate}</TableCell>
-                    <TableCell className={cn("text-sm", q.failures > 0 && "text-destructive font-medium")}>{q.failures}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className={cn("text-xs capitalize", queueStatusBadge[q.status])}>
-                        {q.status}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </section>
       </div>
-
-      {/* Incident Detail Panel */}
-      <IncidentPanel
-        incident={selectedIncident}
-        open={!!selectedIncident}
-        onOpenChange={(open) => !open && setSelectedIncident(null)}
-      />
     </>
   );
 }

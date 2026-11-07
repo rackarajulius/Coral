@@ -22,11 +22,8 @@ import {
 import {
   Globe,
   Mail,
-  Phone,
   Briefcase,
   Users,
-  AlertTriangle,
-  Shield,
   ExternalLink,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -183,10 +180,6 @@ export function EmployerDetailDrawer({ employer, open, onOpenChange, onChanged }
                     {employer.email}
                   </a>
                 </div>
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Phone className="h-4 w-4 shrink-0" />
-                  <span>{employer.phone || 'Not provided'}</span>
-                </div>
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Plan</span>
                   <span className="font-medium text-foreground">{employer.plan}</span>
@@ -212,39 +205,6 @@ export function EmployerDetailDrawer({ employer, open, onOpenChange, onChanged }
                 <StatBlock label="Active Jobs" value={employer.activeJobs} />
                 <StatBlock label="Expired" value={employer.expiredJobs} />
                 <StatBlock label="Applications" value={employer.applicationsReceived.toLocaleString()} />
-              </div>
-            </section>
-
-            <Separator />
-
-            {/* Risk & Flags */}
-            <section>
-              <h3 className="text-sm font-semibold text-foreground mb-3">Risk & Flags</h3>
-              <div className="space-y-2.5 text-sm">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <AlertTriangle className="h-4 w-4 shrink-0" />
-                    <span>Reports</span>
-                  </div>
-                  <span className="font-medium text-foreground">{employer.reports}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Shield className="h-4 w-4 shrink-0" />
-                    <span>Risk Score</span>
-                  </div>
-                  <span
-                    className={
-                      employer.riskScore > 50
-                         ? "font-medium text-rose-600 dark:text-rose-400"
-                               : employer.riskScore > 20
-                                ? "font-medium text-amber-600 dark:text-amber-400"
-                             : "font-medium text-emerald-600 dark:text-emerald-400"
-                    }
-                  >
-                    {employer.riskScore}/100
-                  </span>
-                </div>
               </div>
             </section>
 

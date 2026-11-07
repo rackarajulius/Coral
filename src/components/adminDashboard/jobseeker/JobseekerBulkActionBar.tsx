@@ -1,6 +1,5 @@
 import { useState } from "react";
-import { ShieldOff, ShieldCheck, Trash2, Bell, Ban, X } from "lucide-react";
-import { toastWithUndo } from "@/lib/toast-Undo";
+import { ShieldOff, ShieldCheck, Trash2, Ban, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ConfirmModal, ConfirmModalVariant } from "@/components/ui/ConfirmModal";
@@ -49,10 +48,6 @@ export function JobseekerBulkActionBar({ count, onClear, onActivate, onSuspend, 
         <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setModal("ban")}>
           <Ban className="mr-1.5 h-3.5 w-3.5 text-status-flagged" />
           Ban
-        </Button>
-        <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => toastWithUndo(`Notification sent to ${count} jobseeker${count !== 1 ? "s" : ""}`, () => console.log("Undo: bulk notification"))}>
-          <Bell className="mr-1.5 h-3.5 w-3.5 text-muted-foreground" />
-          Send Notification
         </Button>
         <Button
           variant="outline"

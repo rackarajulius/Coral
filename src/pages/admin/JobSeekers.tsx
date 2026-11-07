@@ -1,10 +1,9 @@
 import { useState, useEffect } from "react";
-import { Search, SlidersHorizontal, Download, Plus } from "lucide-react";
+import { Search, SlidersHorizontal } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Jobseeker } from "@/data/admin/jobseeker/jobs-data";
-import { useNavigate } from "react-router";
 import { JobseekerKPICards, type JobseekerMetrics } from "@/components/adminDashboard/jobseeker/JobseekerKPICards";
 import { JobseekerBulkActionBar } from "@/components/adminDashboard/jobseeker/JobseekerBulkActionBar";
 import { JobseekerFilterPanel } from "@/components/adminDashboard/jobseeker/JobseekerFilterPanel";
@@ -26,7 +25,6 @@ import supabase from "@/lib/supabase";
 import { useJobseekersMetrics, useJobseekersList, useJobseekerActions } from "@/hooks/admin/useAdminJobseekers";
 
 export default function Jobseekers() {
-  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
   const [selectedJobseeker, setSelectedJobseeker] = useState<Jobseeker | null>(null);
@@ -124,6 +122,8 @@ export default function Jobseekers() {
     try {
       await deleteJobseeker(js.id);
       toast.success(`${js.name} deleted`);
+      // Don't leave the drawer open on an account that no longer exists.
+      setSelectedJobseeker((cur) => (cur?.id === js.id ? null : cur));
       invalidateJobseekers();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to delete");
@@ -178,19 +178,6 @@ export default function Jobseekers() {
             <SlidersHorizontal className=" h-4 w-4" />
             Filters
           </Button>
-          <Button variant="outline" size="sm" className="gap-2 rounded-full">
-            <Download className="mr-1.5 h-4 w-4" />
-            Export CSV
-          </Button>
-          <Button
-            variant="default"
-            size="sm"
-            className="gap-2 rounded-full"
-            onClick={() => navigate("/admin/jobseekers/add")}
-          >
-            <Plus className="mr-1.5 h-4 w-4" />
-            Add Jobseeker
-          </Button>
         </div>
         </div>
 
@@ -238,6 +225,9 @@ export default function Jobseekers() {
         jobseeker={openJobseeker}
         open={!!openJobseeker}
         onClose={() => setSelectedJobseeker(null)}
+        onActivate={handleActivate}
+        onSuspend={handleSuspend}
+        onDelete={handleDelete}
       />
 
       {/* Make-admin confirmation */}

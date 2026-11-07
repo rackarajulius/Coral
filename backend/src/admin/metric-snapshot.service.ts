@@ -68,7 +68,9 @@ export class MetricSnapshotService implements OnModuleInit {
       this.prisma.user.count({ where: { role: 'EMPLOYER', status: 'SUSPENDED' } }),
       this.prisma.employerProfile.count({ where: { verificationStatus: 'verified' } }),
       this.prisma.user.count({ where: { role: 'JOB_SEEKER' } }),
-      this.prisma.job.count({ where: { status: 'published' } }),
+      // Same definition as the Overview's "Active Listings" card. This counted
+      // 'published', a status nothing writes, so the sparkline sat at zero.
+      this.prisma.job.count({ where: { status: 'active', publishedAt: { not: null } } }),
       this.prisma.application.count(),
       this.prisma.paymentTransaction.aggregate({
         _sum: { amount: true },

@@ -8,7 +8,7 @@ export class JobsListQueryDto {
 
   @IsOptional() @IsString() search?: string;
 
-  /** Comma-separated UI statuses, e.g. "Active,Pending". */
+  /** Comma-separated admin status labels, e.g. "Active,Paused". See AdminJobStatusLabel. */
   @IsOptional() @IsString() statuses?: string;
   /** Comma-separated UI types, e.g. "Full-time,Contract". */
   @IsOptional() @IsString() types?: string;
@@ -21,7 +21,6 @@ export class JobsListQueryDto {
   @IsOptional() @IsString() minApplications?: string;
   @IsOptional() @IsString() company?: string;
   @IsOptional() @IsString() industry?: string;
-  @IsOptional() @IsString() flaggedOnly?: string;
 
   /** postedDate | applications */
   @IsOptional() @IsString() sort?: string;

@@ -1,7 +1,15 @@
 import { useState } from "react";
-import { MoreHorizontal, CheckCircle2, ArrowUpDown, Eye, Ban, Flag, Pencil, Trash2, XCircle } from "lucide-react";
-import { Job } from  "@/data/admin/job/jobs";
-import { StatusBadge, RiskBadge, TypeBadge } from "./JobBadges";
+import { MoreHorizontal, CheckCircle2, ArrowUpDown, Eye, Pause, Trash2, XCircle, Archive, type LucideIcon } from "lucide-react";
+import type { AdminSettableJobStatus, Job } from "@/data/admin/job/jobs";
+import { adminStatusActions, ARCHIVE_EXPLAINER, STATUS_ACTION_COPY } from "@/lib/api/adminJobs";
+
+const ACTION_ICON: Record<AdminSettableJobStatus, LucideIcon> = {
+  Active: CheckCircle2,
+  Paused: Pause,
+  Closed: XCircle,
+  Archived: Archive,
+};
+import { StatusBadge, TypeBadge } from "./JobBadges";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,9 +39,9 @@ interface JobsTableProps {
   selectedIds: string[];
   onToggleSelect: (id: string) => void;
   onToggleAll: () => void;
-  onBulkUpdateStatus?: (jobIds: string[], status: Job["status"]) => void;
+  onBulkUpdateStatus?: (jobIds: string[], status: AdminSettableJobStatus) => void;
   onBulkDelete?: (jobIds: string[]) => void;
-  onUpdateStatus?: (jobId: string, status: Job["status"]) => void;
+  onUpdateStatus?: (jobId: string, status: AdminSettableJobStatus) => void;
   onDelete?: (jobId: string) => void;
   isLoading?: boolean;
   sortField: "postedDate" | "applications" | null;
@@ -89,9 +97,6 @@ function SkeletonTableRow() {
       <td className="px-4">
         <Skeleton className="h-5 w-16 rounded-full" />
       </td>
-      <td className="hidden xl:table-cell px-4">
-        <Skeleton className="h-4 w-10" />
-      </td>
       <td className="px-4">
         <Skeleton className="h-8 w-8 rounded" />
       </td>
@@ -100,7 +105,7 @@ function SkeletonTableRow() {
 }
 
 export function JobsTable({ jobs, onSelectJob, selectedIds, onToggleSelect, onToggleAll, onBulkUpdateStatus, onBulkDelete, onUpdateStatus, onDelete, isLoading = false, sortField, sortDir, onSort, page, limit, total, totalPages, onPageChange, onLimitChange }: JobsTableProps) {
-  const [bulkConfirm, setBulkConfirm] = useState<"reject" | "delete" | null>(null);
+  const [bulkConfirm, setBulkConfirm] = useState<"archive" | "delete" | null>(null);
 
   const handleSort = onSort;
 
@@ -116,9 +121,11 @@ export function JobsTable({ jobs, onSelectJob, selectedIds, onToggleSelect, onTo
         <div className="flex items-center gap-3 px-5 py-3 bg-secondary border-b border-border animate-fade-in">
           <span className="text-sm font-medium">{selectedIds.length} job{selectedIds.length > 1 ? "s" : ""} selected</span>
           <div className="flex gap-2 ml-auto">
-            <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => onBulkUpdateStatus?.(selectedIds, "Active")}>Approve</Button>
-            <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => onBulkUpdateStatus?.(selectedIds, "Flagged")}>Flag</Button>
-            <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setBulkConfirm("reject")}>Reject</Button>
+            {/* No bulk Activate: whether a job may go live again (published
+                before? deadline still ahead?) is a per-job answer. */}
+            <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => onBulkUpdateStatus?.(selectedIds, "Paused")}>Pause</Button>
+            <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => onBulkUpdateStatus?.(selectedIds, "Closed")}>Close</Button>
+            <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setBulkConfirm("archive")}>Archive</Button>
             <Button size="sm" variant="outline" className="h-8 text-xs text-destructive hover:text-destructive" onClick={() => setBulkConfirm("delete")}>Delete</Button>
           </div>
         </div>
@@ -130,12 +137,12 @@ export function JobsTable({ jobs, onSelectJob, selectedIds, onToggleSelect, onTo
             <AlertDialogTitle>
               {bulkConfirm === "delete"
                 ? `Delete ${selectedIds.length} job${selectedIds.length > 1 ? "s" : ""}?`
-                : `Reject ${selectedIds.length} job${selectedIds.length > 1 ? "s" : ""}?`}
+                : `Archive ${selectedIds.length} job${selectedIds.length > 1 ? "s" : ""}?`}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {bulkConfirm === "delete"
                 ? "This will permanently remove the selected job listings. This action cannot be undone."
-                : "The selected job listings will be rejected and hidden from applicants."}
+                : ARCHIVE_EXPLAINER}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -150,12 +157,12 @@ export function JobsTable({ jobs, onSelectJob, selectedIds, onToggleSelect, onTo
                 if (bulkConfirm === "delete") {
                   onBulkDelete?.(selectedIds);
                 } else {
-                  onBulkUpdateStatus?.(selectedIds, "Rejected");
+                  onBulkUpdateStatus?.(selectedIds, "Archived");
                 }
                 setBulkConfirm(null);
               }}
             >
-              {bulkConfirm === "delete" ? "Delete" : "Reject"}
+              {bulkConfirm === "delete" ? "Delete" : "Archive"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -184,7 +191,6 @@ export function JobsTable({ jobs, onSelectJob, selectedIds, onToggleSelect, onTo
                 </button>
               </th>
               <th className="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
-              <th className="text-left px-4 py-3 font-medium text-muted-foreground hidden xl:table-cell">Risk</th>
               <th className="w-14 px-4 py-3" />
             </tr>
           </thead>
@@ -231,7 +237,6 @@ export function JobsTable({ jobs, onSelectJob, selectedIds, onToggleSelect, onTo
                   <span className="font-medium text-foreground">{job.applications}</span>
                 </td>
                 <td className="px-4" onClick={() => onSelectJob(job)}><StatusBadge status={job.status} /></td>
-                <td className="px-4 hidden xl:table-cell" onClick={() => onSelectJob(job)}><RiskBadge risk={job.risk} /></td>
                 <td className="px-4" onClick={(e) => e.stopPropagation()}>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -244,18 +249,14 @@ export function JobsTable({ jobs, onSelectJob, selectedIds, onToggleSelect, onTo
                         <Eye className="mr-2 h-3.5 w-3.5" /> View Details
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={() => onUpdateStatus?.(job.id, "Active")}>
-                        <CheckCircle2 className="mr-2 h-3.5 w-3.5" /> Approve
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => onUpdateStatus?.(job.id, "Flagged")}>
-                        <Flag className="mr-2 h-3.5 w-3.5" /> Flag
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => onUpdateStatus?.(job.id, "Suspended")}>
-                        <Ban className="mr-2 h-3.5 w-3.5" /> Suspend
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => onUpdateStatus?.(job.id, "Rejected")}>
-                        <XCircle className="mr-2 h-3.5 w-3.5" /> Reject
-                      </DropdownMenuItem>
+                      {adminStatusActions(job).map((next) => {
+                        const Icon = ACTION_ICON[next];
+                        return (
+                          <DropdownMenuItem key={next} onClick={() => onUpdateStatus?.(job.id, next)}>
+                            <Icon className="mr-2 h-3.5 w-3.5" /> {STATUS_ACTION_COPY[next].label}
+                          </DropdownMenuItem>
+                        );
+                      })}
                       <DropdownMenuSeparator />
                       <DropdownMenuItem className="text-destructive" onClick={() => onDelete?.(job.id)}>
                         <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete

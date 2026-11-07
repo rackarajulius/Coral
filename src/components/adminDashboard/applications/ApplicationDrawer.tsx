@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { Download, Mail, Trash2, Flag, FileText, Clock, XCircle } from "lucide-react";
+import { Download, Trash2, Flag, FileText, Clock, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Application } from "@/data/admin/applications/applications";
-import { StatusBadge, RiskBadge, ScreeningScoreBar } from "./StatusBadge";
+import { StatusBadge, ScreeningScoreBar } from "./StatusBadge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -98,7 +98,6 @@ export function ApplicationDrawer({ application, open, onClose, onAction }: Appl
                 </div>
                 <div className="flex flex-col gap-1">
                   <StatusBadge status={application.status} />
-                  <RiskBadge level={application.riskLevel} reason={application.riskReason} />
                 </div>
               </div>
             </section>
@@ -213,9 +212,6 @@ export function ApplicationDrawer({ application, open, onClose, onAction }: Appl
             <section>
               <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Admin Actions</h3>
               <div className="grid grid-cols-2 gap-2">
-                <Button variant="outline" size="sm" className="justify-start gap-2" onClick={() => toast.success("Email draft opened", { description: `To: ${applicant.email}` })}>
-                  <Mail className="h-4 w-4" /> Email Applicant
-                </Button>
                 <Button variant="outline" size="sm" className="justify-start gap-2" onClick={() => setPendingAction("flag")}>
                   <Flag className="h-4 w-4" /> Flag Application
                 </Button>

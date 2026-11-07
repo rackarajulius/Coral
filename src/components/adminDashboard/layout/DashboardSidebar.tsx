@@ -4,15 +4,12 @@ import {
   Briefcase,
   FileText,
   Flag,
-  DollarSign,
-  Settings,
   ChevronLeft,
   ChevronDown,
   Menu,
   Activity,
   UsersRound,
   ClipboardList,
-  Bell,
   ShieldCheck,
 } from "lucide-react";
 import { useState, useEffect } from "react";
@@ -49,22 +46,6 @@ const navItems: NavItemType[] = [
   { icon: Flag, label: "Reports & Flags", path: "/admin/reports" },
   { icon: Activity, label: "System Health", path: "/admin/system-health" },
   { icon: ClipboardList, label: "Audit Logs", path: "/admin/audit-logs" },
-  { icon: Bell, label: "Alerts", path: "/admin/alerts" },
-
-  {
-    icon: Settings,
-    label: "Settings",
-    children: [
-      { label: "General", path: "/admin/general" },
-      { label: "Taxonomies", path: "/admin/taxonomies" },
-      { label: "Email Templates", path: "/admin/email-templates" },
-      { label: "Seo Branding", path: "/admin/seo-branding" },
-      { label: "Roles & Permissions", path: "/admin/roles" },
-      { label: "Automation", path: "/admin/automation" },
-      { label: "Integrations", path: "/admin/integrations" },
-      
-    ],
-  },
 ];
 
 function NavItem({

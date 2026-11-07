@@ -1,8 +1,7 @@
-import { Search, Moon, Sun, LogOut } from "lucide-react";
+import { Moon, Sun, LogOut } from "lucide-react";
 import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -35,17 +34,6 @@ export function TopNav() {
         <span className="text-base font-semibold text-foreground hidden sm:inline">
           JobBoard.io
         </span>
-      </div>
-
-      {/* Center: Search */}
-      <div className="hidden md:flex flex-1 max-w-md mx-8">
-        <div className="relative w-full">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Search jobs, companies, users..."
-            className="pl-9 h-9 bg-secondary border-none text-sm"
-          />
-        </div>
       </div>
 
       {/* Right: Actions */}
@@ -82,9 +70,6 @@ export function TopNav() {
                 <p className="text-sm font-medium">{user.displayName || 'Admin'}</p>
                 <p className="text-xs text-muted-foreground">{user.email}</p>
               </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem>Profile</DropdownMenuItem>
-              <DropdownMenuItem>Account Settings</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 className="text-destructive focus:text-destructive"

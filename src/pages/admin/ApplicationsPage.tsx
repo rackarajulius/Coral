@@ -1,11 +1,11 @@
 import { useState, useEffect } from "react";
 import {
-  Search, Filter, Download, MoreHorizontal, ChevronUp, ChevronDown,
-  CheckSquare, XCircle, Flag, Trash2, Bell, Eye,
+  Search, Filter, MoreHorizontal, ChevronUp, ChevronDown,
+  XCircle, Flag, Trash2, Eye,
 } from "lucide-react";
 import { toast } from "sonner";
 import { KpiCard } from "@/components/adminDashboard/applications/KpiCard";
-import { StatusBadge, RiskBadge, ScreeningScoreBar } from "@/components/adminDashboard/applications/StatusBadge";
+import { StatusBadge, ScreeningScoreBar } from "@/components/adminDashboard/applications/StatusBadge";
 import { ApplicationDrawer } from "@/components/adminDashboard/applications/ApplicationDrawer";
 import { FilterPanel } from "@/components/adminDashboard/applications/FilterPanel";
 import { AdminPagination } from "@/components/adminDashboard/AdminPagination";
@@ -35,9 +35,6 @@ interface ApplicationMetrics {
   kpis: Array<{
     label: string;
     value: string;
-    change: number;
-    icon: string;
-    trend: number[];
   }>;
   summary: {
     totalApplications: number;
@@ -49,14 +46,10 @@ interface ApplicationMetrics {
   };
 }
 
-const kpis = [
-  { label: "Total Applications", value: "0", trend: { value: "0%", direction: "neutral" as const } },
-  { label: "Today", value: "0", trend: { value: "0%", direction: "neutral" as const } },
-  { label: "Pending Review", value: "0", trend: { value: "0%", direction: "neutral" as const } },
-  { label: "Flagged", value: "0", trend: { value: "0%", direction: "neutral" as const } },
-  { label: "Withdrawn", value: "0", trend: { value: "0%", direction: "neutral" as const } },
-  { label: "Interviews Scheduled", value: "0", trend: { value: "0%", direction: "neutral" as const } },
-];
+// Shown while the counts load: a dash, never a 0 or "0%" that reads as real.
+const kpis = ["Total Applications", "Today", "Pending Review", "Flagged", "Withdrawn", "Interviews Scheduled"].map(
+  (label) => ({ label, value: "—" }),
+);
 
 const actionConfig = {
   flag: {
@@ -114,9 +107,6 @@ function SkeletonTableRow() {
           <Skeleton className="h-4 w-8" />
           <Skeleton className="h-2 w-12 rounded-full" />
         </div>
-      </td>
-      <td className="px-4 py-3 hidden lg:table-cell">
-        <Skeleton className="h-4 w-10" />
       </td>
       <td className="px-4 py-3">
         <Skeleton className="h-8 w-8 rounded" />
@@ -271,9 +261,6 @@ export default function ApplicationsPage() {
                 </span>
               )}
             </Button>
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => toast("Export started", { description: "Your CSV file will download shortly." })}>
-              <Download className="h-4 w-4" /> Export
-            </Button>
           </div>
         </div>
 
@@ -287,10 +274,8 @@ export default function ApplicationsPage() {
           <div className="flex items-center gap-2 rounded-lg bg-secondary border border-border p-3 shadow-card">
             <span className="text-sm font-medium text-card-foreground">{selectedIds.size} selected</span>
             <div className="flex gap-1 ml-auto">
-              <Button variant="ghost" size="sm" className="gap-1 text-xs" onClick={() => { toast.success(`${selectedIds.size} applications marked as reviewed`); setSelectedIds(new Set()); }}><CheckSquare className="h-3.5 w-3.5" /> Reviewed</Button>
               <Button variant="ghost" size="sm" className="gap-1 text-xs" onClick={() => handleBulkAction("flag")}><Flag className="h-3.5 w-3.5" /> Flag</Button>
               <Button variant="ghost" size="sm" className="gap-1 text-xs" onClick={() => handleBulkAction("reject")}><XCircle className="h-3.5 w-3.5" /> Reject</Button>
-              <Button variant="ghost" size="sm" className="gap-1 text-xs" onClick={() => { toast.success(`Notification sent to ${selectedIds.size} applicants`); setSelectedIds(new Set()); }}><Bell className="h-3.5 w-3.5" /> Notify</Button>
               <Button variant="ghost" size="sm" className="gap-1 text-xs text-destructive" onClick={() => handleBulkAction("delete")}><Trash2 className="h-3.5 w-3.5" /> Delete</Button>
             </div>
           </div>
@@ -320,7 +305,6 @@ export default function ApplicationsPage() {
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Status</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Score</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground hidden lg:table-cell">Risk</th>
                     <th className="px-4 py-3 w-10"></th>
                   </tr>
                 </thead>
@@ -332,7 +316,7 @@ export default function ApplicationsPage() {
                     ))
                   ) : applications.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="px-4 py-12 text-center text-muted-foreground">
+                      <td colSpan={9} className="px-4 py-12 text-center text-muted-foreground">
                         No applications found matching your criteria.
                       </td>
                     </tr>
@@ -368,7 +352,6 @@ export default function ApplicationsPage() {
                         <td className="px-4 py-3 text-muted-foreground">{app.appliedDate}</td>
                         <td className="px-4 py-3"><StatusBadge status={app.status} /></td>
                         <td className="px-4 py-3"><ScreeningScoreBar score={app.screeningScore} /></td>
-                        <td className="px-4 py-3 hidden lg:table-cell"><RiskBadge level={app.riskLevel} reason={app.riskReason} /></td>
                         <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
