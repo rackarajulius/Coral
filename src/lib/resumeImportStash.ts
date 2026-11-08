@@ -21,7 +21,7 @@ const KEY = 'jobseeker_resume_import_v1';
 export function stashResumeImport(parsed: ParsedResume): void {
   try {
     // Nothing worth reviewing means nothing worth stashing.
-    if (!parsed?.experiences?.length && !parsed?.educations?.length) return;
+    if (!parsed?.experiences?.length && !parsed?.educations?.length && !parsed?.certifications?.length) return;
     localStorage.setItem(KEY, JSON.stringify(parsed));
   } catch {
     // A browser refusing storage just means no review prompt; the resume
@@ -36,7 +36,7 @@ export function takeStashedResumeImport(): ParsedResume | null {
     if (!raw) return null;
     localStorage.removeItem(KEY);
     const parsed = JSON.parse(raw) as ParsedResume;
-    return parsed?.experiences || parsed?.educations ? parsed : null;
+    return parsed?.experiences || parsed?.educations || parsed?.certifications ? parsed : null;
   } catch {
     return null;
   }

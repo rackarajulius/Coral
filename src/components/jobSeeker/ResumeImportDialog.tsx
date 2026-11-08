@@ -9,7 +9,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { useProfile } from '@/contexts/ProfileContext';
-import { parsePeriod, type ParsedResume } from '@/lib/api/jobSeekerProfile';
+import { isoToYearMonth, looseDateToIso, parsePeriod, type ParsedResume } from '@/lib/api/jobSeekerProfile';
 
 /**
  * What the resume said, offered rather than applied.
@@ -49,7 +49,21 @@ interface DraftEducation {
   description: string;
 }
 
+interface DraftCertification {
+  include: boolean;
+  duplicate: boolean;
+  name: string;
+  issuer: string;
+  /** As written ("Mar 2021", "2021"); converted to YYYY-MM when added. */
+  issueDate: string;
+  expiryDate: string;
+  credentialId: string;
+}
+
 const norm = (value: string) => value.trim().toLowerCase();
+
+/** "Mar 2021" / "2021" → "2021-03" / "2021-01", the form the profile keeps; '' if unreadable. */
+const toYearMonth = (value: string) => isoToYearMonth(looseDateToIso(value));
 
 export function ResumeImportDialog({
   parsed,
@@ -61,13 +75,13 @@ export function ResumeImportDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const {
-    profile, addExperience, addEducation, addSkill, updateAbout, updateProfileInfo, updateLanguages,
+    profile, addExperience, addEducation, addCertification, addSkill, updateAbout, updateProfileInfo, updateLanguages,
   } = useProfile();
 
   // Seeded once per parse: edits made here must survive re-renders, and must
   // not be recomputed from the parse while someone is typing in them.
   const seed = useMemo(() => {
-    if (!parsed) return { experiences: [], educations: [], skills: [], languages: [] };
+    if (!parsed) return { experiences: [], educations: [], certifications: [], skills: [], languages: [] };
 
     const experiences: DraftExperience[] = (parsed.experiences ?? [])
       .filter((x) => x.title?.trim() || x.company?.trim())
@@ -103,6 +117,27 @@ export function ResumeImportDialog({
         };
       });
 
+    // Same name counts as the same certificate; the issuer only breaks the tie
+    // when both sides name one ("Scrum Master" from two different bodies).
+    const certifications: DraftCertification[] = (parsed.certifications ?? [])
+      .filter((x) => x.name?.trim())
+      .map((x) => {
+        const duplicate = profile.certifications.some(
+          (c) =>
+            norm(c.name) === norm(x.name) &&
+            (!c.issuer?.trim() || !x.issuer?.trim() || norm(c.issuer) === norm(x.issuer)),
+        );
+        return {
+          include: !duplicate,
+          duplicate,
+          name: x.name ?? '',
+          issuer: x.issuer ?? '',
+          issueDate: x.issueDate ?? '',
+          expiryDate: x.expirationDate ?? '',
+          credentialId: x.credentialId ?? '',
+        };
+      });
+
     // Only what is genuinely new — offering to "add" a skill already listed
     // makes the list look longer than it is.
     const known = new Set(profile.skills.map((s) => norm(s.name)));
@@ -110,12 +145,13 @@ export function ResumeImportDialog({
     const knownLanguages = new Set(profile.languages.map(norm));
     const languages = (parsed.languages ?? []).filter((l) => l.trim() && !knownLanguages.has(norm(l)));
 
-    return { experiences, educations, skills, languages };
+    return { experiences, educations, certifications, skills, languages };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parsed]);
 
   const [experiences, setExperiences] = useState<DraftExperience[]>(seed.experiences);
   const [educations, setEducations] = useState<DraftEducation[]>(seed.educations);
+  const [certifications, setCertifications] = useState<DraftCertification[]>(seed.certifications);
   const [skills, setSkills] = useState<string[]>(seed.skills);
   const [languages, setLanguages] = useState<string[]>(seed.languages);
   const [takeSkills, setTakeSkills] = useState(true);
@@ -130,6 +166,7 @@ export function ResumeImportDialog({
     setSeeded(parsed);
     setExperiences(seed.experiences);
     setEducations(seed.educations);
+    setCertifications(seed.certifications);
     setSkills(seed.skills);
     setLanguages(seed.languages);
     setTakeSkills(true);
@@ -145,9 +182,11 @@ export function ResumeImportDialog({
 
   const chosenExperiences = experiences.filter((x) => x.include);
   const chosenEducations = educations.filter((x) => x.include);
+  const chosenCertifications = certifications.filter((x) => x.include);
   const nothingChosen =
     chosenExperiences.length === 0 &&
     chosenEducations.length === 0 &&
+    chosenCertifications.length === 0 &&
     !(takeSkills && skills.length) &&
     !(takeLanguages && languages.length) &&
     !(takeHeadline && headlineOffer) &&
@@ -155,11 +194,20 @@ export function ResumeImportDialog({
 
   /** A period the backend can actually store — otherwise the row won't save. */
   const periodOk = (period: string) => !!parsePeriod(period).startDate;
-  const badPeriods =
+  /** Certificates are stored by issue date, which the server requires. */
+  const issueOk = (date: string) => !!toYearMonth(date);
+  /**
+   * Ticked items the server would refuse. Adding is blocked until each gets a
+   * date or is unticked: they used to be added to the page anyway, never
+   * reached the server, and were gone on the next reload.
+   */
+  const missingDates =
     chosenExperiences.filter((x) => !periodOk(x.period)).length +
-    chosenEducations.filter((x) => !periodOk(x.period)).length;
+    chosenEducations.filter((x) => !periodOk(x.period)).length +
+    chosenCertifications.filter((x) => !issueOk(x.issueDate)).length;
 
   const apply = () => {
+    if (missingDates > 0) return;
     setSaving(true);
     try {
       chosenExperiences.forEach((x) =>
@@ -186,6 +234,18 @@ export function ResumeImportDialog({
         }),
       );
 
+      chosenCertifications.forEach((x) =>
+        addCertification({
+          name: x.name.trim(),
+          issuer: x.issuer.trim(),
+          issueDate: toYearMonth(x.issueDate),
+          expiryDate: toYearMonth(x.expiryDate) || undefined,
+          credentialId: x.credentialId.trim() || undefined,
+          // A résumé that gives no expiry is silent, not saying "never expires".
+          noExpiry: false,
+        }),
+      );
+
       if (takeSkills) skills.forEach((s) => addSkill(s.trim()));
       if (takeLanguages && languages.length) {
         // Appended, never replaced — the list is whatever they already had
@@ -209,6 +269,7 @@ export function ResumeImportDialog({
   const nothingFound =
     experiences.length === 0 &&
     educations.length === 0 &&
+    certifications.length === 0 &&
     skills.length === 0 &&
     languages.length === 0 &&
     !headlineOffer &&
@@ -298,7 +359,7 @@ export function ResumeImportDialog({
                 {x.include && !periodOk(x.period) && (
                   <p className="mt-2 flex items-center gap-1.5 pl-7 text-xs text-amber-600 dark:text-amber-500">
                     <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                    Add a readable date range (e.g. "2019 - 2021") or this one cannot be saved.
+                    Add a date range (e.g. "2019 - 2021" or "Jan 2022 - Present"), or untick it.
                   </p>
                 )}
               </div>
@@ -343,7 +404,8 @@ export function ResumeImportDialog({
                     />
                     <Input
                       value={x.period}
-                      placeholder="2015 - 2019"
+                      placeholder="2015 - 2019, or 2019"
+                      aria-label="Years attended, or the graduation year"
                       onChange={(e) =>
                         setEducations((prev) =>
                           prev.map((item, n) => (n === i ? { ...item, period: e.target.value } : item)),
@@ -368,11 +430,63 @@ export function ResumeImportDialog({
                 {x.include && !periodOk(x.period) && (
                   <p className="mt-2 flex items-center gap-1.5 pl-7 text-xs text-amber-600 dark:text-amber-500">
                     <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                    Add a readable date range or this one cannot be saved.
+                    Add the years (e.g. "2015 - 2019") or the graduation year, or untick it.
                   </p>
                 )}
               </div>
             ))}
+          </section>
+        )}
+
+        {certifications.length > 0 && (
+          <section className="space-y-3">
+            <h3 className="text-sm font-semibold">Certifications</h3>
+            {certifications.map((x, i) => {
+              const set = (patch: Partial<DraftCertification>) =>
+                setCertifications((prev) => prev.map((item, n) => (n === i ? { ...item, ...patch } : item)));
+              return (
+                <div key={i} className="rounded-xl border border-border p-3">
+                  <div className="flex items-start gap-3">
+                    <Checkbox
+                      checked={x.include}
+                      onCheckedChange={(v) => set({ include: v === true })}
+                      aria-label={`Add ${x.name || 'this certification'}`}
+                      className="mt-1"
+                    />
+                    <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-2">
+                      <Input value={x.name} placeholder="Certification" onChange={(e) => set({ name: e.target.value })} />
+                      <Input
+                        value={x.issuer}
+                        placeholder="Issued by (optional)"
+                        onChange={(e) => set({ issuer: e.target.value })}
+                      />
+                      <Input
+                        value={x.issueDate}
+                        placeholder="Issued, e.g. Mar 2021"
+                        aria-label="Issue date"
+                        onChange={(e) => set({ issueDate: e.target.value })}
+                        className={x.include && !issueOk(x.issueDate) ? 'border-amber-500' : ''}
+                      />
+                      <Input
+                        value={x.expiryDate}
+                        placeholder="Expires (optional)"
+                        aria-label="Expiry date"
+                        onChange={(e) => set({ expiryDate: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  {x.duplicate && (
+                    <p className="mt-2 pl-7 text-xs text-muted-foreground">Already on your profile</p>
+                  )}
+                  {x.include && !issueOk(x.issueDate) && (
+                    <p className="mt-2 flex items-center gap-1.5 pl-7 text-xs text-amber-600 dark:text-amber-500">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      Add when it was issued (e.g. "Mar 2021" or "2021"), or untick it.
+                    </p>
+                  )}
+                </div>
+              );
+            })}
           </section>
         )}
 
@@ -457,9 +571,9 @@ export function ResumeImportDialog({
         )}
 
         <DialogFooter className="gap-2 sm:justify-between">
-          <span className="text-xs text-muted-foreground">
-            {badPeriods > 0
-              ? `${badPeriods} item${badPeriods === 1 ? '' : 's'} need a date range to save`
+          <span className={missingDates > 0 ? 'text-xs text-amber-600 dark:text-amber-500' : 'text-xs text-muted-foreground'}>
+            {missingDates > 0
+              ? `${missingDates} ticked item${missingDates === 1 ? ' needs a date' : 's need dates'} — add ${missingDates === 1 ? 'it' : 'them'} or untick ${missingDates === 1 ? 'it' : 'them'}`
               : 'You can edit any of it afterwards.'}
           </span>
           <div className="flex gap-2">
@@ -467,7 +581,7 @@ export function ResumeImportDialog({
               {nothingFound ? 'Close' : 'Not now'}
             </Button>
             {!nothingFound && (
-              <Button onClick={apply} disabled={saving || nothingChosen}>
+              <Button onClick={apply} disabled={saving || nothingChosen || missingDates > 0}>
                 <Check className="mr-1.5 h-4 w-4" aria-hidden="true" />
                 Add selected
               </Button>

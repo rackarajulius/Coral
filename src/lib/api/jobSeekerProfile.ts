@@ -335,6 +335,11 @@ export interface ParsedResume {
   languages: string[];
   experiences: { title: string; company: string; location: string; period: string; description: string }[];
   educations: { degree: string; school: string; location: string; period: string; description: string }[];
+  /**
+   * Certificates and licences read from the file. Dates as written ("Mar 2021",
+   * "2021"). Optional: an import stashed before this field existed lacks it.
+   */
+  certifications?: { name: string; issuer: string; issueDate: string; expirationDate: string; credentialId: string }[];
 }
 
 /**
@@ -751,6 +756,30 @@ export function formatDuration(
   return parts.join(' ') || '1 mo';
 }
 
+/**
+ * Education dates as years: "2014 - 2018", "2018" for a graduation year
+ * (start = end), "2021 - Present" while studying.
+ *
+ * Years rather than months because schooling is listed by year, and a résumé
+ * that says "2018" would otherwise be shown as "Jan 2018" — a month nobody
+ * wrote. The output parses back through parsePeriod unchanged.
+ */
+export function formatYearRange(startDate: string | null, endDate: string | null, current: boolean): string {
+  const year = (iso: string | null) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? '' : String(d.getUTCFullYear());
+  };
+  const start = year(startDate);
+  if (!start) return '';
+  if (current) return `${start} - Present`;
+  const end = year(endDate);
+  // No end and not marked current: rows saved from a lone year before that
+  // was read as a graduation year. "Present" would be a claim; the year isn't.
+  if (!end) return start;
+  return end === start ? start : `${start} - ${end}`;
+}
+
 /** ISO → "YYYY-MM" (certification issue/expiry display). */
 export function isoToYearMonth(iso: string | null): string {
   if (!iso) return '';
@@ -837,8 +866,14 @@ export function educationToDto(edu: {
   gpa?: string;
   honors?: string;
 }): EducationDtoPayload | null {
-  const { startDate, endDate, current } = parsePeriod(edu.period);
-  if (!startDate) return null;
+  const parsed = parsePeriod(edu.period);
+  if (!parsed.startDate) return null;
+  // A lone date on schooling is when it ended — "BSc, 2018" is a graduation
+  // year. Stored as start = end, so it reads "2018", never "2018 - Present".
+  const lone = !/[-–—]/.test(edu.period);
+  const { startDate, endDate, current } = lone
+    ? { startDate: parsed.startDate, endDate: parsed.startDate, current: false }
+    : parsed;
   return {
     institution: edu.school,
     degree: edu.degree,

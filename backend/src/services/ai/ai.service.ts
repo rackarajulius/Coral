@@ -62,6 +62,15 @@ export interface ParsedResumeEducation {
   description: string;
 }
 
+/** Dates as written on the résumé ("Mar 2021", "2021"); empty when absent. */
+export interface ParsedResumeCertification {
+  name: string;
+  issuer: string;
+  issueDate: string;
+  expirationDate: string;
+  credentialId: string;
+}
+
 export interface ParsedResume {
   name: string;
   headline: string;
@@ -70,6 +79,7 @@ export interface ParsedResume {
   languages: string[];
   experiences: ParsedResumeExperience[];
   educations: ParsedResumeEducation[];
+  certifications: ParsedResumeCertification[];
 }
 
 export interface JobMatchScore {
@@ -495,9 +505,15 @@ export class AiService {
       '  "skills": string[],            // up to 15 distinct skills',
       '  "languages": string[],         // spoken languages',
       '  "experiences": [{ "title": string, "company": string, "location": string, "period": string, "description": string }],',
-      '  "educations": [{ "degree": string, "school": string, "location": string, "period": string, "description": string }]',
+      '  "educations": [{ "degree": string, "school": string, "location": string, "period": string, "description": string }],',
+      '  "certifications": [{ "name": string, "issuer": string, "issueDate": string, "expirationDate": string, "credentialId": string }]',
       '}',
       'Format "period" as a human-readable range like "Jan 2022 - Present" or "2015 - 2019".',
+      'For education with only a graduation year, give that one year, e.g. "2018".',
+      'Certifications are professional certificates and licences (e.g. "AWS Certified',
+      'Solutions Architect", "PMP"), not degrees: degrees go in "educations".',
+      'Write certification dates as "Mon YYYY" or "YYYY" exactly as the resume gives them.',
+      'Give the issuer only when the resume names it; do not infer it from the certificate name.',
       'Use an empty string or empty array when something is unknown. Never invent facts.',
     ].join('\n');
 
@@ -535,6 +551,17 @@ export class AiService {
       .filter((e) => e.degree || e.school)
       .slice(0, 10);
 
+    const certifications = list(raw.certifications)
+      .map((c) => ({
+        name: str(c.name),
+        issuer: str(c.issuer ?? c.issuingOrg),
+        issueDate: str(c.issueDate),
+        expirationDate: str(c.expirationDate),
+        credentialId: str(c.credentialId),
+      }))
+      .filter((c) => c.name)
+      .slice(0, 15);
+
     return {
       name: str(raw.name),
       headline: str(raw.headline),
@@ -543,6 +570,7 @@ export class AiService {
       languages: this.asStringArray(raw.languages, 10),
       experiences,
       educations,
+      certifications,
     };
   }
 

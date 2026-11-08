@@ -34,6 +34,7 @@ import {
   apiDeleteCertification,
   certificationToDto,
   formatPeriod,
+  formatYearRange,
   formatDuration,
   isoToYearMonth,
   defaultNotificationSettings,
@@ -721,7 +722,8 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
           degree: x.degree,
           school: x.institution,
           location: x.location ?? '',
-          period: formatPeriod(x.startDate, x.endDate, x.current),
+          // Years, not months: see formatYearRange.
+          period: formatYearRange(x.startDate, x.endDate, x.current),
           description: x.description ?? '',
           gpa: x.gpa ?? undefined,
           honors: x.honors ?? undefined,

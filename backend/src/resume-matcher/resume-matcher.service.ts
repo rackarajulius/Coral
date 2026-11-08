@@ -656,6 +656,8 @@ export class ResumeMatcherService {
         period: this.formatPeriod(e.startDate, e.endDate, e.current),
         description: e.description ?? '',
       })),
+      // Matching reads roles, skills and schooling; certifications play no part.
+      certifications: [],
     };
 
     // Needs at least something to match on.
