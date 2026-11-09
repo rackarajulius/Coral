@@ -719,16 +719,19 @@ export type MediaKind = "image" | "video";
 
 export async function uploadPostMedia(
   file: File,
+  signal?: AbortSignal,
 ): Promise<{ url: string; path: string; kind: MediaKind }> {
   const { data: { session } } = await supabase.auth.getSession();
   const body = new FormData();
   // Pictures at the size a feed shows them; videos and GIFs as they are.
   body.append("file", await fitImage(file, IMAGE_SIZES.post));
+  signal?.throwIfAborted();
 
   const res = await fetch(`${API_BASE_URL}/community/posts/media`, {
     method: "POST",
     headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
     body,
+    signal,
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

@@ -6,7 +6,7 @@ import { CommunityTopBar } from "./CommunityTopBar";
 import { CommunityNav } from "./CommunityNav";
 import { useAuth } from "@/contexts/AuthContext";
 import { MyScheduledPostsDialog } from "@/components/community/feed/ScheduledQueue";
-import { VideoPostQueue } from "@/components/community/feed/VideoPostQueue";
+import { PostQueue } from "@/components/community/feed/PostQueue";
 
 /**
  * The community as a place of its own.
@@ -63,8 +63,8 @@ export function CommunityShell() {
 
       {showScheduled && <MyScheduledPostsDialog open onOpenChange={(open) => !open && closeScheduled()} />}
 
-      {/* Posts sent while their video was still uploading, finishing here. */}
-      <VideoPostQueue />
+      {/* Posts sent while their video or pictures were still uploading, finishing here. */}
+      <PostQueue />
 
       {/* Below lg the nav is a drawer from the bar's menu button. */}
       <Sheet open={menuOpen} onOpenChange={setMenuOpen}>

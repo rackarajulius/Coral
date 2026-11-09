@@ -15,6 +15,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useVideoUploads, type VideoUpload } from "./videoUploads";
+import { inTurn, usePhotoPosts } from "./photoPosts";
+import { acceptFor, sortPicked } from "./mediaPick";
+import { EmojiButton } from "./EmojiButton";
 import { addPostToFeeds } from "./feedCache";
 import { announceNewPost } from "./feedLive";
 import { cn } from "@/lib/utils";
@@ -103,10 +106,23 @@ function rememberAudience(userId: string | undefined, target: PickedSpace | null
   }
 }
 
-interface Attachment {
-  url: string;
-  path: string;
+/**
+ * A picture (or, without Mux, a short clip) in the draft: shown from the
+ * picked file at once and uploaded behind it, so nothing waits for it.
+ */
+interface DraftMedia {
+  key: string;
   kind: MediaKind;
+  /** The picked file, or a GIF's own address. */
+  previewUrl: string;
+  status: "uploading" | "ready" | "failed";
+  /** Where it is stored, once it is. */
+  url?: string;
+  error?: string;
+  /** Resolves to `url`; what a post sent before it finished waits for. */
+  uploaded: Promise<string>;
+  /** Stops an upload still under way. */
+  cancel?: () => void;
 }
 
 /**
@@ -250,12 +266,23 @@ function ComposerDialog({
   const [target, setTarget] = useState<PickedSpace | null>(() =>
     spaceId ? { id: spaceId, name: spaceName ?? "" } : readLastAudience(user?.id),
   );
-  const [media, setMedia] = useState<Attachment[]>([]);
+  const [media, setMedia] = useState<DraftMedia[]>([]);
+  // For the clean-up when the composer closes, which sees no fresh state.
+  const mediaRef = useRef<DraftMedia[]>([]);
+  mediaRef.current = media;
+  // The preview handed to the bar with a post still waiting for its pictures,
+  // which the bar lets go of, not this composer.
+  const handedOffPreview = useRef<string | null>(null);
+  // Closed: an upload failing after that is the bar's to report, not a toast's.
+  const closedRef = useRef(false);
+  const postWhenUploaded = usePhotoPosts((s) => s.postWhenUploaded);
   // A PDF shared as the post, and what to call it. On its own: no pictures,
   // video, poll or tide beside it.
   const [attachedDoc, setAttachedDoc] = useState<UploadedDocument | null>(null);
   const [docTitle, setDocTitle] = useState("");
-  const [uploading, setUploading] = useState(false);
+  // Only a document is waited for: its page count and title come back from
+  // the server, and the draft has nothing to show until they do.
+  const [docUploading, setDocUploading] = useState(false);
   /**
    * Long videos, when Mux is set up: up to ten minutes, in any format a phone
    * records. Otherwise the old rule holds — a minute of MP4 or WebM, kept in
@@ -379,9 +406,7 @@ function ComposerDialog({
    * So the composer builds both, and the space picker and company voice are
    * already here.
    */
-  const photoRef = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLInputElement>(null);
-  const docRef = useRef<HTMLInputElement>(null);
+  const mediaInput = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
   // Hidden rather than shown-and-broken when no API key is configured.
@@ -409,7 +434,9 @@ function ComposerDialog({
   const postInput = () => ({
     spaceId: target?.id,
     content: toStored(content.trim(), mentions),
-    mediaUrls: longVideo?.phase === "ready" && longVideo.video?.url ? [longVideo.video.url] : media.map((m) => m.url),
+    mediaUrls: longVideo?.phase === "ready" && longVideo.video?.url
+      ? [longVideo.video.url]
+      : media.flatMap((m) => (m.url ? [m.url] : [])),
     postType: "TEXT" as const,
     purpose,
     ...(reference ? { reference: { type: reference.type, id: reference.id } } : {}),
@@ -425,9 +452,11 @@ function ComposerDialog({
    * the listing is open) are posted now.
    */
   const canSchedule = !tide && !structured && !reference;
-  // A scheduled post keeps the video's stream address, which exists once the
-  // video is ready; posting now can go ahead before that.
+  // A scheduled post keeps the video's stream address and the pictures' own,
+  // which exist once they're up; posting now can go ahead before that.
   const scheduleBlockedByVideo = !!longVideo && longVideo.phase !== "ready";
+  const scheduleBlockedByMedia = media.some((m) => m.status !== "ready");
+  const scheduleBlocked = scheduleBlockedByVideo || scheduleBlockedByMedia;
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleAt, setScheduleAt] = useState("");
   const schedule = useMutation({
@@ -446,9 +475,31 @@ function ComposerDialog({
     onError: (e) => toast.error((e as Error).message),
   });
 
+  /**
+   * The post as it stands, sent later by the page once its video or pictures
+   * are up, with their addresses — after this composer has closed, so
+   * everything it needs is taken now.
+   */
+  const sendLater = () => {
+    const input = postInput();
+    const supabaseId = user?.supabaseId;
+    const spaceChanged = !!target;
+    return async (mediaUrls: string[]) => {
+      const created = await createPost({ ...input, mediaUrls }, supabaseId);
+      addPostToFeeds(queryClient, created.data);
+      announceNewPost();
+      if (spaceChanged) {
+        void queryClient.invalidateQueries({ queryKey: ["community-spaces"] });
+        void queryClient.invalidateQueries({ queryKey: ["space"] });
+      }
+      return created.data.id;
+    };
+  };
+
   const post = useMutation({
     // The post as the server sent it back, to put straight into the feed —
-    // or null for a tide (a different shape) or a post waiting for its video.
+    // or null for a tide (a different shape) or a post waiting for its video
+    // or pictures.
     mutationFn: async (): Promise<CommunityPost | null> => {
       if (tide) {
         await createTide({
@@ -463,18 +514,19 @@ function ComposerDialog({
       // store, which sends it the moment the video is ready, and this
       // composer closes now — as on Threads.
       if (longVideo && videoKey && longVideo.phase !== "ready") {
-        const input = postInput();
-        const supabaseId = user?.supabaseId;
-        const spaceChanged = !!target;
-        postWhenReady(videoKey, async (streamUrl) => {
-          const created = await createPost({ ...input, mediaUrls: [streamUrl] }, supabaseId);
-          addPostToFeeds(queryClient, created.data);
-          announceNewPost();
-          if (spaceChanged) {
-            void queryClient.invalidateQueries({ queryKey: ["community-spaces"] });
-            void queryClient.invalidateQueries({ queryKey: ["space"] });
-          }
-          return created.data.id;
+        const send = sendLater();
+        postWhenReady(videoKey, (streamUrl) => send([streamUrl]));
+        return null;
+      }
+      // Pictures still uploading, the same way: sent once the last is up.
+      if (media.some((m) => m.status === "uploading")) {
+        const [first] = media;
+        handedOffPreview.current = first.previewUrl;
+        postWhenUploaded({
+          preview: { url: first.previewUrl, kind: first.kind },
+          allImages: media.every((m) => m.kind === "image"),
+          uploads: media.map((m) => m.uploaded),
+          send: sendLater(),
         });
         return null;
       }
@@ -508,6 +560,56 @@ function ComposerDialog({
     if (!postedRef.current && videoKeyRef.current) removeUpload(videoKeyRef.current);
   }, [removeUpload]);
 
+  // Pictures that were never posted stop uploading when the draft goes (any
+  // that got there are swept after a day); posted ones carry on. Their
+  // previews are let go either way, but the one the bar is showing.
+  useEffect(() => {
+    closedRef.current = false;
+    return () => {
+      closedRef.current = true;
+      for (const m of mediaRef.current) {
+        if (!postedRef.current) m.cancel?.();
+        if (m.previewUrl.startsWith("blob:") && m.previewUrl !== handedOffPreview.current) URL.revokeObjectURL(m.previewUrl);
+      }
+    };
+  }, []);
+
+  const patchMedia = (key: string, change: Partial<DraftMedia>) =>
+    setMedia((all) => all.map((m) => (m.key === key ? { ...m, ...change } : m)));
+
+  /** In the draft at once, from the file; uploaded behind it, in turn. */
+  const addMedia = (file: File) => {
+    const key = crypto.randomUUID();
+    const controller = new AbortController();
+    const uploaded = inTurn(() => uploadPostMedia(file, controller.signal), controller.signal).then((stored) => stored.url);
+    setMedia((all) => [...all, {
+      key,
+      kind: file.type.startsWith("video/") ? "video" : "image",
+      previewUrl: URL.createObjectURL(file),
+      status: "uploading",
+      uploaded,
+      cancel: () => controller.abort(),
+    }]);
+    uploaded.then(
+      (url) => patchMedia(key, { status: "ready", url, cancel: undefined }),
+      (err) => {
+        if (controller.signal.aborted) return;
+        const message = (err as Error).message || "That file didn't upload.";
+        patchMedia(key, { status: "failed", error: message, cancel: undefined });
+        // Verbatim: the server refuses by what the file *is*, and a generic
+        // failure would leave someone re-picking the same wrong file.
+        if (!closedRef.current) toast.error(message);
+      },
+    );
+  };
+
+  const removeMedia = (key: string) => {
+    const item = media.find((m) => m.key === key);
+    item?.cancel?.();
+    if (item?.previewUrl.startsWith("blob:")) URL.revokeObjectURL(item.previewUrl);
+    setMedia((all) => all.filter((m) => m.key !== key));
+  };
+
   const removeLongVideo = () => {
     if (videoKey) removeUpload(videoKey);
     setVideoKey(null);
@@ -515,7 +617,6 @@ function ComposerDialog({
 
   /** Shown and playing at once, from the file; uploaded in the background. */
   const pickLongVideo = async (file: File | undefined) => {
-    if (videoRef.current) videoRef.current.value = "";
     if (!file) return;
     if (media.length > 0) {
       toast.error("A video is posted on its own. Remove the pictures first.");
@@ -535,45 +636,28 @@ function ComposerDialog({
     setVideoKey(startUpload(file));
   };
 
-  const pickMedia = async (files: FileList | null) => {
-    if (!files?.length) return;
+  const pickMedia = async (picked: File[]) => {
+    if (!picked.length) return;
     const room = MAX_MEDIA - media.length;
     if (room <= 0) {
       toast.error(`Up to ${MAX_MEDIA} attachments.`);
       return;
     }
-
-    setUploading(true);
-    try {
-      // Sequential: four concurrent uploads on a phone connection is how one
-      // of them times out.
-      for (const file of Array.from(files).slice(0, room)) {
-        if (file.type.startsWith("video/")) {
-          const seconds = await videoDuration(file);
-          if (seconds !== null && seconds > MAX_VIDEO_SECONDS) {
-            toast.error(`That video is ${Math.round(seconds)}s. Keep it under ${MAX_VIDEO_SECONDS}s.`);
-            continue;
-          }
+    for (const file of picked.slice(0, room)) {
+      if (file.type.startsWith("video/")) {
+        const seconds = await videoDuration(file);
+        if (seconds !== null && seconds > MAX_VIDEO_SECONDS) {
+          toast.error(`That video is ${Math.round(seconds)}s. Keep it under ${MAX_VIDEO_SECONDS}s.`);
+          continue;
         }
-        const uploaded = await uploadPostMedia(file);
-        setMedia((prev) => [...prev, uploaded]);
       }
-    } catch (e) {
-      // Verbatim: the server refuses by what the file *is*, and a generic
-      // failure would leave someone re-picking the same wrong file.
-      toast.error((e as Error).message);
-    } finally {
-      setUploading(false);
-      // Both inputs, since either may have been the one used — a file left in
-      // the input means picking the same file twice fires no change event.
-      if (photoRef.current) photoRef.current.value = "";
-      if (videoRef.current) videoRef.current.value = "";
+      addMedia(file);
     }
   };
 
   const pickDocument = async (file: File | undefined) => {
     if (!file) return;
-    setUploading(true);
+    setDocUploading(true);
     try {
       const uploaded = await uploadPostDocument(file);
       setAttachedDoc(uploaded);
@@ -582,9 +666,52 @@ function ComposerDialog({
       // Verbatim, as for pictures: the server says what was wrong with the file.
       toast.error((e as Error).message);
     } finally {
-      setUploading(false);
-      if (docRef.current) docRef.current.value = "";
+      setDocUploading(false);
     }
+  };
+
+  /**
+   * One button for everything, as on X: what was picked decides whether it
+   * goes in as pictures, the video or the document.
+   */
+  const pickFromMedia = (files: FileList | null) => {
+    const picked = Array.from(files ?? []);
+    // A file left in the input means picking the same one twice fires nothing.
+    if (mediaInput.current) mediaInput.current.value = "";
+    const sorted = sortPicked(picked, { streaming, attached: media.length });
+    if (!sorted) return;
+    if (sorted.kind === "refused") toast.error(sorted.message);
+    else if (sorted.kind === "document") void pickDocument(sorted.file);
+    else if (sorted.kind === "video") void pickLongVideo(sorted.file);
+    else void pickMedia(sorted.files);
+  };
+
+  /**
+   * Emoji go where the cursor was when the picker opened — a text box keeps
+   * that after losing focus — and each next one after the last.
+   */
+  const emojiCaret = useRef<{ start: number; end: number } | null>(null);
+  const rememberCaret = () => {
+    const el = textRef.current;
+    emojiCaret.current = el
+      ? { start: el.selectionStart ?? el.value.length, end: el.selectionEnd ?? el.value.length }
+      : null;
+  };
+  const insertEmoji = (emoji: string) => {
+    const at = emojiCaret.current ?? { start: content.length, end: content.length };
+    const start = Math.min(at.start, content.length);
+    const end = Math.min(Math.max(at.end, start), content.length);
+    const next = content.slice(0, start) + emoji + content.slice(end);
+    if (next.length > MAX_LENGTH) return;
+    emojiCaret.current = { start: start + emoji.length, end: start + emoji.length };
+    setContent(next);
+  };
+  const returnToText = () => {
+    const el = textRef.current;
+    const at = emojiCaret.current;
+    if (!el) return;
+    el.focus();
+    if (at) el.setSelectionRange(at.start, at.end);
   };
 
   const name = personName(user) || "You";
@@ -595,11 +722,12 @@ function ComposerDialog({
   const docReady = !attachedDoc || !!docTitle.trim();
   // Words, pictures, a video or a document can each be the whole post — the
   // server takes any one of them.
-  // A video still uploading doesn't hold the post back (it goes out when the
-  // video is ready); one that failed has to be removed first.
+  // A video or pictures still uploading don't hold the post back (it goes out
+  // when they're up); one that failed has to be removed first.
   const videoUsable = !longVideo || longVideo.phase !== "failed";
+  const mediaFailed = media.some((m) => m.status === "failed");
   const canPost = (!!content.trim() || media.length > 0 || !!attachedDoc || !!longVideo)
-    && docReady && pollReady && referenceReady && videoUsable && !uploading && !post.isPending;
+    && docReady && pollReady && referenceReady && videoUsable && !mediaFailed && !docUploading && !post.isPending;
   const dirty = !!content.trim() || media.length > 0 || !!poll || !!attachedDoc || !!longVideo;
 
   return (
@@ -755,26 +883,39 @@ function ComposerDialog({
 
               {media.length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-2">
+                  {/* Shown from the file the moment it's picked; the upload
+                      behind it isn't shown, because nothing waits for it. */}
                   {media.map((m) => (
-                    <div key={m.path} className="relative">
+                    <div key={m.key} className="relative">
                       {m.kind === "video" ? (
                         <video
-                          src={m.url}
+                          src={m.previewUrl}
                           preload="metadata"
                           muted
+                          playsInline
                           className="h-24 w-24 rounded-lg border border-border object-cover"
                         />
                       ) : (
                         <img
-                          src={m.url}
+                          src={m.previewUrl}
                           alt=""
                           className="h-24 w-24 rounded-lg border border-border object-cover"
                         />
                       )}
+                      {m.status === "failed" && (
+                        <div
+                          className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/60"
+                          role="alert"
+                          title={m.error}
+                        >
+                          <AlertTriangle className="h-5 w-5 text-white" aria-hidden="true" />
+                          <span className="sr-only">{m.error ?? "This one didn't upload."}</span>
+                        </div>
+                      )}
                       <button
                         type="button"
-                        onClick={() => setMedia((p) => p.filter((i) => i.path !== m.path))}
-                        aria-label="Remove attachment"
+                        onClick={() => removeMedia(m.key)}
+                        aria-label={m.status === "failed" ? "Remove the one that didn't upload" : "Remove attachment"}
                         className="absolute -right-1.5 -top-1.5 rounded-full bg-foreground p-0.5 text-background"
                       >
                         <X className="h-3 w-3" />
@@ -878,59 +1019,32 @@ function ComposerDialog({
               )}
 
               {/*
-                Two buttons, not one.
+                One "Media" button for photos, video and PDFs, as on X.
 
-                A single image icon reads as "add a photo" and nothing else —
-                video was already accepted here and simply could not be found.
-                An affordance nobody recognises is the same as a missing one.
+                It was once a Photo and a Video button, because a lone picture
+                icon hid that video was accepted at all. The word "Media" and
+                the line under these buttons, which names all three, are what
+                keep that from happening again.
               */}
               {/* Wraps rather than running under the scrollbar once the post is tall. */}
               <div className="mt-3 flex flex-wrap items-center gap-1">
                 <input
-                  ref={photoRef}
+                  ref={mediaInput}
                   type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  // Only what can still go in: with photos in, more photos.
+                  accept={acceptFor({ streaming, attached: media.length })}
                   multiple
                   className="hidden"
-                  onChange={(e) => void pickMedia(e.target.files)}
-                />
-                <input
-                  ref={videoRef}
-                  type="file"
-                  // With streaming, whatever a phone records: Mux converts it.
-                  accept={streaming ? "video/mp4,video/webm,video/quicktime,.mov,.m4v" : "video/mp4,video/webm"}
-                  className="hidden"
-                  onChange={(e) => (streaming ? void pickLongVideo(e.target.files?.[0]) : void pickMedia(e.target.files))}
-                />
-                <input
-                  ref={docRef}
-                  type="file"
-                  accept="application/pdf,.pdf"
-                  className="hidden"
-                  onChange={(e) => void pickDocument(e.target.files?.[0])}
+                  onChange={(e) => pickFromMedia(e.target.files)}
                 />
 
                 <MediaButton
                   icon={ImagePlus}
-                  label="Photo"
-                  busy={uploading}
-                  disabled={uploading || media.length >= MAX_MEDIA || !!poll || !!attachedDoc || !!longVideo}
-                  onClick={() => photoRef.current?.click()}
-                />
-                <MediaButton
-                  icon={Video}
-                  label="Video"
-                  busy={uploading}
-                  // A streamed video goes alone, as on LinkedIn.
-                  disabled={uploading || media.length >= MAX_MEDIA || !!poll || !!attachedDoc || !!longVideo || !!tide || (streaming && media.length > 0)}
-                  onClick={() => videoRef.current?.click()}
-                />
-                <MediaButton
-                  icon={FileText}
-                  label="Document"
-                  busy={uploading}
-                  disabled={uploading || media.length > 0 || !!poll || !!tide || !!attachedDoc || !!longVideo}
-                  onClick={() => docRef.current?.click()}
+                  label="Media"
+                  busy={docUploading}
+                  // A video or a document is the whole post; so is a tide.
+                  disabled={docUploading || media.length >= MAX_MEDIA || !!poll || !!attachedDoc || !!longVideo || !!tide}
+                  onClick={() => mediaInput.current?.click()}
                 />
 
                 {/* Media and a poll are alternatives, not companions: a card
@@ -942,7 +1056,7 @@ function ComposerDialog({
                     icon={GifIcon}
                     label="GIF"
                     busy={false}
-                    disabled={uploading || media.length >= MAX_MEDIA || !!poll || !!attachedDoc || !!longVideo}
+                    disabled={docUploading || media.length >= MAX_MEDIA || !!poll || !!attachedDoc || !!longVideo}
                     onClick={() => setGifOpen(true)}
                   />
                 )}
@@ -953,6 +1067,7 @@ function ComposerDialog({
                   disabled={media.length > 0 || !!tide || !!attachedDoc || !!longVideo}
                   onClick={() => setPoll(poll ? null : ["", ""])}
                 />
+                <EmojiButton onOpen={rememberCaret} onPick={insertEmoji} onClose={returnToText} />
                 {/* A tide replaces the body rather than adding to it: the card
                     already carries the title, time and place, so media and a
                     poll would be a second thing competing with it. */}
@@ -967,7 +1082,7 @@ function ComposerDialog({
                   }}
                 />
 
-                {uploading && (
+                {docUploading && (
                   <span className="ml-1 text-xs text-muted-foreground">Uploading…</span>
                 )}
               </div>
@@ -977,8 +1092,8 @@ function ComposerDialog({
                   after a 30MB upload is the worst place to learn it. */}
               <p className="mt-1.5 text-[11px] text-muted-foreground">
                 {streaming
-                  ? `Videos up to ${maxVideoSeconds / 60} minutes, straight from your phone or camera. Documents: a PDF, up to 15MB.`
-                  : `MP4 or WebM, up to ${MAX_VIDEO_SECONDS}s. iPhone videos need exporting as MP4. Documents: a PDF, up to 15MB.`}
+                  ? `Media: up to ${MAX_MEDIA} photos, a video up to ${maxVideoSeconds / 60} minutes straight from your phone or camera, or a PDF up to 15MB.`
+                  : `Media: up to ${MAX_MEDIA} photos or MP4/WebM clips up to ${MAX_VIDEO_SECONDS}s (iPhone videos need exporting as MP4), or a PDF up to 15MB.`}
               </p>
             </div>
           </div>
@@ -988,8 +1103,8 @@ function ComposerDialog({
           <span className="text-xs text-muted-foreground">
             {longVideo?.phase === "failed"
               ? "Remove the video to post without it"
-              : longVideo && longVideo.phase !== "ready"
-                ? "Post now — your video keeps uploading"
+              : mediaFailed
+                ? "Remove the one that didn't upload to post"
               : tide && !tideReady(tide)
               ? "A tide needs a name and a start"
               : !tide && content.length > MAX_LENGTH - 500
@@ -1017,8 +1132,10 @@ function ComposerDialog({
                     size="sm"
                     variant="outline"
                     className="gap-1.5 rounded-full"
-                    disabled={!canPost || scheduleBlockedByVideo || schedule.isPending}
-                    title={scheduleBlockedByVideo ? "You can schedule once the video is ready" : undefined}
+                    disabled={!canPost || scheduleBlocked || schedule.isPending}
+                    title={scheduleBlockedByVideo
+                      ? "You can schedule once the video is ready"
+                      : scheduleBlockedByMedia ? "You can schedule once the pictures are up" : undefined}
                   >
                     <Clock className="h-3.5 w-3.5" aria-hidden="true" />
                     Schedule
@@ -1049,7 +1166,7 @@ function ComposerDialog({
                     size="sm"
                     className="w-full rounded-full"
                     onClick={() => schedule.mutate()}
-                    disabled={!canPost || scheduleBlockedByVideo || !!scheduleProblem(scheduleAt) || schedule.isPending}
+                    disabled={!canPost || scheduleBlocked || !!scheduleProblem(scheduleAt) || schedule.isPending}
                   >
                     {schedule.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
                     Schedule post
@@ -1073,7 +1190,14 @@ function ComposerDialog({
       <GifPicker
         open={gifOpen}
         onClose={() => setGifOpen(false)}
-        onPicked={(picked) => setMedia((prev) => [...prev, { ...picked, kind: "image" }])}
+        onPicked={(picked) => setMedia((prev) => [...prev, {
+          key: crypto.randomUUID(),
+          kind: "image",
+          previewUrl: picked.url,
+          status: "ready",
+          url: picked.url,
+          uploaded: Promise.resolve(picked.url),
+        }])}
       />
     </Dialog>
   );
@@ -1082,8 +1206,8 @@ function ComposerDialog({
 /**
  * A long video in the draft, as Threads shows one: the video itself, playing
  * muted from the picked file the moment it is chosen, in a tile shaped like
- * it. The upload carries on underneath, with a thin line for how far it has
- * got; nothing waits for it.
+ * it. The upload carries on underneath, unshown, because nothing waits for
+ * it; only an upload that failed is said here.
  *
  * A file this browser can't play (an iPhone's HEVC .mov in Chrome, say) gets
  * Mux's still once that exists, and its name until then.
@@ -1143,23 +1267,6 @@ function VideoDraftTile({ draft, onRemove }: { draft: VideoUpload; onRemove: () 
           >
             {muted ? <VolumeX className="h-4 w-4" aria-hidden="true" /> : <Volume2 className="h-4 w-4" aria-hidden="true" />}
           </button>
-        )}
-
-        {/* Where the upload has got to: small, and in the corner, because
-            nothing has to wait for it. */}
-        {(draft.phase === "uploading" || draft.phase === "processing") && (
-          <span
-            className="absolute bottom-2 left-2 inline-flex items-center gap-1.5 rounded-full bg-black/60 px-2 py-1 text-[11px] font-medium tabular-nums text-white"
-            role="status"
-          >
-            <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
-            {draft.phase === "uploading" ? (draft.id ? `Uploading ${Math.floor(draft.progress)}%` : "Starting…") : "Preparing…"}
-          </span>
-        )}
-        {draft.phase === "uploading" && (
-          <div className="absolute inset-x-0 bottom-0 h-1 bg-white/20" aria-hidden="true">
-            <div className="h-full bg-primary transition-[width]" style={{ width: `${Math.max(2, draft.progress)}%` }} />
-          </div>
         )}
 
         {draft.phase === "failed" && (
