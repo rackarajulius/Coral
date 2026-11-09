@@ -64,6 +64,13 @@ export function PostStatsDialog({
               <Tile label="Comments" value={s.comments} />
               <Tile label="Reshares" value={s.reshares} />
               <Tile label="Engagement" value={s.engagementRate === null ? "–" : `${s.engagementRate}%`} />
+              {/* Only for a post with a call-to-action bar. */}
+              {s.buttonClicks !== null && s.buttonClicks !== undefined && (
+                <>
+                  <Tile label="Button clicks" value={s.buttonClicks} />
+                  <Tile label="Click rate" value={s.clickRate === null ? "–" : `${s.clickRate}%`} />
+                </>
+              )}
             </dl>
 
             <ViewsChart daily={s.daily} caption={s.daily.length > 1 ? `Views by day, last ${s.daily.length} days` : "Views today"} />

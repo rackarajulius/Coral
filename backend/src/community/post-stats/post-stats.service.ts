@@ -77,6 +77,36 @@ export class PostStatsService {
     return { counted: inserted.length };
   }
 
+  /**
+   * Someone pressed a post's call-to-action button. Counted by the rule views
+   * follow: once per person per day, and never the author or, for a company
+   * post, the company's own team. Says whether it counted.
+   */
+  async recordCtaClick(clicker: User, postId: string): Promise<{ counted: boolean }> {
+    if (!isUUID(postId)) return { counted: false };
+    const post = await this.prisma.post.findUnique({
+      where: { id: postId },
+      select: { id: true, authorId: true, companyId: true, removedAt: true, ctaUrl: true },
+    });
+    if (!post || post.removedAt || !post.ctaUrl || post.authorId === clicker.id) return { counted: false };
+    if (post.companyId) {
+      const seat = await this.prisma.companyMember.findFirst({
+        where: { userId: clicker.id, companyId: post.companyId, status: CompanyMemberStatus.ACTIVE },
+        select: { id: true },
+      });
+      if (seat) return { counted: false };
+    }
+    const inserted = await this.prisma.$queryRaw<Array<{ post_id: string }>>`
+      INSERT INTO post_cta_clicks (post_id, clicker_id, day)
+      VALUES (${post.id}, ${clicker.id}, ${utcDay()}::date)
+      ON CONFLICT DO NOTHING
+      RETURNING post_id`;
+    if (inserted.length > 0) {
+      await this.prisma.$executeRaw`UPDATE posts SET cta_clicks_count = cta_clicks_count + 1 WHERE id = ${post.id}`;
+    }
+    return { counted: inserted.length > 0 };
+  }
+
   /** One post's numbers: for its author, or for the people who run the company it speaks for. */
   async postStats(user: User, postId: string) {
     const post = await this.prisma.post.findUnique({
@@ -84,6 +114,7 @@ export class PostStatsService {
       select: {
         id: true, authorId: true, companyId: true, removedAt: true, createdAt: true,
         viewsCount: true, likesCount: true, commentsCount: true, resharesCount: true,
+        ctaLabel: true, ctaClicksCount: true,
       },
     });
     if (!post || post.removedAt) throw new NotFoundException('Post not found');
@@ -114,6 +145,9 @@ export class PostStatsService {
       reshares: post.resharesCount,
       // Of the times it was seen, how often someone did something with it.
       engagementRate: post.viewsCount > 0 ? Math.round((engagements / post.viewsCount) * 1000) / 10 : null,
+      // Only for a post with a call-to-action bar: presses, and of the views, how many pressed.
+      buttonClicks: post.ctaLabel ? post.ctaClicksCount : null,
+      clickRate: post.ctaLabel && post.viewsCount > 0 ? Math.round((post.ctaClicksCount / post.viewsCount) * 1000) / 10 : null,
       daily: fillDays(first, today, days),
       retentionDays: POST_VIEW_RETENTION_DAYS,
     };
@@ -194,8 +228,13 @@ export class PostStatsService {
   async pruneViews(now = Date.now()): Promise<void> {
     try {
       const cutoff = new Date(Date.parse(utcDay(now)) - POST_VIEW_RETENTION_DAYS * DAY_MS);
-      const { count } = await this.prisma.postView.deleteMany({ where: { day: { lt: cutoff } } });
-      if (count > 0) this.logger.log(`Pruned ${count} post view(s) older than ${POST_VIEW_RETENTION_DAYS} days.`);
+      const [views, clicks] = await Promise.all([
+        this.prisma.postView.deleteMany({ where: { day: { lt: cutoff } } }),
+        // Who pressed a button is kept no longer than who saw the post.
+        this.prisma.postCtaClick.deleteMany({ where: { day: { lt: cutoff } } }),
+      ]);
+      const count = views.count + clicks.count;
+      if (count > 0) this.logger.log(`Pruned ${count} post view(s) and button click(s) older than ${POST_VIEW_RETENTION_DAYS} days.`);
     } catch (err) {
       this.logger.error(`Post view retention failed: ${(err as Error).message}`);
     }

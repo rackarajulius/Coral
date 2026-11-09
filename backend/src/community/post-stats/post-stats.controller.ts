@@ -25,6 +25,12 @@ export class PostStatsController {
     return { success: true, data: await this.stats.recordViews(user, dto.postIds) };
   }
 
+  /** Someone pressed the post's call-to-action button; counted once per person per day. */
+  @Post('posts/:id/cta-click')
+  async ctaClick(@CurrentUser() user: User, @Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, data: await this.stats.recordCtaClick(user, id) };
+  }
+
   /** One post's numbers, for its author or its company's page admins. */
   @Get('posts/:id/stats')
   async post(@CurrentUser() user: User, @Param('id', ParseUUIDPipe) id: string) {

@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { CommentPolicy, CompanyMemberStatus, CompanyRole, PostPurpose, Prisma } from '@prisma/client';
+import { CommentPolicy, CompanyMemberStatus, CompanyRole, PostCollaboratorStatus, PostPurpose, Prisma } from '@prisma/client';
 import { isUUID } from 'class-validator';
 import { MarketplaceService } from '../../marketplace/marketplace.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -25,6 +25,8 @@ import { commentAccess } from '../comment-policy';
 import { announceMentions, plainText, resolveMentions, withoutMentions } from '../mentions';
 import { followStateFor } from '../follow-state';
 import { isStreamUrl } from '../videos/stream-url';
+import { ctaColumns } from './post-cta';
+import { ACCEPTED_COLLABORATORS, PostCollaboratorsService, withCollaboratorCards } from '../collaborators/post-collaborators.service';
 
 type AnnouncementCard = Awaited<ReturnType<MarketplaceService['projectAnnouncementReference']>>;
 
@@ -54,6 +56,7 @@ export class PostsService {
     private readonly companyContext: CompanyContextService,
     private readonly notifications: NotificationsService,
     private readonly marketplace?: MarketplaceService,
+    private readonly collaborators?: PostCollaboratorsService,
   ) {}
 
   async list(query: ListPostsQueryDto, currentUserId?: string) {
@@ -122,16 +125,33 @@ export class PostsService {
     const personal = await this.buildPersonalFilter(query.filter, currentUserId);
     if (personal === 'none') return 'none' as const;
 
+    // Kept apart in an AND, so neither can overwrite the Following feed's OR.
+    const pages: Prisma.PostWhereInput[] = [
+      // A person's posts are what they said as themselves — what they
+      // published in a company's name is the company's, and lives on its
+      // page — and the posts they accepted to collaborate on.
+      ...(query.authorId
+        ? [{ OR: [
+            { authorId: query.authorId, companyId: null },
+            { collaborators: { some: { userId: query.authorId, status: PostCollaboratorStatus.ACCEPTED } } },
+          ] }]
+        : []),
+      // A company's page: its own posts, and those it collaborates on.
+      ...(query.companyId
+        ? [{ OR: [
+            { companyId: query.companyId },
+            { collaborators: { some: { companyId: query.companyId, status: PostCollaboratorStatus.ACCEPTED } } },
+          ] }]
+        : []),
+    ];
+
     return {
       // Removed content is gone from every listing. It survives in the table
       // so a decision can be reviewed, not so it can keep being read.
       removedAt: null,
       ...personal,
       ...(query.spaceId ? { spaceId: query.spaceId } : {}),
-      // A person's posts are what they said as themselves: what they published
-      // in a company's name is the company's, and lives on its page.
-      ...(query.authorId ? { authorId: query.authorId, companyId: null } : {}),
-      ...(query.companyId ? { companyId: query.companyId } : {}),
+      ...(pages.length ? { AND: pages } : {}),
       ...(query.query
         ? { content: { contains: query.query, mode: 'insensitive' as const } }
         : {}),
@@ -186,10 +206,16 @@ export class PostsService {
       throw new NotFoundException('Post not found');
     }
 
-    const [normalized] = await this.withIdentity(await this.addViewerFlags([post], currentUser?.id), currentUser?.id);
+    const [[normalized], viewerCollaboration] = await Promise.all([
+      this.addViewerFlags([post], currentUser?.id).then((flagged) => this.withIdentity(flagged, currentUser?.id)),
+      // An invitation to answer, or a collaboration to leave — the post's
+      // page is where both are done.
+      this.collaborators?.viewerState(postId, currentUser?.id) ?? Promise.resolve([]),
+    ]);
 
     return {
       ...normalized,
+      viewerCollaboration,
       canEdit: normalized.canEdit || Boolean(currentUser?.role === 'ADMIN' && !post.companyId),
     };
   }
@@ -277,13 +303,19 @@ export class PostsService {
     }
     // Refuses too many mentions now rather than at publishing time.
     await resolveMentions(this.prisma, dto.content);
-    if (!dto.asCompany) return { companyId: null };
-    const company = await this.selectedCompanyVoiceFor(userId, dto.companyId);
-    if (!company) throw new ForbiddenException('Only an owner or admin of a company can post in its name.');
-    return { companyId: company.id };
+    const company = dto.asCompany ? await this.selectedCompanyVoiceFor(userId, dto.companyId) : null;
+    if (dto.asCompany && !company) throw new ForbiddenException('Only an owner or admin of a company can post in its name.');
+    // Anyone who can't be invited is said now, not when it publishes.
+    await this.collaborators?.check(userId, company?.id ?? null, dto.collaborators);
+    this.ctaFor(dto);
+    return { companyId: company?.id ?? null };
   }
 
-  async create(userId: string, dto: CreatePostDto) {
+  /**
+   * `lenientCollaborators`: for a scheduled post publishing later — anyone
+   * who can no longer be invited is left out rather than failing the post.
+   */
+  async create(userId: string, dto: CreatePostDto, { lenientCollaborators = false }: { lenientCollaborators?: boolean } = {}) {
     if (dto.companyId !== undefined && dto.asCompany !== true) throw new BadRequestException('A company choice requires company publishing.');
     const document = this.documentFor(userId, dto);
     this.assertPostContent(dto.content, dto.mediaUrls, !!document);
@@ -307,6 +339,10 @@ export class PostsService {
       }
     }
 
+    // Collaborators checked before anything is saved too, so a refusal never
+    // leaves a post behind.
+    const invitees = (await this.collaborators?.check(userId, companyId, dto.collaborators, { lenient: lenientCollaborators })) ?? [];
+
     // Every @mention checked and given its own name before anything is saved.
     const content = await resolveMentions(this.prisma, dto.content);
     const hashtags = this.normalizeHashtags(dto.hashtags ?? []);
@@ -327,6 +363,7 @@ export class PostsService {
       mediaUrls: dto.mediaUrls ?? [],
       hashtags: mergedHashtags,
       commentPolicy: dto.commentPolicy ?? CommentPolicy.ANYONE,
+      ...this.ctaFor(dto),
     };
     // Validate the canonical record within the same transaction as publication.
     const created = dto.reference
@@ -362,6 +399,9 @@ export class PostsService {
     // post is safely written, so a refused post never leaves a membership
     // behind.
     if (dto.spaceId) await this.spaces.joinOnPost(userId, dto.spaceId);
+
+    // Invited once the post is there to be invited onto.
+    await this.collaborators?.inviteForNewPost(created, invitees);
 
     // Told only once the post is safely there, poll and all.
     void announceMentions(this.prisma, this.notifications, {
@@ -891,6 +931,19 @@ export class PostsService {
           OR: [
             ...(peopleIds.length ? [{ authorId: { in: peopleIds }, companyId: null }] : []),
             ...(companyIds.length ? [{ companyId: { in: companyIds } }] : []),
+            // And what they accepted to collaborate on, which their own
+            // pages show too.
+            {
+              collaborators: {
+                some: {
+                  status: PostCollaboratorStatus.ACCEPTED,
+                  OR: [
+                    ...(peopleIds.length ? [{ userId: { in: peopleIds } }] : []),
+                    ...(companyIds.length ? [{ companyId: { in: companyIds } }] : []),
+                  ],
+                },
+              },
+            },
           ],
         };
       }
@@ -962,6 +1015,8 @@ export class PostsService {
           createdAt: true,
         },
       },
+      // "with 2 others": who accepted, by id; made into cards by withCollaboratorCards.
+      collaborators: ACCEPTED_COLLABORATORS,
       _count: {
         select: {
           likes: true,
@@ -1059,10 +1114,19 @@ export class PostsService {
   ): Promise<Array<T & { likedByMe: boolean; bookmarkedByMe: boolean; canEdit: boolean; canComment: boolean; linkedRecord: AnnouncementCard; linkedRecordUnavailable: boolean }>> {
     // A live reshare may outlast its removed source. Retain the sharer's words,
     // but do not serialize the removed original into any ordinary read payload.
-    const visiblePosts = await this.withLinkedRecords(this.withCompanyLogos(posts).map((post) => {
+    const shown = this.withCompanyLogos(posts).map((post) => {
       const source = (post as T & { resharedFrom?: { removedAt?: Date | null } }).resharedFrom;
       return source?.removedAt ? { ...post, resharedFrom: null } : post;
-    }));
+    });
+    // Collaborators' names and pictures alongside the linked records, so they
+    // cost no extra round trip — and nothing at all when nobody collaborates.
+    type WithIds = { id: string; collaborators?: Array<{ userId: string | null; companyId: string | null }> };
+    const [linked, carded] = await Promise.all([
+      this.withLinkedRecords(shown),
+      withCollaboratorCards(this.prisma, shown as unknown as WithIds[]),
+    ]);
+    const cardsByPost = new Map(carded.map((post) => [post.id, post.collaborators]));
+    const visiblePosts = linked.map((post) => ({ ...post, collaborators: cardsByPost.get((post as { id: string }).id) ?? [] }));
 
     // Whether this viewer may comment, from the same rule the server enforces,
     // so the comment box never offers what the server would refuse.
@@ -1075,8 +1139,9 @@ export class PostsService {
     if (!currentUserId || posts.length === 0) {
       return visiblePosts.map((post) => ({
         ...post,
-        // Views are told only to whoever may manage the post.
+        // Views and button clicks are told only to whoever may manage the post.
         viewsCount: undefined,
+        ctaClicksCount: undefined,
         likedByMe: false,
         bookmarkedByMe: false,
         canEdit: false,
@@ -1127,12 +1192,25 @@ export class PostsService {
       return {
         ...post,
         viewsCount: canEdit ? (post as { viewsCount?: number }).viewsCount : undefined,
+        ctaClicksCount: canEdit ? (post as { ctaClicksCount?: number }).ctaClicksCount : undefined,
         likedByMe: likedPostIds.has(post.id),
         bookmarkedByMe: bookmarkedPostIds.has(post.id),
         canEdit,
         canComment: commentable.get(post.id) ?? true,
       };
     });
+  }
+
+  /**
+   * The post's call-to-action bar, checked. Not on a poll, whose choices are
+   * the thing to press, nor beside a linked job, service or project, which
+   * already has its own way in.
+   */
+  private ctaFor(dto: CreatePostDto) {
+    if (!dto.cta) return {};
+    if (dto.poll) throw new BadRequestException("A poll can't carry a button.");
+    if (dto.reference) throw new BadRequestException('This post already links to your listing, which has its own button.');
+    return ctaColumns(dto.cta);
   }
 
   /** Company attribution survives a seat change; permission to act does not. */

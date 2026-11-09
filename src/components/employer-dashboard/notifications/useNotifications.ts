@@ -27,6 +27,8 @@ function mapType(t: string): NotificationType {
     case "outreach":
       return "message";
     case "mention":
+    // Someone asked you (or your company page) onto their post: a mention, of a kind.
+    case "collaboration":
       return "mention";
     case "security":
       return "security";

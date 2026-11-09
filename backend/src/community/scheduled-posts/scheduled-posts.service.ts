@@ -218,6 +218,9 @@ export class ScheduledPostsService {
       const result = await this.posts.create(
         item.authorId,
         item.companyId ? { ...payload, asCompany: true, companyId: item.companyId } : payload,
+        // Someone who stopped taking invitations since it was scheduled is
+        // left out, not a reason for the post to fail.
+        { lenientCollaborators: true },
       );
       await this.prisma.scheduledPost.update({
         where: { id: item.id },

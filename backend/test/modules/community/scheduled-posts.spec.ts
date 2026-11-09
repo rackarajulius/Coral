@@ -183,7 +183,12 @@ describe('Publishing what is due', () => {
     const { service, prisma, posts } = harness();
     prisma.scheduledPost.findMany.mockResolvedValue([due]);
     await service.publishDue();
-    expect(posts.create).toHaveBeenCalledWith(ADMIN, expect.objectContaining({ content: 'Launch day', asCompany: true, companyId: COMPANY }));
+    expect(posts.create).toHaveBeenCalledWith(
+      ADMIN,
+      expect.objectContaining({ content: 'Launch day', asCompany: true, companyId: COMPANY }),
+      // Anyone who stopped taking collaboration invites since is left out, not a failure.
+      { lenientCollaborators: true },
+    );
     expect(prisma.scheduledPost.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: ScheduledPostStatus.PUBLISHED, postId: 'post-1' }),
     }));
@@ -195,7 +200,7 @@ describe('Publishing what is due', () => {
       { id: 'sched-2', companyId: null, authorId: OUTSIDER, payload: { content: 'Mine', asCompany: true, companyId: COMPANY } },
     ]);
     await service.publishDue();
-    expect(posts.create).toHaveBeenCalledWith(OUTSIDER, { content: 'Mine' });
+    expect(posts.create).toHaveBeenCalledWith(OUTSIDER, { content: 'Mine' }, { lenientCollaborators: true });
   });
 
   it("tells the author when a personal one could not go out, and where to find it", async () => {

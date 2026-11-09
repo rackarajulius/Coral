@@ -87,6 +87,11 @@ model User {
   role          UserRole  @default(JOB_SEEKER)
   status        UserStatus @default(PENDING_ONBOARDING)
 
+  /// Whether people may invite you to collaborate on their community posts
+  /// (LinkedIn's "Allow collaborations"). Off, nobody can; invitations already
+  /// sent can still be accepted or declined.
+  allowCollaborations Boolean @default(true) @map("allow_collaborations")
+
   // Subscription tier — gates premium features (e.g. web-wide resume matcher).
   subscriptionTier String @default("free") @map("subscription_tier") // free | premium
 
@@ -119,7 +124,9 @@ model User {
   postBookmarks      PostBookmark[]
   scheduledPosts     ScheduledPost[]
   communityVideos    CommunityVideo[]
+  postCollaborations PostCollaborator[] @relation("PostCollaborations")
   postViews          PostView[]
+  postCtaClicks      PostCtaClick[]
   interviewPrepSessions InterviewPrepSession[]
   interviewPrepFeedback InterviewPrepFeedback[]
   paymentTransactions PaymentTransaction[]
@@ -1101,6 +1108,7 @@ model Company {
   candidateReactions CandidateReaction[]
   posts          Post[]
   scheduledPosts ScheduledPost[]
+  postCollaborations PostCollaborator[]
   tides          Tide[]
   offers         Offer[]
   emailTemplates EmailTemplate[]
@@ -1943,6 +1951,79 @@ model ScheduledPost {
 /// Only counts leave this table — never who. Signed-in readers only, and
 /// never the author or, for a company post, the company's own team. Rows
 /// older than the stats window are pruned; Post.viewsCount keeps the total.
+enum PostCollaboratorStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  LEFT
+}
+
+/// Someone invited onto a post as a collaborator, as on LinkedIn: a person, or
+/// a company page through the people who run it.
+///
+/// Accepted, the post is theirs too: it shows them on its byline and appears
+/// on their profile or page and to their followers. Only the post's author
+/// (for a company post, its page admins) invites or removes collaborators.
+/// A declined or left row is kept, so the same post cannot ask again.
+model PostCollaborator {
+  id            String                 @id @default(uuid())
+  postId        String                 @map("post_id")
+  /// Exactly one of these two: the person, or the company (the Company row,
+  /// as Post.companyId), checked by the table.
+  userId        String?                @map("user_id")
+  companyId     String?                @map("company_id")
+  status        PostCollaboratorStatus @default(PENDING)
+  /// Who answered: the person, or the page admin who did for the company.
+  respondedById String?                @map("responded_by_id")
+  respondedAt   DateTime?              @map("responded_at")
+  createdAt     DateTime               @default(now()) @map("created_at")
+  updatedAt     DateTime               @updatedAt @map("updated_at")
+
+  post    Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user    User?    @relation("PostCollaborations", fields: [userId], references: [id], onDelete: Cascade)
+  company Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@unique([postId, companyId])
+  /// A profile and a company page ask for the posts they collaborated on.
+  @@index([userId, status])
+  @@index([companyId, status])
+  @@map("post_collaborators")
+}
+
+/// The buttons a call-to-action bar can carry. A fixed list, as on LinkedIn.
+enum PostCtaLabel {
+  LEARN_MORE
+  APPLY
+  BOOK_NOW
+  BUY_NOW
+  SHOP_NOW
+  SIGN_UP
+  REGISTER
+  DOWNLOAD
+  CONTACT_US
+  GET_QUOTE
+  REQUEST_DEMO
+  SUBSCRIBE
+  JOIN
+  ATTEND
+}
+
+/// Someone pressing a post's call-to-action button, once per person per day,
+/// as PostView counts views; pruned with them.
+model PostCtaClick {
+  postId    String   @map("post_id")
+  clickerId String   @map("clicker_id")
+  day       DateTime @db.Date
+
+  post    Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  clicker User @relation(fields: [clickerId], references: [id], onDelete: Cascade)
+
+  @@id([postId, clickerId, day])
+  @@index([day])
+  @@map("post_cta_clicks")
+}
+
 model PostView {
   postId   String   @map("post_id")
   viewerId String   @map("viewer_id")
@@ -2010,6 +2091,16 @@ model Post {
   /// company post, the company page's) followers, or nobody. Existing
   /// comments stay visible whichever is chosen; this governs new ones.
   commentPolicy  CommentPolicy @default(ANYONE) @map("comment_policy")
+  /// A call-to-action bar under the post, as on LinkedIn's sponsored posts:
+  /// a headline, a link, and a button from a fixed list. All three or none.
+  /// The site it shows is read from the link, never typed, so a bar cannot
+  /// claim to go somewhere it does not.
+  ctaLabel       PostCtaLabel? @map("cta_label")
+  ctaUrl         String?       @map("cta_url") @db.VarChar(2000)
+  ctaHeadline    String?       @map("cta_headline") @db.VarChar(200)
+  /// Button clicks by someone other than the author (or the company's team),
+  /// once per person per day — see PostCtaClick. Shown only to its managers.
+  ctaClicksCount Int           @default(0) @map("cta_clicks_count")
   likesCount     Int        @default(0) @map("likes_count")
   /// Times someone other than the author (or, for a company post, its team)
   /// had it on screen, counted once per person per day — see PostView. Shown
@@ -2040,6 +2131,8 @@ model Post {
   bookmarks  PostBookmark[]
   views      PostView[]
   scheduledFrom ScheduledPost?
+  collaborators PostCollaborator[]
+  ctaClicks     PostCtaClick[]
 
   @@index([authorId, createdAt])
   @@index([createdAt])

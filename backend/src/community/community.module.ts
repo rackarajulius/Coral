@@ -18,6 +18,8 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { ModerationController } from './moderation.controller';
 import { PostsController } from './posts/posts.controller';
 import { PostsService } from './posts/posts.service';
+import { PostCollaboratorsController } from './collaborators/post-collaborators.controller';
+import { PostCollaboratorsService } from './collaborators/post-collaborators.service';
 import { TidesController } from './tides/tides.controller';
 import { TidesService } from './tides/tides.service';
 import { MarketplaceModule } from '../marketplace/marketplace.module';
@@ -34,8 +36,8 @@ import { MuxClient } from './videos/mux.client';
 
 @Module({
   imports: [StorageModule, NotificationsModule, MarketplaceModule],
-  controllers: [PostsController, CommentsController, FeedController, SpacesController, ModerationController, PollsController, TidesController, PeopleController, MentionsController, ScheduledPostsController, PostStatsController, CommunityVideosController],
-  providers: [PostsService, CommentsService, FeedService, SpacesService, SpaceSuggestionsService, CommunityIdentityService, ModerationService, CommunityMediaService, PollsService, GifsService, LinkPreviewService, TidesService, PeopleFollowService, ScheduledPostsService, PostStatsService, CommunityVideosService, MuxClient],
+  controllers: [PostsController, CommentsController, FeedController, SpacesController, ModerationController, PollsController, TidesController, PeopleController, MentionsController, ScheduledPostsController, PostStatsController, CommunityVideosController, PostCollaboratorsController],
+  providers: [PostsService, CommentsService, FeedService, SpacesService, SpaceSuggestionsService, CommunityIdentityService, ModerationService, CommunityMediaService, PollsService, GifsService, LinkPreviewService, TidesService, PeopleFollowService, ScheduledPostsService, PostStatsService, CommunityVideosService, MuxClient, PostCollaboratorsService],
   exports: [PostsService, CommentsService, FeedService],
 })
 export class CommunityModule {}

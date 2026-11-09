@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUpRight, BarChart3, Bookmark, Building2, EyeOff, FileText, Flag, Link2, Loader2,MessageCircle,MoreHorizontal,Pencil, Play, Repeat2,
-  Share2, ThumbsUp, Trash2, UserRoundCheck, UserRoundPlus,
+  Share2, ThumbsUp, Trash2, UserMinus, UserRoundCheck, UserRoundPlus, Users,
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -29,12 +29,15 @@ import { MentionField } from "./MentionField";
 import { DocumentViewer } from "./DocumentViewer";
 import { PostStatsDialog } from "./PostStatsDialog";
 import { usePostView } from "./usePostView";
+import { CollaborationBanner, CollaboratorsLine, ManageCollaboratorsDialog, useLeaveCollaboration } from "./Collaborators";
 import { plainText, toDisplay, toStored, type Mention } from "@/lib/mentions";
 import { CommentThread } from "./CommentThread";
 import { IdentityLine } from "./IdentityLine";
 import { ImageLightbox } from "./ImageLightbox";
 import { PostSkeleton } from "./skeletons";
 import { PostMedia } from "./PostMedia";
+import { PostCtaBar } from "./PostCtaBar";
+import { ctaSite } from "./ctaLink";
 import { CompanyHoverCard, PersonHoverCard, SpaceHoverCard } from "./ProfileHoverCard";
 import { usePersonFollow } from "./usePersonFollow";
 import { removePostFromFeeds, restoreFeeds } from "./feedCache";
@@ -51,6 +54,7 @@ import {
   likePost,
   streamPosterUrl,
   postUrl,
+  recordCtaClick,
   resharePost,
   timeAgo,
   unbookmarkPost,
@@ -106,6 +110,8 @@ export function FeedPost({
     onHashtag ?? ((tag: string) => navigate(`/community/search?q=${encodeURIComponent(`#${tag}`)}`));
   const [reporting, setReporting] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [managingCollaborators, setManagingCollaborators] = useState(false);
+  const leaveCollaboration = useLeaveCollaboration(post.id);
   const [resharing, setResharing] = useState(false);
   // The post's pictures, in order, for the full-size viewer. Videos have their
   // own controls and are left out.
@@ -369,6 +375,13 @@ export function FeedPost({
                 {" · "}
               </>
             )}
+            {/* Who it's written with, as on LinkedIn: those who accepted. */}
+            {(post.collaborators?.length ?? 0) > 0 && (
+              <>
+                <CollaboratorsLine post={post} />
+                {" · "}
+              </>
+            )}
             {/* The timestamp is the post's own address, as it is everywhere
                 else people have learned to look for one. */}
             <Link
@@ -445,11 +458,30 @@ export function FeedPost({
                     </DropdownMenuRadioGroup>
                   </DropdownMenuSubContent>
                 </DropdownMenuSub>
+                {/* Not a tide's: its announcement is the tide's, not a post to share. */}
+                {!post.tideId && (
+                  <DropdownMenuItem className="gap-2" onSelect={() => setManagingCollaborators(true)}>
+                    <Users className="h-4 w-4" /> Edit collaborators
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem
                   className="gap-2 text-destructive"
                   onSelect={() => setConfirmingDelete(true)}
                 >
                   <Trash2 className="h-4 w-4" /> Delete
+                </DropdownMenuItem>
+              </>
+            )}
+            {/* Someone on it as themselves can take themselves off, any time. */}
+            {user && post.collaborators?.some((c) => c.kind === "person" && c.id === user.id) && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="gap-2"
+                  disabled={leaveCollaboration.isPending}
+                  onSelect={() => leaveCollaboration.mutate()}
+                >
+                  <UserMinus className="h-4 w-4" /> Remove myself from this post
                 </DropdownMenuItem>
               </>
             )}
@@ -469,6 +501,9 @@ export function FeedPost({
           </DropdownMenuContent>
         </DropdownMenu>
       </header>
+
+      {/* On the post's own page: an invitation to answer, or a collaboration to leave. */}
+      <CollaborationBanner post={post} />
 
       {editing ? (
         <div className="mt-3">
@@ -523,7 +558,9 @@ export function FeedPost({
 
       {/* Shown only when there is no media of the author's own — a card about
           someone else's page should not outrank the picture they chose. */}
-      {post.linkPreview && !post.linkedRecord && !post.linkedRecordUnavailable && post.mediaUrls.length === 0 && !post.documentUrl && (
+      {post.linkPreview && !post.linkedRecord && !post.linkedRecordUnavailable && post.mediaUrls.length === 0 && !post.documentUrl
+        // The bar already goes there; one card for the same site is enough.
+        && !(post.ctaUrl && ctaSite(post.ctaUrl) === ctaSite(post.linkPreview.url)) && (
         <a
           href={post.linkPreview.url}
           target="_blank"
@@ -567,6 +604,17 @@ export function FeedPost({
 
       {post.mediaUrls.length > 0 && (
         <PostMedia urls={post.mediaUrls} onOpenPicture={setLightboxIndex} />
+      )}
+
+      {/* The author's button, under whatever the post shows, as on LinkedIn. */}
+      {post.ctaLabel && post.ctaUrl && post.ctaHeadline && (
+        <PostCtaBar
+          label={post.ctaLabel}
+          url={post.ctaUrl}
+          headline={post.ctaHeadline}
+          // Counted for the post's stats: signed-in readers, never its own people.
+          onPress={user && !canManage ? () => void recordCtaClick(post.id).catch(() => undefined) : undefined}
+        />
       )}
 
       <ImageLightbox
@@ -684,6 +732,10 @@ export function FeedPost({
         onClose={() => setReporting(false)}
         target={{ kind: "post", id: post.id }}
       />
+
+      {managingCollaborators && (
+        <ManageCollaboratorsDialog postId={post.id} open onOpenChange={setManagingCollaborators} />
+      )}
 
       <ReshareDialog
         open={resharing}

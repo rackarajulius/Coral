@@ -8,6 +8,7 @@ import {
   CalendarClock,
   CheckCheck,
   CreditCard,
+  Handshake,
   Loader2,
   MessageCircle,
   Sparkles,
@@ -33,6 +34,7 @@ const TYPE_META: Record<string, { icon: React.ElementType; tint: string; label: 
   follow: { icon: UserPlus, tint: "bg-coral/10 text-coral", label: "New follower" },
   billing: { icon: CreditCard, tint: "bg-muted text-muted-foreground", label: "Billing" },
   mention: { icon: AtSign, tint: "bg-blue-500/10 text-blue-600 dark:text-blue-400", label: "Mention" },
+  collaboration: { icon: Handshake, tint: "bg-coral/10 text-coral", label: "Collaboration" },
 };
 const FALLBACK = { icon: Bell, tint: "bg-muted text-muted-foreground", label: "Update" };
 

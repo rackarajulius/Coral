@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AlertTriangle, BarChart3, Building2, CalendarPlus, Check, ChevronDown, ChevronRight, Clock, FileText, Globe, ImagePlus, Loader2, MessageCircle,
-  Search, Video, Volume2, VolumeX, X,
+  AlertTriangle, BarChart3, Building2, CalendarPlus, Check, ChevronDown, ChevronRight, Clock, FileText, Globe, ImagePlus, Loader2, MessageCircle, MousePointerClick,
+  Search, Users, Video, Volume2, VolumeX, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
@@ -18,6 +18,9 @@ import { useVideoUploads, type VideoUpload } from "./videoUploads";
 import { inTurn, usePhotoPosts } from "./photoPosts";
 import { acceptFor, sortPicked } from "./mediaPick";
 import { EmojiButton } from "./EmojiButton";
+import { CollaboratorPicker, type PickedCollaborator } from "./CollaboratorPicker";
+import { PostCtaBar } from "./PostCtaBar";
+import { normaliseCtaUrl } from "./ctaLink";
 import { addPostToFeeds } from "./feedCache";
 import { announceNewPost } from "./feedLive";
 import { cn } from "@/lib/utils";
@@ -32,9 +35,9 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
 import {
-  COMMENT_POLICY_LABELS, createPost, getAnnouncementOptions, getCompanyVoice, getGifStatus,
+  COMMENT_POLICY_LABELS, CTA_LABELS, createPost, getAnnouncementOptions, getCompanyVoice, getGifStatus,
   getVideoUploadSettings, listSpaces, schedulePost, uploadPostDocument, uploadPostMedia,
-  type CommentPolicy, type CommunityPost, type MediaKind, type PostPurpose, type Space, type UploadedDocument,
+  type CommentPolicy, type CommunityPost, type MediaKind, type PostCtaLabel, type PostPurpose, type Space, type UploadedDocument,
 } from "@/lib/api/community";
 import { GifPicker } from "./GifPicker";
 import { MentionField } from "./MentionField";
@@ -315,6 +318,12 @@ function ComposerDialog({
   const [purpose, setPurpose] = useState<PostPurpose>(startPurpose ?? "general");
   // Who may comment. Changeable later from the post's menu, as on LinkedIn.
   const [commentPolicy, setCommentPolicy] = useState<CommentPolicy>("ANYONE");
+  // People and pages to ask onto the post, as on LinkedIn. Asked when it's posted.
+  const [collaborators, setCollaborators] = useState<PickedCollaborator[]>([]);
+  // A call-to-action bar under the post, as on LinkedIn's sponsored posts.
+  const [cta, setCta] = useState<{ label: PostCtaLabel; url: string; headline: string } | null>(null);
+  const ctaUrl = cta ? normaliseCtaUrl(cta.url) : null;
+  const [pickingCollaborators, setPickingCollaborators] = useState(false);
   const [selectedReference, setSelectedReference] = useState("");
   const [tide, setTide] = useState<TideDraft | null>(null);
   const [selectedCompanyId, setSelectedCompanyId] = useState("");
@@ -444,6 +453,8 @@ function ComposerDialog({
     ...(attachedDoc ? { document: { url: attachedDoc.url, title: docTitle.trim() } } : {}),
     ...(publishingAsCompany ? { asCompany: true, ...(publishingCompanyId ? { companyId: publishingCompanyId } : {}) } : {}),
     ...(commentPolicy !== "ANYONE" ? { commentPolicy } : {}),
+    ...(collaborators.length && !tide ? { collaborators: collaborators.map((c) => ({ kind: c.kind, id: c.id })) } : {}),
+    ...(cta && ctaUrl && !tide ? { cta: { label: cta.label, url: ctaUrl, headline: cta.headline.trim() } } : {}),
   });
 
   /**
@@ -726,8 +737,11 @@ function ComposerDialog({
   // when they're up); one that failed has to be removed first.
   const videoUsable = !longVideo || longVideo.phase !== "failed";
   const mediaFailed = media.some((m) => m.status === "failed");
+  // A button needs somewhere public to go and a headline to say why. Not on a
+  // poll, or beside a linked listing, which has its own way in.
+  const ctaReady = !cta || (!!ctaUrl && !!cta.headline.trim() && !poll && !reference);
   const canPost = (!!content.trim() || media.length > 0 || !!attachedDoc || !!longVideo)
-    && docReady && pollReady && referenceReady && videoUsable && !mediaFailed && !docUploading && !post.isPending;
+    && docReady && pollReady && referenceReady && ctaReady && videoUsable && !mediaFailed && !docUploading && !post.isPending;
   const dirty = !!content.trim() || media.length > 0 || !!poll || !!attachedDoc || !!longVideo;
 
   return (
@@ -780,7 +794,7 @@ function ComposerDialog({
             </div>
 
             <div className="min-w-0 flex-1 pb-2">
-              <div className="flex items-center gap-1 text-sm">
+              <div className="flex flex-wrap items-center gap-1 text-sm">
                 {voices.length > 0 ? (
                   <PostAsMenu
                     person={{ name, avatarUrl: user?.avatarUrl ?? null }}
@@ -828,6 +842,22 @@ function ComposerDialog({
                       ))}
                     </select>
                   </label>
+                )}
+                {/* After who sees it and who may answer, as on LinkedIn. */}
+                {!tide && (
+                  <button
+                    type="button"
+                    onClick={() => setPickingCollaborators(true)}
+                    className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs font-medium hover:bg-muted"
+                    title="Ask people or company pages to collaborate. Each is asked, and shows on the post once they accept."
+                  >
+                    <Users className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
+                    {collaborators.length === 0
+                      ? "Add collaborators"
+                      : collaborators.length === 1
+                        ? `With ${collaborators[0].name}`
+                        : `With ${collaborators.length} collaborators`}
+                  </button>
                 )}
               </div>
 
@@ -1018,6 +1048,15 @@ function ComposerDialog({
                 </div>
               )}
 
+              {cta && (
+                <CtaFields
+                  value={cta}
+                  onChange={setCta}
+                  onRemove={() => setCta(null)}
+                  normalisedUrl={ctaUrl}
+                />
+              )}
+
               {/*
                 One "Media" button for photos, video and PDFs, as on X.
 
@@ -1064,10 +1103,18 @@ function ComposerDialog({
                   icon={BarChart3}
                   label="Poll"
                   busy={false}
-                  disabled={media.length > 0 || !!tide || !!attachedDoc || !!longVideo}
+                  disabled={media.length > 0 || !!tide || !!attachedDoc || !!longVideo || !!cta}
                   onClick={() => setPoll(poll ? null : ["", ""])}
                 />
                 <EmojiButton onOpen={rememberCaret} onPick={insertEmoji} onClose={returnToText} />
+                {/* A call-to-action bar, as on LinkedIn's sponsored posts. */}
+                <MediaButton
+                  icon={MousePointerClick}
+                  label="Button"
+                  busy={false}
+                  disabled={!!poll || !!tide || !!reference}
+                  onClick={() => setCta(cta ? null : { label: "LEARN_MORE", url: "", headline: "" })}
+                />
                 {/* A tide replaces the body rather than adding to it: the card
                     already carries the title, time and place, so media and a
                     poll would be a second thing competing with it. */}
@@ -1103,6 +1150,12 @@ function ComposerDialog({
           <span className="text-xs text-muted-foreground">
             {longVideo?.phase === "failed"
               ? "Remove the video to post without it"
+              : cta && !ctaReady
+                ? reference
+                  ? "A post linking your listing already has its button"
+                  : !ctaUrl
+                    ? "The button needs a public link, like example.com"
+                    : "The button needs a headline"
               : mediaFailed
                 ? "Remove the one that didn't upload to post"
               : tide && !tideReady(tide)
@@ -1186,6 +1239,16 @@ function ComposerDialog({
           </div>
         </footer>
       </DialogContent>
+
+      <CollaboratorPicker
+        open={pickingCollaborators}
+        onOpenChange={setPickingCollaborators}
+        initial={collaborators}
+        onSave={(picked) => {
+          setCollaborators(picked);
+          setPickingCollaborators(false);
+        }}
+      />
 
       <GifPicker
         open={gifOpen}
@@ -1276,6 +1339,79 @@ function VideoDraftTile({ draft, onRemove }: { draft: VideoUpload; onRemove: () 
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The call-to-action bar's three fields — the button, where it goes, and the
+ * headline — above the bar as it will look. The site under the headline comes
+ * from the link, so it can only ever say where the button really goes.
+ */
+function CtaFields({
+  value,
+  onChange,
+  onRemove,
+  normalisedUrl,
+}: {
+  value: { label: PostCtaLabel; url: string; headline: string };
+  onChange: (next: { label: PostCtaLabel; url: string; headline: string }) => void;
+  onRemove: () => void;
+  normalisedUrl: string | null;
+}) {
+  const linkProblem = value.url.trim() && !normalisedUrl;
+  return (
+    <div className="mt-3 rounded-xl border border-border p-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium text-muted-foreground">Button — a link at the bottom of your post</p>
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label="Remove the button"
+          className="rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <X className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </div>
+      <div className="mt-2 grid gap-2 sm:grid-cols-[9.5rem_1fr]">
+        <select
+          aria-label="Button"
+          value={value.label}
+          onChange={(e) => onChange({ ...value, label: e.target.value as PostCtaLabel })}
+          className="rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-foreground/30"
+        >
+          {(Object.keys(CTA_LABELS) as PostCtaLabel[]).map((label) => (
+            <option key={label} value={label}>{CTA_LABELS[label]}</option>
+          ))}
+        </select>
+        <input
+          value={value.url}
+          onChange={(e) => onChange({ ...value, url: e.target.value })}
+          placeholder="Link, e.g. yoursite.com/book"
+          aria-label="Where the button goes"
+          aria-invalid={!!linkProblem}
+          inputMode="url"
+          maxLength={2000}
+          className={cn(
+            "min-w-0 rounded-lg border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-foreground/30",
+            linkProblem ? "border-destructive" : "border-border",
+          )}
+        />
+      </div>
+      <input
+        value={value.headline}
+        onChange={(e) => onChange({ ...value, headline: e.target.value })}
+        placeholder="Headline, e.g. Book a free 20-minute call"
+        aria-label="Headline"
+        maxLength={200}
+        className="mt-2 w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-foreground/30"
+      />
+      <p className={cn("mt-1 text-[11px]", linkProblem ? "text-destructive" : "text-muted-foreground")}>
+        {linkProblem
+          ? "That link can't be used. Use a public web address, like example.com/page."
+          : `${value.headline.length}/200 · about 70 characters show before it's cut`}
+      </p>
+      <PostCtaBar label={value.label} url={normalisedUrl ?? ""} headline={value.headline.trim()} preview />
     </div>
   );
 }

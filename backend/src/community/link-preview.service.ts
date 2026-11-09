@@ -10,6 +10,38 @@ const FETCH_TIMEOUT_MS = 4000;
 const MAX_HTML_BYTES = 512 * 1024;
 const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 
+/** localhost, *.internal, or an address on a private or reserved network. */
+export function isPrivateHost(host: string): boolean {
+  const lower = host.toLowerCase().replace(/^\[|\]$/g, '');
+  if (lower === 'localhost' || lower.endsWith('.localhost') || lower.endsWith('.internal')) {
+    return true;
+  }
+  return isIP(lower) !== 0 && isPrivateAddress(lower);
+}
+
+/** Loopback, link-local, and every RFC 1918 range, v4 and v6. */
+export function isPrivateAddress(address: string): boolean {
+  if (address.includes(':')) {
+    const v6 = address.toLowerCase();
+    return (
+      v6 === '::1' ||
+      v6.startsWith('fc') || v6.startsWith('fd') || // unique local
+      v6.startsWith('fe80') ||                       // link-local
+      v6.startsWith('::ffff:127.') || v6 === '::'
+    );
+  }
+  const parts = address.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) return true;
+  const [a, b] = parts;
+  return (
+    a === 0 || a === 10 || a === 127 ||
+    (a === 169 && b === 254) ||           // link-local, includes cloud metadata
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    a >= 224                              // multicast and reserved
+  );
+}
+
 export interface LinkPreview {
   url: string;
   title: string | null;
@@ -107,34 +139,11 @@ export class LinkPreviewService {
   }
 
   private isPrivateHost(host: string): boolean {
-    const lower = host.toLowerCase();
-    if (lower === 'localhost' || lower.endsWith('.localhost') || lower.endsWith('.internal')) {
-      return true;
-    }
-    return isIP(lower) !== 0 && this.isPrivateAddress(lower);
+    return isPrivateHost(host);
   }
 
-  /** Loopback, link-local, and every RFC 1918 range, v4 and v6. */
   private isPrivateAddress(address: string): boolean {
-    if (address.includes(':')) {
-      const v6 = address.toLowerCase();
-      return (
-        v6 === '::1' ||
-        v6.startsWith('fc') || v6.startsWith('fd') || // unique local
-        v6.startsWith('fe80') ||                       // link-local
-        v6.startsWith('::ffff:127.') || v6 === '::'
-      );
-    }
-    const parts = address.split('.').map(Number);
-    if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) return true;
-    const [a, b] = parts;
-    return (
-      a === 0 || a === 10 || a === 127 ||
-      (a === 169 && b === 254) ||           // link-local, includes cloud metadata
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      a >= 224                              // multicast and reserved
-    );
+    return isPrivateAddress(address);
   }
 
   /* -------------------------------- fetching -------------------------------- */

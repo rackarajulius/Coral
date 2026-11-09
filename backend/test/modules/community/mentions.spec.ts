@@ -193,8 +193,9 @@ describe('The "@" menu', () => {
       { id: { not: WRITER } },
       expect.objectContaining({ status: expect.anything(), OR: expect.any(Array) }),
     ]));
-    // One clause per word typed.
-    expect(where.AND.filter((c: { OR?: unknown[] }) => c.OR?.length === 3)).toHaveLength(2);
+    // One name clause per word typed.
+    const nameClauses = where.AND.filter((c: { OR?: Array<Record<string, unknown>> }) => c.OR?.some((o) => 'firstName' in o));
+    expect(nameClauses).toHaveLength(2);
   });
 
   it('finds only public pages by name, unless the writer follows or works for one', async () => {

@@ -267,7 +267,65 @@ export interface CommunityPost {
    * enforces. Signed out, only "anyone" posts say yes — sign-in comes first.
    */
   canComment?: boolean;
+  /** People and company pages who accepted to collaborate on it: "with 2 others". */
+  collaborators?: CollaboratorCard[];
+  /** On the post's own page only: the viewer's invitation to answer, or collaboration to leave. */
+  viewerCollaboration?: ViewerCollaboration[];
+  /**
+   * A call-to-action bar under the post, as on LinkedIn's sponsored posts:
+   * all three or none. The site it shows is read from the link.
+   */
+  ctaLabel?: PostCtaLabel | null;
+  ctaUrl?: string | null;
+  ctaHeadline?: string | null;
+  /** Presses of the button; sent only to whoever may manage the post. */
+  ctaClicksCount?: number;
 }
+
+/** The buttons a call-to-action bar can carry. A fixed list, as on LinkedIn. */
+export type PostCtaLabel =
+  | "LEARN_MORE" | "APPLY" | "BOOK_NOW" | "BUY_NOW" | "SHOP_NOW" | "SIGN_UP" | "REGISTER"
+  | "DOWNLOAD" | "CONTACT_US" | "GET_QUOTE" | "REQUEST_DEMO" | "SUBSCRIBE" | "JOIN" | "ATTEND";
+
+export const CTA_LABELS: Record<PostCtaLabel, string> = {
+  LEARN_MORE: "Learn more",
+  APPLY: "Apply",
+  BOOK_NOW: "Book now",
+  BUY_NOW: "Buy now",
+  SHOP_NOW: "Shop now",
+  SIGN_UP: "Sign up",
+  REGISTER: "Register",
+  DOWNLOAD: "Download",
+  CONTACT_US: "Contact us",
+  GET_QUOTE: "Get quote",
+  REQUEST_DEMO: "Request demo",
+  SUBSCRIBE: "Subscribe",
+  JOIN: "Join",
+  ATTEND: "Attend",
+};
+
+/** Someone pressed a post's button. Counted once per person per day; never the author's own. */
+export const recordCtaClick = (postId: string) =>
+  req<{ data: { counted: boolean } }>(`/posts/${postId}/cta-click`, { method: "POST" }).then((r) => r.data);
+
+/** A collaborator as a post shows them. A company is its Company id, with its page (if public) to link to. */
+export type CollaboratorCard =
+  | { kind: "person"; id: string; name: string; avatarUrl: string | null }
+  | { kind: "company"; id: string; name: string; pageId: string | null; logoUrl: string | null };
+
+/** What the viewer has to do with a post: as themselves, or for a company page they run. */
+export type ViewerCollaboration =
+  | { as: "person"; status: "PENDING" | "ACCEPTED" }
+  | { as: "company"; companyId: string; name: string; status: "PENDING" | "ACCEPTED" };
+
+/** Who is asked: a person by user id, a company by its page's id (as the @ menu names it). */
+export interface CollaboratorRef {
+  kind: "person" | "company";
+  id: string;
+}
+
+/** Most collaborators one post may have, as on LinkedIn. */
+export const MAX_COLLABORATORS = 5;
 
 /** Who may comment on a post — LinkedIn's three settings. */
 export type CommentPolicy = "ANYONE" | "FOLLOWERS" | "OFF";
@@ -441,6 +499,10 @@ export const createPost = (input: {
   companyId?: string;
   /** Who may comment. Omitted means anyone. */
   commentPolicy?: CommentPolicy;
+  /** People and pages invited to collaborate. Each is asked; they show once they accept. */
+  collaborators?: CollaboratorRef[];
+  /** A call-to-action bar: a headline, a link, and a button from `CTA_LABELS`. */
+  cta?: { label: PostCtaLabel; url: string; headline: string };
 }, expectedSupabaseId?: string) => req<{ data: CommunityPost }>("/posts", { method: "POST", body: JSON.stringify(input) }, expectedSupabaseId);
 
 /** Changes who may comment on a post. A setting, not an edit — no "Edited" label. */
@@ -537,6 +599,42 @@ export interface MentionSuggestions {
 export const suggestMentions = (q: string, signal?: AbortSignal) =>
   req<{ data: MentionSuggestions }>(`/mentions?q=${encodeURIComponent(q)}`, { signal }).then((r) => r.data);
 
+/* ------------------------------ collaborators ----------------------------- */
+
+/** Who "Add collaborators" offers: people you follow or who follow you, and company pages. */
+export const suggestCollaborators = (q: string, signal?: AbortSignal) =>
+  req<{ data: MentionSuggestions }>(`/collaborators/suggest?q=${encodeURIComponent(q)}`, { signal }).then((r) => r.data);
+
+/** A post's collaborators and outstanding invitations — for whoever manages the post. */
+export type ManagedCollaborator = CollaboratorCard & { status: "PENDING" | "ACCEPTED" };
+
+export const getPostCollaborators = (postId: string) =>
+  req<{ data: ManagedCollaborator[] }>(`/posts/${postId}/collaborators`).then((r) => r.data);
+
+/** Everyone who should be on the post now: newcomers are invited, anyone left out is taken off. */
+export const setPostCollaborators = (postId: string, collaborators: CollaboratorRef[]) =>
+  req<{ data: ManagedCollaborator[] }>(`/posts/${postId}/collaborators`, {
+    method: "PUT",
+    body: JSON.stringify({ collaborators }),
+  }).then((r) => r.data);
+
+/** Accept or decline an invitation, or leave a post — as yourself, or for a company page you run. */
+export const answerCollaboration = (postId: string, action: "accept" | "decline" | "leave", companyId?: string) =>
+  req<{ data: ViewerCollaboration[] }>(`/posts/${postId}/collaboration/${action}`, {
+    method: "POST",
+    body: JSON.stringify(companyId ? { companyId } : {}),
+  }).then((r) => r.data);
+
+/** Whether people may invite you to collaborate (LinkedIn's "Allow collaborations"). */
+export const getCollaborationSettings = () =>
+  req<{ data: { allowCollaborations: boolean } }>("/collaboration-settings").then((r) => r.data);
+
+export const setCollaborationSettings = (allowCollaborations: boolean) =>
+  req<{ data: { allowCollaborations: boolean } }>("/collaboration-settings", {
+    method: "PUT",
+    body: JSON.stringify({ allowCollaborations }),
+  }).then((r) => r.data);
+
 /* ----------------------------- scheduled posts ---------------------------- */
 
 export type ScheduledPostStatus = "SCHEDULED" | "PUBLISHING" | "PUBLISHED" | "FAILED";
@@ -608,6 +706,10 @@ export interface PostStats {
   reshares: number;
   /** Percent of views that led to a reaction, comment or reshare; null before any view. */
   engagementRate: number | null;
+  /** Presses of its call-to-action button, once per person per day; null when it has none. */
+  buttonClicks: number | null;
+  /** Percent of views that pressed the button; null without a button or before any view. */
+  clickRate: number | null;
   daily: DailyViews[];
   retentionDays: number;
 }

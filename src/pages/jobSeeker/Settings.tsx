@@ -53,6 +53,7 @@ import {
   setViewVisibility as setViewVisibilityApi,
   type ViewVisibility,
 } from '@/lib/api/jobSeekerProfile';
+import { getCollaborationSettings, setCollaborationSettings } from '@/lib/api/community';
 import { useAuth } from '@/contexts/AuthContext';
 
 // Canonical vocabularies — these MUST match the backend + the Job Preferences
@@ -191,6 +192,29 @@ const SettingsPage = () => {
       );
     } catch (err) {
       setViewVisibility(previous);
+      toast.error(err instanceof Error ? err.message : 'Could not save that');
+    }
+  };
+
+  /**
+   * Whether people may invite you to collaborate on their community posts.
+   * Saved on change, as profile views are, rather than with the page's Save.
+   */
+  const [allowCollaborations, setAllowCollaborations] = useState(true);
+  useEffect(() => {
+    getCollaborationSettings()
+      .then((s) => setAllowCollaborations(s.allowCollaborations))
+      .catch(() => {
+        /* leave the default showing */
+      });
+  }, []);
+  const changeAllowCollaborations = async (next: boolean) => {
+    setAllowCollaborations(next);
+    try {
+      await setCollaborationSettings(next);
+      toast.success(next ? 'People can invite you to collaborate again' : 'Nobody can invite you to collaborate now');
+    } catch (err) {
+      setAllowCollaborations(!next);
       toast.error(err instanceof Error ? err.message : 'Could not save that');
     }
   };
@@ -742,9 +766,27 @@ const SettingsPage = () => {
                         <p className="font-medium">Show Salary Expectations</p>
                         <p className="text-sm text-gray-500">Display your expected salary range publicly</p>
                       </div>
-                      <Switch 
+                      <Switch
                         checked={privacy.showSalaryExpectations}
                         onCheckedChange={(checked) => setPrivacy({...privacy, showSalaryExpectations: checked})}
+                      />
+                    </div>
+                    <Separator />
+                    {/* LinkedIn's "Allow collaborations". Saved when flipped,
+                        like profile views: it decides who can ask you next. */}
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-medium">Allow Collaboration Invites</p>
+                        <p className="text-sm text-gray-500">
+                          Let people you follow, or who follow you, invite you to collaborate on their
+                          community posts. You still accept or decline each one. Turn this off and nobody
+                          can invite you.
+                        </p>
+                      </div>
+                      <Switch
+                        checked={allowCollaborations}
+                        onCheckedChange={(checked) => void changeAllowCollaborations(checked)}
+                        aria-label="Allow collaboration invites"
                       />
                     </div>
                   </CardContent>

@@ -14,7 +14,9 @@ import {
 } from 'class-validator';
 import { MaxReadableLength } from '../../readable-length.validator';
 import { Type } from 'class-transformer';
-import { CommentPolicy } from '@prisma/client';
+import { CommentPolicy, PostCtaLabel } from '@prisma/client';
+import { CollaboratorRefDto } from '../../collaborators/collaborators.dto';
+import { MAX_COLLABORATORS } from '../../collaborators/collaborator-rules';
 
 export enum CommunityPostType {
   TEXT = 'TEXT',
@@ -71,6 +73,21 @@ export class PostDocumentDto {
   @IsNotEmpty()
   @MaxLength(150)
   title!: string;
+}
+
+/** A call-to-action bar under the post: a headline, a link, and a button from a fixed list. */
+export class PostCtaDto {
+  @IsEnum(PostCtaLabel)
+  label!: PostCtaLabel;
+
+  @IsString()
+  @MaxLength(2000)
+  url!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  headline!: string;
 }
 
 export class CreatePostDto {
@@ -147,4 +164,21 @@ export class CreatePostDto {
   @IsOptional()
   @IsEnum(CommentPolicy)
   commentPolicy?: CommentPolicy;
+
+  /**
+   * People and company pages invited to collaborate, as on LinkedIn: each is
+   * asked, and shows on the post once they accept. Up to five.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_COLLABORATORS)
+  @ValidateNested({ each: true })
+  @Type(() => CollaboratorRefDto)
+  collaborators?: CollaboratorRefDto[];
+
+  /** A call-to-action bar, as on LinkedIn's sponsored posts. Not on a poll, or a post linking a listing. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => PostCtaDto)
+  cta?: PostCtaDto;
 }

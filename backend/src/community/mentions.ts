@@ -81,17 +81,21 @@ function bracketSafe(name: string): string {
   return name.replace(/[[\]\n\r]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) || 'Someone';
 }
 
-function excerpt(text: string, max = 120): string {
+export function excerpt(text: string, max = 120): string {
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > max ? flat.slice(0, max - 1).trimEnd() + String.fromCharCode(8230) : flat;
 }
 
-/** People the community shows a page for: not closed or barred, and has posted or replied as themselves. */
-const HAS_COMMUNITY_PAGE: Prisma.UserWhereInput = {
+/**
+ * People the community shows a page for: not closed or barred, and has posted
+ * or replied as themselves, or collaborates on a post (which their page lists).
+ */
+export const HAS_COMMUNITY_PAGE: Prisma.UserWhereInput = {
   status: { notIn: HIDDEN_STATUSES },
   OR: [
     { posts: { some: { removedAt: null, companyId: null } } },
     { postComments: { some: { removedAt: null } } },
+    { postCollaborations: { some: { status: 'ACCEPTED', post: { removedAt: null } } } },
   ],
 };
 
@@ -258,7 +262,12 @@ export async function announceMentions(
   }
 }
 
-async function writerName(db: MentionReader, actorId: string, voiceCompanyId?: string | null): Promise<string> {
+/** Who a post is from, as a notification says it: the company it speaks for, or the person. */
+export async function writerName(
+  db: Pick<MentionReader, 'company' | 'user'>,
+  actorId: string,
+  voiceCompanyId?: string | null,
+): Promise<string> {
   if (voiceCompanyId) {
     const company = await db.company.findUnique({ where: { id: voiceCompanyId }, select: { name: true } });
     if (company?.name?.trim()) return company.name.trim();

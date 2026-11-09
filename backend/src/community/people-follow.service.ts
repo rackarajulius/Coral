@@ -76,8 +76,17 @@ export class PeopleFollowService {
     if (!person || HIDDEN_STATUSES.includes(person.status)) throw new NotFoundException('Person not found');
 
     const [postCount, replyCount] = await Promise.all([
-      // Their own voice only, the same as the list of posts on the page.
-      this.prisma.post.count({ where: { authorId: personId, removedAt: null, companyId: null } }),
+      // The same posts as the list on the page: their own voice, and posts
+      // they accepted to collaborate on.
+      this.prisma.post.count({
+        where: {
+          removedAt: null,
+          OR: [
+            { authorId: personId, companyId: null },
+            { collaborators: { some: { userId: personId, status: 'ACCEPTED' } } },
+          ],
+        },
+      }),
       this.prisma.postComment.count({ where: { authorId: personId, removedAt: null } }),
     ]);
     if (postCount === 0 && replyCount === 0) throw new NotFoundException('Person not found');
