@@ -34,7 +34,7 @@ import { CommentThread } from "./CommentThread";
 import { IdentityLine } from "./IdentityLine";
 import { ImageLightbox } from "./ImageLightbox";
 import { PostSkeleton } from "./skeletons";
-import { FeedVideo } from "./FeedVideo";
+import { PostMedia } from "./PostMedia";
 import { CompanyHoverCard, PersonHoverCard, SpaceHoverCard } from "./ProfileHoverCard";
 import { usePersonFollow } from "./usePersonFollow";
 import { removePostFromFeeds, restoreFeeds } from "./feedCache";
@@ -566,41 +566,7 @@ export function FeedPost({
       {post.resharedFrom && <ResharedCard original={post.resharedFrom} />}
 
       {post.mediaUrls.length > 0 && (
-        <div className={cn("mt-3 grid gap-2", post.mediaUrls.length > 1 && "grid-cols-2")}>
-          {post.mediaUrls.map((url) =>
-            isVideoUrl(url) ? (
-              // Plays muted while on screen, one at a time — see FeedVideo.
-              <FeedVideo key={url} src={url} />
-            ) : (
-              <button
-                key={url}
-                type="button"
-                onClick={() => setLightboxIndex(images.indexOf(url))}
-                aria-label="View image full size"
-                className="block w-full overflow-hidden rounded-xl bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <img
-                  src={url}
-                  alt=""
-                  loading="lazy"
-                  className={cn(
-                    "block w-full",
-                    post.mediaUrls.length === 1
-                      ? // One picture is shown whole — a diagram or a screenshot
-                        // cropped at the edges loses the part that mattered.
-                        // Very tall ones stop at 600px and fit inside it, with
-                        // the muted background either side.
-                        "h-auto max-h-[37.5rem] object-contain"
-                      : // Several are tiles, cropped to one shape so the grid
-                        // lines up; the full picture is a click away.
-                        "aspect-square object-cover",
-                  )}
-                  onError={(e) => { (e.currentTarget.parentElement as HTMLElement).style.display = "none"; }}
-                />
-              </button>
-            ),
-          )}
-        </div>
+        <PostMedia urls={post.mediaUrls} onOpenPicture={setLightboxIndex} />
       )}
 
       <ImageLightbox
