@@ -75,6 +75,26 @@ export class ModerationController {
     };
   }
 
+  /** Reporting a person, from their community page. Reviewed by platform admins. */
+  @Post('people/:id/report')
+  async reportPerson(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReportDto,
+  ) {
+    return { success: true, data: await this.moderation.reportPerson(user, id, dto.reason, dto.detail) };
+  }
+
+  /** An admin closing a report about a person, saying what was done. */
+  @Post('reports/:id/handled')
+  async handled(
+    @CurrentUser() user: User,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RemovalDto,
+  ) {
+    return { success: true, data: await this.moderation.markPersonReportHandled(user, id, dto.reason) };
+  }
+
   @Get('reports')
   async listReports(@CurrentUser() user: User, @Query() query: ReportQueryDto) {
     return { success: true, data: await this.moderation.listReports(user, query.status) };

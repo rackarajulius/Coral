@@ -1024,9 +1024,11 @@ export class AdminService {
    */
   async getReportsSummary() {
     const oldest = { _min: { createdAt: true } } as const;
-    const [posts, comments, listings, requests, heldReviews, reportedReviews] = await Promise.all([
+    const [posts, comments, people, listings, requests, heldReviews, reportedReviews] = await Promise.all([
       this.prisma.postReport.aggregate({ where: { status: ReportStatus.OPEN, postId: { not: null } }, _count: { _all: true }, ...oldest }),
       this.prisma.postReport.aggregate({ where: { status: ReportStatus.OPEN, commentId: { not: null } }, _count: { _all: true }, ...oldest }),
+      // People reported from their community page, in the same queue.
+      this.prisma.postReport.aggregate({ where: { status: ReportStatus.OPEN, personId: { not: null } }, _count: { _all: true }, ...oldest }),
       this.prisma.marketplaceReport.aggregate({ where: { status: 'open' }, _count: { _all: true }, ...oldest }),
       this.prisma.marketplaceRequestReport.aggregate({ where: { status: 'open' }, _count: { _all: true }, ...oldest }),
       this.prisma.companyReview.aggregate({ where: { status: 'pending' }, _count: { _all: true }, ...oldest }),
@@ -1045,9 +1047,9 @@ export class AdminService {
     const queues = [
       {
         key: 'community' as const,
-        open: posts._count._all + comments._count._all,
-        detail: { posts: posts._count._all, comments: comments._count._all },
-        oldestAt: earliest(posts._min.createdAt, comments._min.createdAt),
+        open: posts._count._all + comments._count._all + people._count._all,
+        detail: { posts: posts._count._all, comments: comments._count._all, people: people._count._all },
+        oldestAt: earliest(posts._min.createdAt, comments._min.createdAt, people._min.createdAt),
       },
       { key: 'listings' as const, open: listings._count._all, oldestAt: listings._min.createdAt },
       { key: 'requests' as const, open: requests._count._all, oldestAt: requests._min.createdAt },

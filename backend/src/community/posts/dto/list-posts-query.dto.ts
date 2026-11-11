@@ -54,6 +54,14 @@ export class ListPostsQueryDto {
   @IsUUID()
   authorId?: string;
 
+  /**
+   * A tab of someone's page (with `authorId`): only what has pictures, video
+   * or a document; or only the posts they collaborate on. Absent, everything.
+   */
+  @IsOptional()
+  @IsIn(['media', 'collaborations'])
+  view?: 'media' | 'collaborations';
+
   @IsOptional()
   @IsString()
   query?: string;

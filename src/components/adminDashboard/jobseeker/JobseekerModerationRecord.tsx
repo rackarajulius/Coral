@@ -13,6 +13,7 @@ import type { ReportQueueKey } from "@/lib/api/adminReports";
 const SOURCE_LABEL: Record<ReportSource, string> = {
   posts: "Posts",
   comments: "Comments",
+  profile: "Reported as a person",
   reviews: "Company reviews",
   listings: "Marketplace listings",
   requests: "Marketplace requests",
@@ -22,6 +23,7 @@ const SOURCE_LABEL: Record<ReportSource, string> = {
 const SOURCE_TAB: Record<ReportSource, ReportQueueKey> = {
   posts: "community",
   comments: "community",
+  profile: "community",
   reviews: "reviews",
   listings: "listings",
   requests: "requests",

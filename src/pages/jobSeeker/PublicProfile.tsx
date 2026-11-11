@@ -40,6 +40,21 @@ import { useAuthModal } from '@/contexts/AuthModalContext';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { BRAND_NAME } from '@/lib/brand';
 import { personPath } from '@/lib/api/community';
+import { CommunityActivityCard } from '@/components/jobSeeker/CommunityActivityCard';
+import { PersonFollowButton } from '@/components/community/feed/PersonFollowButton';
+import { usePersonFollow } from '@/components/community/feed/usePersonFollow';
+
+/** "· 12 followers", from the community, once it is known. */
+function FollowerCount({ personId }: { personId: string }) {
+  const { followerCount } = usePersonFollow(personId);
+  if (followerCount === null || followerCount === undefined) return null;
+  return (
+    <>
+      <span className="text-muted-foreground/50">•</span>
+      <span>{followerCount.toLocaleString()} {followerCount === 1 ? 'follower' : 'followers'}</span>
+    </>
+  );
+}
 
 /**
  * Public, read-only, recruiter-facing profile.
@@ -285,6 +300,7 @@ const PublicProfile = () => {
                       <span>{profile.connections} connections</span>
                     </>
                   )}
+                  {ownerId && <FollowerCount personId={ownerId} />}
                 </div>
               </div>
 
@@ -302,6 +318,9 @@ const PublicProfile = () => {
                     <Icon className="w-4 h-4" />
                   </a>
                 ))}
+                {/* Follow, as on LinkedIn's profile: their posts then reach your
+                    Following feed in the community. Not on your own. */}
+                {!isOwnPreview && id && user?.id !== id && <PersonFollowButton personId={id} className="h-10" />}
                 <Button
                   onClick={handleShare}
                   className="h-10 px-5 rounded-full bg-primary hover:bg-primary/90 text-primary-foreground font-medium shadow-md"
@@ -358,6 +377,10 @@ const PublicProfile = () => {
             <FeaturedWork items={profile.portfolioItems.map((item) => ({ ...item, key: item.serverId ?? item.id }))} />
           </section>
         )}
+
+        {/* Where LinkedIn has it: after what they offer and show, before
+            their history. Only when they have taken part in the community. */}
+        {ownerId && <CommunityActivityCard personId={ownerId} name={firstName} />}
 
         {/* Experience */}
         {profile.experiences.length > 0 && (

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { PostListSkeleton, SpaceViewSkeleton } from "./skeletons";
+import { BackHeader } from "@/components/community/shell/BackButton";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
 import { useSpaceMembership } from "./useSpaceMembership";
@@ -22,7 +23,7 @@ import {
  *
  * It still has its own URL — that was the point of spaces — but opening one
  * swaps the middle column instead of replacing the screen, so the sidebar
- * stays put and there is nothing to press "back" from.
+ * stays put. The arrow at the top goes back to where it was opened from.
  */
 export function SpaceView({ slug }: { slug: string }) {
   // Keyed on the slug by the caller, so another space always opens on page 1.
@@ -48,6 +49,17 @@ export function SpaceView({ slug }: { slug: string }) {
 
   return (
     <>
+      {/* "← Career Growth · 8 members", as the top of an X page; the arrow
+          alone until the space has loaded. */}
+      <BackHeader
+        title={space.data?.name}
+        subtitle={
+          space.data
+            ? `${space.data.memberCount.toLocaleString()} ${space.data.memberCount === 1 ? "member" : "members"}`
+            : null
+        }
+      />
+
       {space.isLoading && <SpaceViewSkeleton />}
 
       {space.isError && (

@@ -5,6 +5,18 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { CommunityIdentityService } from './identity.service';
 import { personName } from '../common/person-name';
 
+/**
+ * A post's words as a one-line reminder of it: mentions as "@Name", cut at
+ * 120 characters. (Not imported from mentions.ts, which imports from here.)
+ */
+function postExcerpt(content: string, max = 120): string {
+  const flat = content
+    .replace(/@\[([^\[\]\n]{1,120})\]\((?:person|company):[0-9a-f-]{36}\)/gi, '@$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
+}
+
 /** Accounts that are not followable, and whose follows do not count. */
 export const HIDDEN_STATUSES: UserStatus[] = [UserStatus.INACTIVE, UserStatus.SUSPENDED, UserStatus.BANNED];
 
@@ -71,7 +83,7 @@ export class PeopleFollowService {
   async card(viewerId: string | null, personId: string) {
     const person = await this.prisma.user.findUnique({
       where: { id: personId },
-      select: { id: true, displayName: true, firstName: true, lastName: true, avatarUrl: true, role: true, status: true },
+      select: { id: true, displayName: true, firstName: true, lastName: true, avatarUrl: true, role: true, status: true, createdAt: true },
     });
     if (!person || HIDDEN_STATUSES.includes(person.status)) throw new NotFoundException('Person not found');
 
@@ -91,13 +103,14 @@ export class PeopleFollowService {
     ]);
     if (postCount === 0 && replyCount === 0) throw new NotFoundException('Person not found');
 
-    const [identity, follow, followingPeople, followingCompanies] = await Promise.all([
+    const [identity, follow, followingPeople, followingCompanies, followedBy] = await Promise.all([
       this.identity.resolveOne(personId),
       this.status(viewerId, personId),
       this.prisma.userFollow.count({
         where: { followerId: personId, following: { status: { notIn: HIDDEN_STATUSES } } },
       }),
       this.prisma.companyFollow.count({ where: { userId: personId } }),
+      this.followedByPeopleYouFollow(viewerId, personId),
     ]);
 
     return {
@@ -113,6 +126,92 @@ export class PeopleFollowService {
       // People and companies alike: both arrive in their Following feed.
       followingCount: followingPeople + followingCompanies,
       postCount,
+      replyCount,
+      // When their account was made: how long someone has been around is
+      // part of judging what they say.
+      joinedAt: person.createdAt,
+      followedBy,
+    };
+  }
+
+  /**
+   * "Followed by Ada, Ben and 3 others you follow": people the viewer follows
+   * who follow this person — the three most recent by name, and how many in
+   * all. Only ever people the viewer already chose to follow, so it says
+   * nothing about strangers. Null signed out, or on your own page.
+   */
+  async followedByPeopleYouFollow(viewerId: string | null, personId: string) {
+    if (!viewerId || viewerId === personId) return null;
+    const where = {
+      followingId: personId,
+      followerId: { not: viewerId },
+      follower: { status: { notIn: HIDDEN_STATUSES }, followers: { some: { followerId: viewerId } } },
+    };
+    const [recent, total] = await Promise.all([
+      this.prisma.userFollow.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: 3,
+        select: { follower: { select: { id: true, displayName: true, firstName: true, lastName: true, avatarUrl: true } } },
+      }),
+      this.prisma.userFollow.count({ where }),
+    ]);
+    return {
+      total,
+      people: recent.map(({ follower }) => ({ id: follower.id, name: personName(follower, 'Someone'), avatarUrl: follower.avatarUrl ?? null })),
+    };
+  }
+
+  /**
+   * Their replies, newest first: what they said and on whose post, for the
+   * Replies tab. Only replies still up, on posts still up.
+   */
+  async replies(personId: string, page = 1, limit = 20) {
+    const person = await this.prisma.user.findUnique({ where: { id: personId }, select: { status: true } });
+    if (!person || HIDDEN_STATUSES.includes(person.status)) throw new NotFoundException('Person not found');
+    const take = Math.min(Math.max(limit, 1), 50);
+    const where = { authorId: personId, removedAt: null, post: { removedAt: null } };
+    const [rows, total] = await Promise.all([
+      this.prisma.postComment.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (Math.max(page, 1) - 1) * take,
+        take,
+        select: {
+          id: true,
+          content: true,
+          createdAt: true,
+          parentId: true,
+          post: {
+            select: {
+              id: true,
+              content: true,
+              documentTitle: true,
+              mediaUrls: true,
+              author: { select: { displayName: true, firstName: true, lastName: true } },
+              company: { select: { name: true } },
+            },
+          },
+        },
+      }),
+      this.prisma.postComment.count({ where }),
+    ]);
+    return {
+      data: rows.map((r) => ({
+        id: r.id,
+        content: r.content,
+        createdAt: r.createdAt,
+        isReplyToComment: !!r.parentId,
+        post: {
+          id: r.post.id,
+          by: r.post.company?.name ?? personName(r.post.author, 'Someone'),
+          // A line to know the post by: its words, or what it carries.
+          excerpt: postExcerpt(r.post.content)
+            || r.post.documentTitle
+            || (r.post.mediaUrls.length ? 'A post with pictures or video' : ''),
+        },
+      })),
+      meta: { page: Math.max(page, 1), limit: take, total, totalPages: Math.max(Math.ceil(total / take), 1) },
     };
   }
 

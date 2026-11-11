@@ -26,7 +26,7 @@ export default function ModerationPage() {
               Moderation
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Reported posts and comments, oldest first.
+              Reported posts, comments and people, oldest first.
             </p>
           </header>
 

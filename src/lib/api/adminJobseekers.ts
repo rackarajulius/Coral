@@ -30,7 +30,7 @@ export const deleteJobseekerAccount = (id: string) => deleteAccountAsAdmin(`/adm
 export const deleteJobseeker = async (id: string): Promise<void> => { await deleteJobseekerAccount(id); };
 
 /** Where a report about someone's content came from. */
-export type ReportSource = "posts" | "comments" | "reviews" | "listings" | "requests";
+export type ReportSource = "posts" | "comments" | "profile" | "reviews" | "listings" | "requests";
 /** `reviewed`: the marketplace queues record that an admin looked, not what was decided. */
 export type ReportOutcome = "open" | "upheld" | "dismissed" | "reviewed";
 

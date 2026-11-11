@@ -8,7 +8,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { getReportReasons, reportComment, reportPost } from "@/lib/api/community";
+import { getReportReasons, reportComment, reportPerson, reportPost } from "@/lib/api/community";
 
 /** Server keys turned into something readable. Unknown keys pass through. */
 const LABELS: Record<string, string> = {
@@ -34,7 +34,7 @@ export function ReportDialog({
 }: {
   open: boolean;
   onClose: () => void;
-  target: { kind: "post" | "comment"; id: string };
+  target: { kind: "post" | "comment" | "person"; id: string };
 }) {
   const [reason, setReason] = useState<string | null>(null);
   const [detail, setDetail] = useState("");
@@ -58,7 +58,9 @@ export function ReportDialog({
     mutationFn: () =>
       target.kind === "post"
         ? reportPost(target.id, reason!, detail.trim() || undefined)
-        : reportComment(target.id, reason!, detail.trim() || undefined),
+        : target.kind === "comment"
+          ? reportComment(target.id, reason!, detail.trim() || undefined)
+          : reportPerson(target.id, reason!, detail.trim() || undefined),
     onSuccess: () => {
       // No claim about what happens next: a report is a message to a person,
       // and promising an outcome we do not control would be the wrong promise.
@@ -74,7 +76,9 @@ export function ReportDialog({
         <DialogHeader>
           <DialogTitle>Report this {target.kind}</DialogTitle>
           <DialogDescription>
-            Only moderators see reports. The author is not told who reported them.
+            {target.kind === "person"
+              ? "Only Coral's moderators see reports. They are not told who reported them."
+              : "Only moderators see reports. The author is not told who reported them."}
           </DialogDescription>
         </DialogHeader>
 
@@ -94,7 +98,8 @@ export function ReportDialog({
                 </button>
               </p>
             )}
-            {reasons.data?.map((key) => (
+            {/* "Off topic for this space" is about a post, never a person. */}
+            {reasons.data?.filter((key) => target.kind !== "person" || key !== "off_topic").map((key) => (
               <button
                 key={key}
                 type="button"

@@ -3,7 +3,7 @@ import { Prisma, ReportStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 /** Where a report about someone's content came from. */
-export type ReportSource = 'posts' | 'comments' | 'reviews' | 'listings' | 'requests';
+export type ReportSource = 'posts' | 'comments' | 'profile' | 'reviews' | 'listings' | 'requests';
 
 /**
  * What became of a report.
@@ -78,7 +78,7 @@ export class ModerationRecordService {
       }),
     ]);
 
-    const sources: ReportSource[] = ['posts', 'comments', 'reviews', 'listings', 'requests'];
+    const sources: ReportSource[] = ['posts', 'comments', 'profile', 'reviews', 'listings', 'requests'];
     const bySource = sources
       .map((source) => {
         const rows = reports.filter((r) => r.source === source);
@@ -112,7 +112,8 @@ export class ModerationRecordService {
       this.prisma.postReport.findMany({
         where: {
           ...(openOnly ? { status: ReportStatus.OPEN } : {}),
-          OR: [{ post: { authorId: ids } }, { comment: { authorId: ids } }],
+          // Their posts, their comments, and reports about them as a person.
+          OR: [{ post: { authorId: ids } }, { comment: { authorId: ids } }, { personId: ids }],
         },
         select: {
           status: true,
@@ -120,6 +121,7 @@ export class ModerationRecordService {
           createdAt: true,
           post: { select: { authorId: true } },
           comment: { select: { authorId: true } },
+          personId: true,
         },
       }),
       this.prisma.reviewFlag.findMany({
@@ -149,11 +151,11 @@ export class ModerationRecordService {
 
     const rows: ReportRow[] = [];
     for (const r of postReports) {
-      const userId = r.post?.authorId ?? r.comment?.authorId;
+      const userId = r.post?.authorId ?? r.comment?.authorId ?? r.personId;
       if (!userId) continue;
       rows.push({
         userId,
-        source: r.post ? 'posts' : 'comments',
+        source: r.post ? 'posts' : r.comment ? 'comments' : 'profile',
         outcome: r.status === ReportStatus.OPEN ? 'open' : r.status === ReportStatus.ACTIONED ? 'upheld' : 'dismissed',
         reason: r.reason,
         createdAt: r.createdAt,

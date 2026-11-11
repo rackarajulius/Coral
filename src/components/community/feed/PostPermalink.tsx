@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
-import { AlertTriangle, ArrowLeft } from "lucide-react";
+import { BackHeader } from "@/components/community/shell/BackButton";
+import { AlertTriangle } from "lucide-react";
 import { PermalinkSkeleton } from "./skeletons";
 import { getPost } from "@/lib/api/community";
 import { FeedPost } from "./FeedPost";
@@ -24,13 +24,8 @@ export function PostPermalink({ postId }: { postId: string }) {
 
   return (
     <div>
-      <Link
-        to="/community"
-        className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-      >
-        <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-        Back to the community
-      </Link>
+      {/* "← Post", as X's: back to the feed, person or notification it was opened from. */}
+      <BackHeader title="Post" heading />
 
       {post.isLoading && <PermalinkSkeleton />}
 

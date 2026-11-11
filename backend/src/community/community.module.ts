@@ -25,6 +25,8 @@ import { TidesService } from './tides/tides.service';
 import { MarketplaceModule } from '../marketplace/marketplace.module';
 import { PeopleController } from './people.controller';
 import { PeopleFollowService } from './people-follow.service';
+import { FollowSuggestionsService } from './follow-suggestions.service';
+import { FollowSuggestionsController } from './follow-suggestions.controller';
 import { MentionsController } from './mentions.controller';
 import { ScheduledPostsController } from './scheduled-posts/scheduled-posts.controller';
 import { ScheduledPostsService } from './scheduled-posts/scheduled-posts.service';
@@ -36,8 +38,8 @@ import { MuxClient } from './videos/mux.client';
 
 @Module({
   imports: [StorageModule, NotificationsModule, MarketplaceModule],
-  controllers: [PostsController, CommentsController, FeedController, SpacesController, ModerationController, PollsController, TidesController, PeopleController, MentionsController, ScheduledPostsController, PostStatsController, CommunityVideosController, PostCollaboratorsController],
-  providers: [PostsService, CommentsService, FeedService, SpacesService, SpaceSuggestionsService, CommunityIdentityService, ModerationService, CommunityMediaService, PollsService, GifsService, LinkPreviewService, TidesService, PeopleFollowService, ScheduledPostsService, PostStatsService, CommunityVideosService, MuxClient, PostCollaboratorsService],
+  controllers: [PostsController, CommentsController, FeedController, SpacesController, ModerationController, PollsController, TidesController, PeopleController, MentionsController, ScheduledPostsController, PostStatsController, CommunityVideosController, PostCollaboratorsController, FollowSuggestionsController],
+  providers: [PostsService, CommentsService, FeedService, SpacesService, SpaceSuggestionsService, CommunityIdentityService, ModerationService, CommunityMediaService, PollsService, GifsService, LinkPreviewService, TidesService, PeopleFollowService, ScheduledPostsService, PostStatsService, CommunityVideosService, MuxClient, PostCollaboratorsService, FollowSuggestionsService],
   exports: [PostsService, CommentsService, FeedService],
 })
 export class CommunityModule {}

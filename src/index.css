@@ -262,6 +262,67 @@ html:has([data-employer]) {
   display: none;
 }
 
+/* A side column's scrollbar (the community nav): out of sight until the
+   pointer is over the column, or the keyboard is moving through it, then thin
+   and faint. Its space is kept while hidden, so nothing moves when it shows.
+   Chrome, Edge and Safari draw it from the -webkit- rules: a 6px rounded thumb
+   with no arrow buttons. The standard properties are for Firefox only — Chrome
+   would obey them instead, and its "thin" bar on Windows keeps the arrows. */
+@supports (-moz-appearance: none) {
+  .hover-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .hover-scrollbar:hover,
+  .hover-scrollbar:has(:focus-visible) {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.28) transparent;
+  }
+}
+
+.hover-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.hover-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Chrome does not redraw a -webkit- thumb when only a :hover rule on its
+   pseudo-element changes — the bar would appear on the first scroll, not on
+   hover. It does redraw for a change to the column's own border colour, so
+   the colour lives there (the column has no border width, so nothing else
+   shows it) and the thumb inherits it, filling itself with its border. */
+@supports not (-moz-appearance: none) {
+  .hover-scrollbar {
+    border-color: transparent;
+    transition: border-color 150ms ease;
+  }
+
+  .hover-scrollbar:hover,
+  .hover-scrollbar:has(:focus-visible) {
+    border-color: hsl(var(--muted-foreground) / 0.28);
+  }
+}
+
+.hover-scrollbar::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border-style: solid;
+  border-width: 0 6px 0 0;
+  border-color: inherit;
+  background: transparent;
+}
+
+.hover-scrollbar::-webkit-scrollbar-thumb:hover {
+  border-color: hsl(var(--muted-foreground) / 0.45);
+}
+
+.hover-scrollbar::-webkit-scrollbar-button,
+.hover-scrollbar::-webkit-scrollbar-corner {
+  display: none;
+}
+
 /* ================================
    Components
 ================================ */

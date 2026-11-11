@@ -360,6 +360,18 @@ export function FeedPost({
                 {user && !mine && <PersonFollowButton authorId={post.authorId} initial={post.authorFollow} />}
               </div>
               <IdentityLine identity={post.authorIdentity} />
+              {/* As LinkedIn's "View my services": a client who likes a post
+                  is one click from what its author offers. Only for people
+                  with a public provider page. */}
+              {post.authorIdentity?.profileUrl?.startsWith("/providers/") && (
+                <Link
+                  to={post.authorIdentity.profileUrl}
+                  // Its own line under the headline, as on LinkedIn.
+                  className="block w-fit text-xs font-semibold text-link hover:underline"
+                >
+                  {mine ? "Your services" : "View services"}
+                </Link>
+              )}
             </>
           )}
           <p className="text-xs text-muted-foreground">

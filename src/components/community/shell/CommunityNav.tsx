@@ -117,7 +117,8 @@ export function CommunityNav() {
       ref={scrollRef}
       aria-label="Community"
       className={cn(
-        "h-full overflow-y-auto overscroll-contain px-3 py-4 [scrollbar-width:thin]",
+        // The scrollbar shows only while the pointer is over the nav (index.css).
+        "hover-scrollbar h-full overflow-y-auto overscroll-contain px-3 py-4",
         maskClass,
       )}
     >

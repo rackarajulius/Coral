@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAuthModal } from "@/contexts/AuthModalContext";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
+import { BackHeader } from "@/components/community/shell/BackButton";
 import { useFollowCompany } from "@/hooks/useFollowCompany";
 import { getCompanyById, type EmployerCompany } from "@/lib/api/employerCompany";
 import { listPosts } from "@/lib/api/community";
@@ -37,27 +38,52 @@ export function CompanyView({ profileId }: { profileId: string }) {
 
   useDocumentTitle(company.data?.companyName ? `${company.data.companyName} · Community` : null);
 
-  if (company.isLoading) return <CompanySkeleton />;
+  // The same cache as the Follow button below, so the count moves with it.
+  const { followerCount } = useFollowCompany({
+    companyId: company.data?.id,
+    initialFollowerCount: company.data?.followerCount ?? 0,
+  });
+
+  if (company.isLoading) {
+    return (
+      <>
+        <BackHeader />
+        <CompanySkeleton />
+      </>
+    );
+  }
 
   if (company.isError || !company.data) {
     return (
-      <div className="flex items-start gap-3 rounded-2xl border border-border bg-card p-6">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <div>
-          <p className="text-sm font-medium">This company isn't available</p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Its page may have been made private, or it no longer exists.
-          </p>
-          <Button asChild variant="outline" size="sm" className="mt-4 rounded-full">
-            <Link to="/community">Back to the community</Link>
-          </Button>
+      <>
+        <BackHeader />
+        <div className="flex items-start gap-3 rounded-2xl border border-border bg-card p-6">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <div>
+            <p className="text-sm font-medium">This company isn't available</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Its page may have been made private, or it no longer exists.
+            </p>
+            <Button asChild variant="outline" size="sm" className="mt-4 rounded-full">
+              <Link to="/community">Back to the community</Link>
+            </Button>
+          </div>
         </div>
-      </div>
+      </>
     );
   }
 
   return (
     <>
+      {/* "← Airtel Uganda · 1,234 followers", as the top of an X profile. */}
+      <BackHeader
+        title={company.data.companyName}
+        subtitle={
+          company.data.allowFollow
+            ? `${followerCount.toLocaleString()} ${followerCount === 1 ? "follower" : "followers"}`
+            : "Company page"
+        }
+      />
       <CompanyHeader company={company.data} />
       {/* Renders only for the page's owners and admins. */}
       {company.data.companyId && (

@@ -19,9 +19,11 @@ import { PostPermalink } from "./PostPermalink";
 import { PersonView } from "./PersonView";
 import { CompanyView } from "./CompanyView";
 import { SuggestedSpaces } from "./SuggestedSpaces";
+import { FollowSuggestions } from "./FollowSuggestions";
 import { PostListSkeleton } from "./skeletons";
 import { TidesView } from "@/components/community/tides/TidesView";
 import { CommunityRightRail } from "@/components/community/shell/CommunityRightRail";
+import { BackButton } from "@/components/community/shell/BackButton";
 import {
   VIEW_COPY, isPersonalView, isSectionView, parseView, startingPurpose, type FeedViewId,
 } from "@/components/community/shell/feedViews";
@@ -67,7 +69,7 @@ const EMPTY_STATES: Record<FeedViewId | "all", { icon: React.ElementType; title:
   following: {
     icon: UserCheck,
     title: "Nothing from the people you follow",
-    body: "Follow people and companies from their posts, and what they share collects here.",
+    body: "Follow people and companies — from their posts, or from Who to follow — and what they share collects here.",
   },
   "my-spaces": {
     icon: Layers,
@@ -90,6 +92,20 @@ const EMPTY_STATES: Record<FeedViewId | "all", { icon: React.ElementType; title:
     body: "Share what you are working on, ask a question, or start a poll.",
   },
 };
+
+/**
+ * The Following page's tabs, as X's: the posts, then who to follow
+ * (x.com/i/connect_people) and, in place of X's creators, professionals
+ * offering their work. Held in `?tab=`, so each can be linked and reloaded.
+ */
+type FollowingTab = "posts" | "people" | "professionals";
+const FOLLOWING_TABS: Array<{ id: FollowingTab; label: string; blurb: string }> = [
+  { id: "posts", label: "Posts", blurb: "Posts from the people and companies you follow." },
+  { id: "people", label: "Who to follow", blurb: "People and company pages you might want in your feed, and why." },
+  { id: "professionals", label: "Professionals for you", blurb: "People offering their work on Coral that you don't follow yet." },
+];
+const parseFollowingTab = (value: string | null): FollowingTab =>
+  FOLLOWING_TABS.some((t) => t.id === value) ? (value as FollowingTab) : "posts";
 
 /**
  * Where the reader was in each feed slice, so leaving for a post, a space or
@@ -128,6 +144,15 @@ export function CommunityFeed() {
   const requested = parseView(params.get("view"));
   const view = isPersonalView(requested) && !user && !authLoading ? null : requested;
   const viewKey = view ?? "all";
+  // Following's suggestion tabs replace the posts with a list of people.
+  const followingTab: FollowingTab = view === "following" ? parseFollowingTab(params.get("tab")) : "posts";
+  const suggesting = followingTab !== "posts";
+  const chooseFollowingTab = (next: FollowingTab) => {
+    const search = new URLSearchParams(params);
+    if (next === "posts") search.delete("tab");
+    else search.set("tab", next);
+    setParams(search, { replace: true });
+  };
 
   const [composeOpen, setComposeOpen] = useState(false);
   // Opened as the company from the employer dashboard (?compose=company).
@@ -184,7 +209,7 @@ export function CommunityFeed() {
     getNextPageParam: (last) =>
       last.meta.page < last.meta.totalPages ? last.meta.page + 1 : undefined,
     // A personal slice waits for the session, or it would ask as nobody.
-    enabled: showingFeed && !(isPersonalView(view) && authLoading),
+    enabled: showingFeed && !suggesting && !(isPersonalView(view) && authLoading),
     retry: false,
     // Kept for a while after the feed is left, so the pages the reader had
     // scrolled through are still there to return to, and not refetched under
@@ -210,8 +235,10 @@ export function CommunityFeed() {
    */
   const restoredFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!showingFeed) {
+    if (!showingFeed || suggesting) {
       restoredFor.current = null;
+      // A suggestion tab starts at its top, like any new list.
+      if (suggesting) window.scrollTo(0, 0);
       return;
     }
     if (restoredFor.current === viewKey) return;
@@ -235,13 +262,13 @@ export function CommunityFeed() {
       restoredFor.current = viewKey;
     });
     return () => cancelAnimationFrame(frame);
-  }, [showingFeed, viewKey, posts.isSuccess]);
+  }, [showingFeed, suggesting, followingTab, viewKey, posts.isSuccess]);
 
   // Records the place once per frame while the reader scrolls. Not until the
   // restore above has run, or the jump to the top on arrival would overwrite
   // the very position being returned to.
   useEffect(() => {
-    if (!showingFeed) return;
+    if (!showingFeed || suggesting) return;
     let frame = 0;
     const save = () => {
       frame = 0;
@@ -266,7 +293,7 @@ export function CommunityFeed() {
       cancelAnimationFrame(frame);
       window.removeEventListener("scroll", onScroll);
     };
-  }, [showingFeed, viewKey]);
+  }, [showingFeed, suggesting, viewKey]);
 
   // The sentinel sits under the last post. When it comes within reach of the
   // viewport, the next page starts loading, before the reader hits the end.
@@ -283,7 +310,7 @@ export function CommunityFeed() {
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage, showingFeed]);
+  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage, showingFeed, suggesting]);
 
   if (!showingFeed) {
     return (
@@ -307,11 +334,13 @@ export function CommunityFeed() {
 
   return (
     // At least the window's height, so the rule beside the rail runs to the
-    // bottom of the screen even when there are only a few posts.
-    <div className="mx-auto grid min-h-[calc(100vh-3.5rem)] w-full max-w-[1120px] gap-6 px-4 pb-6 sm:px-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+    // bottom of the screen even when there are only a few posts. No bottom
+    // padding here: the columns carry their own, so the rail's rule runs all
+    // the way down instead of stopping short above the grid's padding.
+    <div className="mx-auto grid min-h-[calc(100vh-3.5rem)] w-full max-w-[1120px] gap-6 px-4 sm:px-6 xl:grid-cols-[minmax(0,1fr)_340px]">
       {/* The column spans the whole middle track so the search row's rule can
           run edge to edge; what is read inside it keeps a reading width. */}
-      <div className="w-full min-w-0">
+      <div className="w-full min-w-0 pb-6">
         {/* Search and "New post" share the top row. Searching hands off to the
             search page, which already does posts, spaces and #tags. Sticky
             under the community's 3.5rem bar, so both stay put while the feed
@@ -360,14 +389,44 @@ export function CommunityFeed() {
           {/* Every slice but Home keeps a heading, so what you are looking at
               is always named; the main feed has none. */}
           {view !== null && (
-            <header className="mb-5">
-              <h1 className="font-display text-2xl font-semibold tracking-tight">
-                {VIEW_COPY[viewKey].title}
-              </h1>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {VIEW_COPY[viewKey].blurb}
-              </p>
+            // "← Following", as X's "← Follow": back to where the reader came
+            // from, with the line under the title kept in line with it.
+            <header className="mb-5 flex items-start gap-2">
+              <BackButton className="-mt-0.5" />
+              <div className="min-w-0">
+                <h1 className="font-display text-2xl font-semibold tracking-tight">
+                  {VIEW_COPY[viewKey].title}
+                </h1>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {view === "following"
+                    ? FOLLOWING_TABS.find((t) => t.id === followingTab)!.blurb
+                    : VIEW_COPY[viewKey].blurb}
+                </p>
+              </div>
             </header>
+          )}
+
+          {view === "following" && (
+            <div role="tablist" aria-label="Following" className="mb-4 flex gap-1 overflow-x-auto border-b border-border no-scrollbar">
+              {FOLLOWING_TABS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={followingTab === t.id}
+                  onClick={() => chooseFollowingTab(t.id)}
+                  className={cn(
+                    "relative shrink-0 px-4 py-2.5 text-sm font-medium transition-colors",
+                    followingTab === t.id ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {t.label}
+                  {followingTab === t.id && (
+                    <span className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-primary" aria-hidden="true" />
+                  )}
+                </button>
+              ))}
+            </div>
           )}
 
           {/* No prompt bar here: the "New post" button above opens it. */}
@@ -383,66 +442,72 @@ export function CommunityFeed() {
             startAsCompany={composeAsCompany}
           />
 
-          {/* "3 new posts": what others have posted since this feed loaded. */}
-          <NewPostsButton
-            feedKey={["community-posts", "feed", view]}
-            params={{ filter: isPersonalView(view) ? view : undefined, section: isSectionView(view) ? view : undefined }}
-            newestAt={feedPosts[0]?.createdAt}
-          />
+          {suggesting ? (
+            <FollowSuggestions tab={followingTab === "professionals" ? "professionals" : "people"} />
+          ) : (
+            <>
+              {/* "3 new posts": what others have posted since this feed loaded. */}
+              <NewPostsButton
+                feedKey={["community-posts", "feed", view]}
+                params={{ filter: isPersonalView(view) ? view : undefined, section: isSectionView(view) ? view : undefined }}
+                newestAt={feedPosts[0]?.createdAt}
+              />
 
-          {posts.isLoading && <PostListSkeleton />}
+              {posts.isLoading && <PostListSkeleton />}
 
-          {posts.isError && (
-            <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 p-5">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-              <div className="flex-1">
-                <p className="text-sm font-medium text-destructive">Couldn't load the feed</p>
-                <p className="mt-1 text-sm text-destructive/90">{(posts.error as Error).message}</p>
-                <Button variant="outline" size="sm" className="mt-3" onClick={() => void posts.refetch()}>
-                  Try again
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {posts.isSuccess && feedPosts.length === 0 && (
-            <EmptyFeed view={view} onCompose={() => requireAuth(() => setComposeOpen(true))} />
-          )}
-
-          <div className="space-y-2">
-            {feedPosts.map((post, i, all) => (
-              <Fragment key={post.id}>
-                <div data-feed-post={post.id}>
-                  <FeedPost post={post} />
+              {posts.isError && (
+                <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 p-5">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-destructive">Couldn't load the feed</p>
+                    <p className="mt-1 text-sm text-destructive/90">{(posts.error as Error).message}</p>
+                    <Button variant="outline" size="sm" className="mt-3" onClick={() => void posts.refetch()}>
+                      Try again
+                    </Button>
+                  </div>
                 </div>
-                {/* After the last post when there are fewer than three. */}
-                {showSuggestions && i === Math.min(SUGGESTIONS_AFTER, all.length) - 1 && <SuggestedSpaces />}
-              </Fragment>
-            ))}
-          </div>
+              )}
 
-          <div ref={sentinelRef} aria-hidden="true" />
+              {posts.isSuccess && feedPosts.length === 0 && (
+                <EmptyFeed view={view} onCompose={() => requireAuth(() => setComposeOpen(true))} />
+              )}
 
-          {/* The next page arrives where it will sit, shaped like what it is. */}
-          {isFetchingNextPage && (
-            <div className="mt-2">
-              <PostListSkeleton count={1} label="Loading more posts" />
-            </div>
-          )}
+              <div className="space-y-2">
+                {feedPosts.map((post, i, all) => (
+                  <Fragment key={post.id}>
+                    <div data-feed-post={post.id}>
+                      <FeedPost post={post} />
+                    </div>
+                    {/* After the last post when there are fewer than three. */}
+                    {showSuggestions && i === Math.min(SUGGESTIONS_AFTER, all.length) - 1 && <SuggestedSpaces />}
+                  </Fragment>
+                ))}
+              </div>
 
-          {/* A failed page stops the automatic loading, so it does not retry
-              in a loop; the reader decides when to try again. */}
-          {isFetchNextPageError && (
-            <div className="flex flex-col items-center gap-2 py-6 text-sm text-muted-foreground">
-              <p>Couldn't load more posts.</p>
-              <Button variant="outline" size="sm" onClick={() => void fetchNextPage()}>
-                Try again
-              </Button>
-            </div>
-          )}
+              <div ref={sentinelRef} aria-hidden="true" />
 
-          {feedPosts.length > 0 && !hasNextPage && !isFetchingNextPage && (
-            <p className="py-6 text-center text-xs text-muted-foreground">You're all caught up.</p>
+              {/* The next page arrives where it will sit, shaped like what it is. */}
+              {isFetchingNextPage && (
+                <div className="mt-2">
+                  <PostListSkeleton count={1} label="Loading more posts" />
+                </div>
+              )}
+
+              {/* A failed page stops the automatic loading, so it does not retry
+                  in a loop; the reader decides when to try again. */}
+              {isFetchNextPageError && (
+                <div className="flex flex-col items-center gap-2 py-6 text-sm text-muted-foreground">
+                  <p>Couldn't load more posts.</p>
+                  <Button variant="outline" size="sm" onClick={() => void fetchNextPage()}>
+                    Try again
+                  </Button>
+                </div>
+              )}
+
+              {feedPosts.length > 0 && !hasNextPage && !isFetchingNextPage && (
+                <p className="py-6 text-center text-xs text-muted-foreground">You're all caught up.</p>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -451,7 +516,7 @@ export function CommunityFeed() {
           width more than it needs a sidebar. Ruled off from the middle column
           by its own left border, full height; the search row's rule reaches
           across the gap to meet it. */}
-      <aside className="hidden pt-6 xl:block xl:border-l xl:border-border xl:pl-6">
+      <aside className="hidden pb-6 pt-6 xl:block xl:border-l xl:border-border xl:pl-6">
         <div className="sticky top-20">
           <CommunityRightRail />
         </div>
@@ -470,7 +535,7 @@ function EmptyFeed({ view, onCompose }: { view: FeedViewId | null; onCompose: ()
       <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">{empty.body}</p>
       {view === "following" ? (
         <Button asChild variant="outline" size="sm" className="mt-4 rounded-full">
-          <Link to="/community">Find people on Home</Link>
+          <Link to="/community?view=following&tab=people" replace>Find people to follow</Link>
         </Button>
       ) : view === "my-spaces" ? (
         <Button asChild variant="outline" size="sm" className="mt-4 rounded-full">

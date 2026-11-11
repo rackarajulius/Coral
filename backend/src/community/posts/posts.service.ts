@@ -131,10 +131,17 @@ export class PostsService {
       // published in a company's name is the company's, and lives on its
       // page — and the posts they accepted to collaborate on.
       ...(query.authorId
-        ? [{ OR: [
-            { authorId: query.authorId, companyId: null },
-            { collaborators: { some: { userId: query.authorId, status: PostCollaboratorStatus.ACCEPTED } } },
-          ] }]
+        ? query.view === 'collaborations'
+          // Their Collaborations tab: only the posts they were asked onto.
+          ? [{ collaborators: { some: { userId: query.authorId, status: PostCollaboratorStatus.ACCEPTED } } }]
+          : [{ OR: [
+              { authorId: query.authorId, companyId: null },
+              { collaborators: { some: { userId: query.authorId, status: PostCollaboratorStatus.ACCEPTED } } },
+            ] }]
+        : []),
+      // Their Media tab: pictures, video or a document.
+      ...(query.authorId && query.view === 'media'
+        ? [{ OR: [{ mediaUrls: { isEmpty: false } }, { documentUrl: { not: null } }] }]
         : []),
       // A company's page: its own posts, and those it collaborates on.
       ...(query.companyId

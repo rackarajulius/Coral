@@ -392,6 +392,8 @@ export const listPosts = (
     section?: FeedSection;
     /** "top" is most liked, then most commented, across all time. */
     sort?: "new" | "top";
+    /** With `authorId`: their Media tab, or their Collaborations tab. */
+    view?: "media" | "collaborations";
   } = {},
 ) => {
   const search = new URLSearchParams();
@@ -399,6 +401,7 @@ export const listPosts = (
   if (params.limit) search.set("limit", String(params.limit));
   if (params.spaceId) search.set("spaceId", params.spaceId);
   if (params.authorId) search.set("authorId", params.authorId);
+  if (params.view) search.set("view", params.view);
   if (params.companyId) search.set("companyId", params.companyId);
   if (params.filter) search.set("filter", params.filter);
   if (params.section) search.set("section", params.section);
@@ -556,11 +559,34 @@ export interface CommunityPerson {
   isFollowing: boolean;
   followingCount: number;
   postCount: number;
+  replyCount?: number;
+  /** When their account was made. */
+  joinedAt?: string;
+  /**
+   * "Followed by Ada, Ben and 3 others you follow": people you follow who
+   * follow them. Null signed out, or on your own page.
+   */
+  followedBy?: { total: number; people: Array<{ id: string; name: string; avatarUrl: string | null }> } | null;
 }
 
 /** 404 ("Person not found") for anyone who has not posted or replied. */
 export const getCommunityPerson = (id: string) =>
   req<{ data: CommunityPerson }>(`/people/${id}`).then((r) => r.data);
+
+/** One of their replies, for the Replies tab: what they said, and on whose post. */
+export interface PersonReply {
+  id: string;
+  content: string;
+  createdAt: string;
+  /** A reply to someone's comment rather than to the post itself. */
+  isReplyToComment: boolean;
+  post: { id: string; by: string; excerpt: string };
+}
+
+export const listPersonReplies = (personId: string, page = 1) =>
+  req<{ data: PersonReply[]; meta: { page: number; limit: number; total: number; totalPages: number } }>(
+    `/people/${personId}/replies?page=${page}`,
+  );
 
 /** Where a person's community page is: posts, followers, Follow. */
 export const personPath = (id: string) => `/community/people/${id}`;
@@ -585,6 +611,46 @@ export const setPersonFollow = (personId: string, follow: boolean) =>
   req<{ data: PersonFollowStatus }>(`/people/${personId}/follow`, {
     method: follow ? "POST" : "DELETE",
   }).then((r) => r.data);
+
+/* ---------------------------- follow suggestions --------------------------- */
+
+/** The one line saying why someone is suggested — always a fact the viewer can check. */
+export type FollowSuggestionReason =
+  | { kind: "followed_by"; total: number; names: string[] }
+  | { kind: "follows_you" }
+  | { kind: "space"; name: string; slug: string }
+  | { kind: "near_you"; place: string }
+  | { kind: "popular" }
+  | { kind: "posting" };
+
+/** A person (user id) or a company page (page id) to follow, from the Following page's tabs. */
+export interface FollowSuggestion {
+  kind: "person" | "company";
+  id: string;
+  name: string;
+  imageUrl: string | null;
+  /** Their byline label, or the company's industry. */
+  headline: string | null;
+  followerCount: number;
+  reason: FollowSuggestionReason | null;
+  /** Professionals only: the kind of work, and where they are. */
+  category?: string | null;
+  location?: string | null;
+}
+
+export type FollowSuggestionTab = "people" | "professionals";
+
+/** Who to follow (people and company pages), or Professionals for you. Signed in only. */
+export const getFollowSuggestions = (tab: FollowSuggestionTab) =>
+  req<{ data: FollowSuggestion[] }>(`/follow-suggestions/${tab}`).then((r) => r.data);
+
+/** ✕ on a suggestion: not offered again, on any device. */
+export const dismissFollowSuggestion = (kind: FollowSuggestion["kind"], id: string) =>
+  req<{ data: unknown }>(`/follow-suggestions/${kind}/${id}/dismiss`, { method: "POST" });
+
+/** Undo, from the toast that follows a dismissal. */
+export const undoDismissFollowSuggestion = (kind: FollowSuggestion["kind"], id: string) =>
+  req<{ data: unknown }>(`/follow-suggestions/${kind}/${id}/dismiss`, { method: "DELETE" });
 
 /* -------------------------------- mentions -------------------------------- */
 
@@ -965,6 +1031,8 @@ export interface ModerationReport {
   target:
     | { kind: "post"; id: string; content: string; removed: boolean }
     | { kind: "comment"; id: string; postId: string; content: string; removed: boolean }
+    /** A person, reported from their page. `removed` when their account is already closed or suspended. */
+    | { kind: "person"; id: string; name: string; removed: boolean }
     | null;
 }
 
@@ -999,6 +1067,20 @@ export const dismissReport = (reportId: string, resolution?: string) =>
   mod<unknown>(`/reports/${reportId}/dismiss`, {
     method: "POST",
     body: JSON.stringify({ resolution }),
+  });
+
+/** Reporting a person, from their community page. Platform admins review it. */
+export const reportPerson = (personId: string, reason: string, detail?: string) =>
+  mod<{ reported: boolean }>(`/people/${personId}/report`, {
+    method: "POST",
+    body: JSON.stringify({ reason, detail }),
+  });
+
+/** An admin closing a report about a person, saying what was done. */
+export const markPersonReportHandled = (reportId: string, note: string) =>
+  mod<unknown>(`/reports/${reportId}/handled`, {
+    method: "POST",
+    body: JSON.stringify({ reason: note }),
   });
 
 /* --------------------------------- helpers -------------------------------- */

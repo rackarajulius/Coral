@@ -9,6 +9,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { WRITE_TRANSACTION } from '../common/database-transaction';
 import { User } from '../common/types/user.types';
 import { CommunityMediaService } from './media.service';
+import { personName } from '../common/person-name';
+import { HIDDEN_STATUSES as HIDDEN_PERSON_STATUSES } from './people-follow.service';
 
 /** Why someone flagged something. A closed list keeps the queue sortable. */
 export const REPORT_REASONS = [
@@ -76,6 +78,43 @@ export class ModerationService {
     return { reported: true };
   }
 
+  /**
+   * A person, reported from their community page — a pattern across what
+   * they post, or an account that is not who it says. Platform admins review
+   * these; there is no one post for a space's moderators to take down.
+   */
+  async reportPerson(user: User, personId: string, reason: ReportReason, detail?: string) {
+    if (personId === user.id) throw new BadRequestException("You can't report yourself.");
+    const person = await this.prisma.user.findUnique({ where: { id: personId }, select: { id: true, status: true } });
+    if (!person || HIDDEN_PERSON_STATUSES.includes(person.status)) throw new NotFoundException('Person not found');
+
+    await this.prisma.postReport.upsert({
+      where: { personId_reporterId: { personId, reporterId: user.id } },
+      create: { personId, reporterId: user.id, reason, detail: detail?.trim() || null },
+      update: { reason, detail: detail?.trim() || null, status: ReportStatus.OPEN },
+    });
+    return { reported: true };
+  }
+
+  /**
+   * A report about a person, closed by an admin after acting on it — through
+   * the account tools, which this queue only points to. The note is required:
+   * it is the only account of what was done.
+   */
+  async markPersonReportHandled(user: User, reportId: string, resolution: string) {
+    if (!resolution.trim()) throw new BadRequestException('Say what was done.');
+    await this.prisma.$transaction(async tx => {
+      if (await this.moderationScope(tx, user.id)) throw new ForbiddenException('Only an admin can close a report about a person.');
+      const report = await tx.postReport.findUnique({ where: { id: reportId }, select: { personId: true } });
+      if (!report?.personId) throw new NotFoundException('Report not found');
+      await tx.postReport.update({
+        where: { id: reportId },
+        data: { status: ReportStatus.ACTIONED, reviewedById: user.id, reviewedAt: new Date(), resolution: resolution.trim() },
+      });
+    }, WRITE_TRANSACTION);
+    return { id: reportId, status: ReportStatus.ACTIONED };
+  }
+
   /* ------------------------------- the queue -------------------------------- */
 
   /** Open reports, oldest first — the longest-waiting concern is the most urgent. */
@@ -92,6 +131,11 @@ export class ModerationService {
           },
           comment: {
             select: { id: true, content: true, removedAt: true, authorId: true, postId: true },
+          },
+          // A space moderator's scope matches posts and comments only, so
+          // reports about people reach platform admins alone.
+          person: {
+            select: { id: true, displayName: true, firstName: true, lastName: true, status: true },
           },
         },
       });
@@ -113,7 +157,15 @@ export class ModerationService {
               content: r.comment.content,
               removed: !!r.comment.removedAt,
             }
-          : null,
+          : r.person
+            ? {
+                kind: 'person' as const,
+                id: r.person.id,
+                name: personName(r.person, 'Someone'),
+                // Already closed, suspended or barred: nothing more to do here.
+                removed: HIDDEN_PERSON_STATUSES.includes(r.person.status),
+              }
+            : null,
     }));
   }
 
@@ -195,10 +247,15 @@ export class ModerationService {
   async dismissReport(user: User, reportId: string, resolution?: string) {
     await this.prisma.$transaction(async tx => {
       const report = await tx.postReport.findUnique({ where: { id: reportId },
-        select: { postId: true, comment: { select: { postId: true } } } });
-      const postId = report?.postId ?? report?.comment?.postId;
-      if (!postId) throw new NotFoundException('Report not found');
-      await this.authorizedPost(tx, user.id, postId);
+        select: { postId: true, personId: true, comment: { select: { postId: true } } } });
+      if (report?.personId) {
+        // About a person: an admin's call, like everything else about one.
+        if (await this.moderationScope(tx, user.id)) throw new ForbiddenException('Only an admin can close a report about a person.');
+      } else {
+        const postId = report?.postId ?? report?.comment?.postId;
+        if (!postId) throw new NotFoundException('Report not found');
+        await this.authorizedPost(tx, user.id, postId);
+      }
       await tx.postReport.update({
         where: { id: reportId },
         data: {

@@ -9,9 +9,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { REPORTS_SUMMARY_KEY } from "@/lib/api/adminReports";
 import { plainText } from "@/lib/mentions";
+import { Link } from "react-router-dom";
 import {
   dismissReport,
   listReports,
+  markPersonReportHandled,
+  personPath,
   removeReportedComment,
   removeReportedPost,
   timeAgo,
@@ -113,9 +116,13 @@ function ReportCard({ report }: { report: ModerationReport }) {
     mutationFn: () =>
       report.target?.kind === "post"
         ? removeReportedPost(report.target.id, reason.trim())
-        : removeReportedComment(report.target!.id),
+        : report.target?.kind === "person"
+          // Nothing to take down on a person: the admin acts in the account
+          // tools and says here what was done.
+          ? markPersonReportHandled(report.id, reason.trim())
+          : removeReportedComment(report.target!.id),
     onSuccess: () => {
-      toast.success("Removed");
+      toast.success(report.target?.kind === "person" ? "Marked as handled" : "Removed");
       refresh();
     },
     onError: (e) => toast.error((e as Error).message),
@@ -132,6 +139,9 @@ function ReportCard({ report }: { report: ModerationReport }) {
 
   const busy = remove.isPending || dismiss.isPending;
   const isPost = report.target?.kind === "post";
+  const isPerson = report.target?.kind === "person";
+  // A post's removal and a person's handling both need a written reason.
+  const needsReason = isPost || isPerson;
 
   return (
     <div className="rounded-2xl border border-border bg-card p-5">
@@ -144,7 +154,7 @@ function ReportCard({ report }: { report: ModerationReport }) {
         </span>
         {report.target?.removed && (
           <Badge variant="outline" className="text-xs text-muted-foreground">
-            Already removed
+            {isPerson ? "Account already closed or suspended" : "Already removed"}
           </Badge>
         )}
       </div>
@@ -157,7 +167,19 @@ function ReportCard({ report }: { report: ModerationReport }) {
 
       {/* The content itself, so a decision is made on what was written rather
           than on how it was described. */}
-      {report.target ? (
+      {report.target?.kind === "person" ? (
+        // The person, with the way to everything they have posted and said,
+        // so the decision rests on what they did rather than on the report.
+        <div className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-muted/50 p-3 text-sm">
+          <span>
+            <span className="text-muted-foreground">Reported person: </span>
+            <span className="font-medium">{report.target.name}</span>
+          </span>
+          <Link to={personPath(report.target.id)} className="shrink-0 text-link hover:underline">
+            Open their page
+          </Link>
+        </div>
+      ) : report.target ? (
         <blockquote className="mt-3 whitespace-pre-wrap rounded-xl bg-muted/50 p-3 text-sm">
           {/* Mentions read as names, not as their stored tokens. */}
           {plainText(report.target.content) || <span className="text-muted-foreground">(no text)</span>}
@@ -173,7 +195,7 @@ function ReportCard({ report }: { report: ModerationReport }) {
           <Input
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            placeholder={isPost ? "Reason for removal (required)" : "Note (optional)"}
+            placeholder={isPost ? "Reason for removal (required)" : isPerson ? "What was done (required to mark handled)" : "Note (optional)"}
             maxLength={500}
             className="text-sm"
           />
@@ -184,14 +206,14 @@ function ReportCard({ report }: { report: ModerationReport }) {
             </Button>
             <Button
               size="sm"
-              variant="destructive"
+              variant={isPerson ? "default" : "destructive"}
               onClick={() => remove.mutate()}
               // A removal reason is required on posts: it is written into the
               // moderation record and is the only account of why this happened.
-              disabled={busy || (isPost && !reason.trim())}
+              disabled={busy || (needsReason && !reason.trim())}
             >
               {remove.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              Remove
+              {isPerson ? "Handled" : "Remove"}
             </Button>
           </div>
           {isPost && (

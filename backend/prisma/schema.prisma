@@ -125,6 +125,7 @@ model User {
   scheduledPosts     ScheduledPost[]
   communityVideos    CommunityVideo[]
   postCollaborations PostCollaborator[] @relation("PostCollaborations")
+  reportsAboutMe     PostReport[]       @relation("PersonReports")
   postViews          PostView[]
   postCtaClicks      PostCtaClick[]
   interviewPrepSessions InterviewPrepSession[]
@@ -137,6 +138,7 @@ model User {
   givenReactions      CandidateReaction[] @relation("CandidateReactionAuthor")
   spaceMemberships    SpaceMember[]   @relation("SpaceMemberships")
   spaceSuggestionDismissals SpaceSuggestionDismissal[] @relation("SpaceSuggestionDismissals")
+  followSuggestionDismissals FollowSuggestionDismissal[] @relation("FollowSuggestionDismissals")
   /// How this person appears to someone whose profile they viewed:
   /// 'named' | 'company' | 'private'. Null means the role's default —
   /// employers are attributed to their company, everyone else is private.
@@ -3337,6 +3339,26 @@ model SpaceMember {
   @@map("space_members")
 }
 
+/// A person or company page someone closed in "Who to follow" or
+/// "Professionals for you", so it is not offered again. Kept on the server for
+/// the same reason as space dismissals: it holds on every device.
+///
+/// The target is a user id (kind "person") or a company page id (kind
+/// "company"); no foreign key to it, as it is one of two tables. A row whose
+/// target is gone matches nothing and costs nothing.
+model FollowSuggestionDismissal {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  kind      String
+  targetId  String   @map("target_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation("FollowSuggestionDismissals", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, kind, targetId])
+  @@map("follow_suggestion_dismissals")
+}
+
 /// A space someone closed in "Suggested spaces", so it is not offered again.
 ///
 /// Kept rather than remembered in the browser: a suggestion you dismissed on
@@ -3372,6 +3394,9 @@ model PostReport {
   /// Exactly one of these is set.
   postId    String?      @map("post_id")
   commentId String?      @map("comment_id")
+  /// A person, reported from their community page. Only platform admins
+  /// review these: there is nothing on a space for its moderators to remove.
+  personId  String?      @map("person_id")
 
   reporterId String      @map("reporter_id")
   reason     String      @db.VarChar(40)
@@ -3387,11 +3412,13 @@ model PostReport {
 
   post    Post?        @relation(fields: [postId], references: [id], onDelete: Cascade)
   comment PostComment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  person  User?        @relation("PersonReports", fields: [personId], references: [id], onDelete: Cascade)
 
   /// One person may raise a given item once. Reporting twice is the same
   /// concern, not a stronger one.
   @@unique([postId, reporterId])
   @@unique([commentId, reporterId])
+  @@unique([personId, reporterId])
   @@index([status, createdAt])
   @@map("post_reports")
 }
