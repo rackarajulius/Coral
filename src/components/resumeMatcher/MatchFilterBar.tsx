@@ -1,5 +1,7 @@
+import { useState } from "react";
+import { Check, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { EmploymentType, Workplace } from "@/lib/api/resumeMatcher";
 import {
@@ -44,6 +46,60 @@ const PAY: Array<[number, string]> = [
 ];
 
 /**
+ * One filter's choices in a non-modal popover, so the page still scrolls and
+ * takes clicks while it is open. Picking a choice closes it.
+ */
+function FilterPopover<T extends string | number>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: Array<[T, string]>;
+  onChange: (next: T) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const current = options.find(([v]) => v === value)?.[1] ?? options[0][1];
+
+  return (
+    <Popover modal={false} open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`${label}: ${current}`}
+          className="flex h-9 min-w-[8.5rem] items-center justify-between gap-2 rounded-full border border-gray-300 bg-background px-3 text-sm ring-offset-background focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        >
+          <span>{current}</span>
+          <ChevronDown className="h-4 w-4 opacity-50" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-auto min-w-[var(--radix-popover-trigger-width)] p-1">
+        <div role="listbox" aria-label={label}>
+          {options.map(([v, text]) => (
+            <button
+              key={String(v)}
+              type="button"
+              role="option"
+              aria-selected={v === value}
+              onClick={() => {
+                onChange(v);
+                setOpen(false);
+              }}
+              className="relative flex w-full items-center rounded-sm py-1.5 pl-8 pr-2 text-left text-sm hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none"
+            >
+              {v === value && <Check className="absolute left-2 h-4 w-4" />}
+              {text}
+            </button>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
  * Sort and narrow the matches on the page.
  *
  * Works on the results already found, so changing a filter is instant and
@@ -62,54 +118,15 @@ export function MatchFilterBar({
   total: number;
 }) {
   const set = <K extends keyof MatchFilters>(key: K, value: MatchFilters[K]) => onChange({ ...filters, [key]: value });
-  const trigger = "h-9 w-auto min-w-[8.5rem] rounded-full text-sm";
 
   return (
-    <div className="mb-5 space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Select value={filters.sort} onValueChange={(v) => set("sort", v as MatchSort)}>
-          <SelectTrigger className={trigger} aria-label="Sort matches">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {SORTS.map(([value, label]) => (
-              <SelectItem key={value} value={value}>{label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        <Select value={String(filters.postedWithin)} onValueChange={(v) => set("postedWithin", Number(v) as PostedWithin)}>
-          <SelectTrigger className={trigger} aria-label="Date posted">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {POSTED.map(([value, label]) => (
-              <SelectItem key={value} value={String(value)}>{label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        <Select value={filters.employmentType} onValueChange={(v) => set("employmentType", v as MatchFilters["employmentType"])}>
-          <SelectTrigger className={trigger} aria-label="Job type">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {TYPES.map(([value, label]) => (
-              <SelectItem key={value} value={value}>{label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        <Select value={String(filters.minYearlyPay)} onValueChange={(v) => set("minYearlyPay", Number(v))}>
-          <SelectTrigger className={trigger} aria-label="Minimum pay">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {PAY.map(([value, label]) => (
-              <SelectItem key={value} value={String(value)}>{label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+    // The line runs the full screen width while the controls stay in the page column.
+    <div className="relative mb-5 space-y-3 pb-4 after:absolute after:bottom-0 after:left-1/2 after:w-screen after:-translate-x-1/2 after:border-b after:border-gray-300 after:content-['']">
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <FilterPopover label="Sort matches" value={filters.sort} options={SORTS} onChange={(v) => set("sort", v)} />
+        <FilterPopover label="Date posted" value={filters.postedWithin} options={POSTED} onChange={(v) => set("postedWithin", v)} />
+        <FilterPopover label="Job type" value={filters.employmentType} options={TYPES} onChange={(v) => set("employmentType", v)} />
+        <FilterPopover label="Minimum pay" value={filters.minYearlyPay} options={PAY} onChange={(v) => set("minYearlyPay", v)} />
 
         <ToggleGroup
           type="multiple"
@@ -119,7 +136,7 @@ export function MatchFilterBar({
           className="gap-1"
         >
           {(Object.keys(WORKPLACE_LABELS) as Workplace[]).map((w) => (
-            <ToggleGroupItem key={w} value={w} size="sm" variant="outline" className="h-9 rounded-full px-3 text-sm">
+            <ToggleGroupItem key={w} value={w} size="sm" variant="outline" className="h-9 rounded-full border-gray-300 px-3 text-sm">
               {WORKPLACE_LABELS[w]}
             </ToggleGroupItem>
           ))}
@@ -127,7 +144,7 @@ export function MatchFilterBar({
       </div>
 
       {isFiltering(filters) && (
-        <div className="flex items-center gap-3 text-sm text-muted-foreground" role="status">
+        <div className="flex items-center justify-center gap-3 text-sm text-muted-foreground" role="status">
           <span>
             Showing {shown} of {total} matches
           </span>

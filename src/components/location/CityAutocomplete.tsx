@@ -22,8 +22,11 @@ export interface CityAutocompleteProps {
   onBlur?: () => void;
   /** The person's country, as a code ("CA") or a name ("Canada"); its cities come first. */
   near?: string;
-  /** "pill" for search bars, "field" for forms. */
-  variant?: "pill" | "field";
+  /**
+   * "pill" for a search bar of its own, "inline" for a segment of a bar the
+   * parent draws (icon and text, no border), "field" for forms.
+   */
+  variant?: "pill" | "inline" | "field";
   placeholder?: string;
   id?: string;
   name?: string;
@@ -152,7 +155,7 @@ export const CityAutocomplete = forwardRef<HTMLInputElement, CityAutocompletePro
       }}
       onKeyDown={onKeyDown}
       className={cn(
-        variant === "pill" ? "border-0 bg-transparent px-0 h-auto shadow-none focus-visible:ring-0" : "pl-9",
+        variant !== "field" ? "border-0 bg-transparent px-0 h-auto shadow-none focus-visible:ring-0" : "pl-9",
         inputClassName,
       )}
     />
@@ -160,9 +163,18 @@ export const CityAutocomplete = forwardRef<HTMLInputElement, CityAutocompletePro
 
   return (
     <div className={cn("relative", className)}>
-      {variant === "pill" ? (
-        <div className="flex items-center h-11 rounded-full bg-card border border-border px-4 gap-2">
-          <MapPin className="h-4 w-4 text-muted-foreground shrink-0" aria-hidden="true" />
+      {variant !== "field" ? (
+        <div
+          className={cn(
+            "flex items-center gap-2",
+            variant === "pill" ? "h-11 rounded-full bg-card border border-border px-4" : "h-9",
+          )}
+        >
+          <MapPin
+            className="h-4 w-4 text-muted-foreground shrink-0"
+            strokeWidth={variant === "inline" ? 2.5 : 2}
+            aria-hidden="true"
+          />
           {input}
         </div>
       ) : (

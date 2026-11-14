@@ -5,7 +5,6 @@ import {
   BookmarkCheck,
   Briefcase,
   Building2,
-  ChevronsRight,
   Clock,
   ExternalLink,
   EyeOff,
@@ -14,6 +13,7 @@ import {
   Lock,
   MapPin,
   Wand2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
@@ -60,23 +60,8 @@ export function DockedMatchDrawer({
       }}
       className="sticky top-20 flex h-[calc(100vh-6rem)] min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm animate-in fade-in slide-in-from-right-4 duration-200 motion-reduce:animate-none"
     >
-      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8"
-          onClick={onClose}
-          aria-label="Close job details"
-          title="Close"
-        >
-          <ChevronsRight className="h-4 w-4" />
-        </Button>
-        <span className="text-xs font-medium text-muted-foreground">Job details</span>
-      </div>
       {/* Keyed so each job opens at its top. */}
-      <div key={match.id} className="flex-1 overflow-y-auto">
-        <MatchDetails m={match} actions={actions} />
-      </div>
+      <DetailsPane key={match.id} m={match} actions={actions} onClose={onClose} />
     </aside>
   );
 }
@@ -97,17 +82,13 @@ export function MatchDrawerSheet({
 
   return (
     <Sheet open={!!match} onOpenChange={(open) => !open && onClose()}>
-      <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-lg">
-        <div className="flex h-12 shrink-0 items-center border-b border-border px-4 pr-12">
-          <span className="text-xs font-medium text-muted-foreground">Job details</span>
-        </div>
+      {/* The sheet's own close is hidden: the details carry one in their top row. */}
+      <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-3xl [&>button:last-child]:hidden">
         {shown && (
           <>
             <SheetTitle className="sr-only">{shown.title}</SheetTitle>
             <SheetDescription className="sr-only">{shown.company}</SheetDescription>
-            <div key={shown.id} className="flex-1 overflow-y-auto">
-              <MatchDetails m={shown} actions={actionsFor(shown)} />
-            </div>
+            <DetailsPane key={shown.id} m={shown} actions={actionsFor(shown)} onClose={onClose} />
           </>
         )}
       </SheetContent>
@@ -115,8 +96,153 @@ export function MatchDrawerSheet({
   );
 }
 
-function MatchDetails({ m, actions }: { m: MatchedJob; actions: MatchActions }) {
+/**
+ * The scrolling details, with a bar that slides down from the top once the
+ * job title has scrolled away, so the reader still knows which job this is.
+ */
+function DetailsPane({ m, actions, onClose }: { m: MatchedJob; actions: MatchActions; onClose: () => void }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [titleGone, setTitleGone] = useState(false);
+  // One for the bar and the details, so both show the same state.
   const save = useMatchSave(m);
+  const barTab = titleGone ? 0 : -1;
+
+  useEffect(() => {
+    const root = scrollRef.current;
+    const title = root?.querySelector("[data-match-title]");
+    if (!root || !title) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        // Only once it has left over the top, not while it is still below.
+        const top = entry.rootBounds?.top ?? 0;
+        setTitleGone(!entry.isIntersecting && entry.boundingClientRect.top < top);
+      },
+      { root },
+    );
+    observer.observe(title);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div className="relative min-h-0 flex-1 overflow-hidden">
+      <div
+        aria-hidden={!titleGone}
+        className={`absolute inset-x-0 top-0 z-10 flex items-center gap-3 border-b border-border bg-card/95 px-5 py-2.5 shadow-sm backdrop-blur transition-transform duration-200 ease-out motion-reduce:transition-none sm:px-6 ${
+          titleGone ? "translate-y-0" : "pointer-events-none -translate-y-full"
+        }`}
+      >
+        <button
+          type="button"
+          tabIndex={barTab}
+          onClick={() => scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
+          className="group flex min-w-0 flex-1 items-center gap-2.5 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          title="Back to top"
+        >
+          <CompanyLogo company={m.company} src={m.logoUrl} className="h-8 w-8 shrink-0" />
+          <span className="min-w-0">
+            <span className="block truncate font-display text-sm font-semibold text-foreground group-hover:text-coral">
+              {m.title}
+            </span>
+            <span className="block truncate text-xs text-muted-foreground">{m.company}</span>
+          </span>
+        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <ApplyButton m={m} actions={actions} compact tabIndex={barTab} />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-full bg-muted hover:bg-muted-foreground/25 hover:text-foreground"
+            tabIndex={barTab}
+            onClick={save.toggle}
+            disabled={save.isPending}
+            aria-pressed={save.isSaved}
+            aria-label={save.isSaved ? "Saved" : "Save"}
+            title={save.isSaved ? "Saved" : "Save"}
+          >
+            {save.isSaved ? (
+              <BookmarkCheck className="h-4 w-4 text-coral" strokeWidth={2.75} />
+            ) : (
+              <Bookmark className="h-4 w-4" strokeWidth={2.75} />
+            )}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-full bg-muted text-foreground hover:bg-muted-foreground/25 hover:text-foreground"
+            tabIndex={barTab}
+            onClick={actions.onNotInterested}
+            aria-label="Not interested"
+            title="Not interested"
+          >
+            <EyeOff className="h-4 w-4" strokeWidth={2.75} />
+          </Button>
+          <CloseButton onClose={onClose} tabIndex={barTab} />
+        </div>
+      </div>
+      <div ref={scrollRef} className="h-full overflow-y-auto">
+        <MatchDetails m={m} actions={actions} save={save} onClose={onClose} />
+      </div>
+    </div>
+  );
+}
+
+function CloseButton({ onClose, tabIndex }: { onClose: () => void; tabIndex?: number }) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="h-8 w-8 shrink-0 rounded-full hover:bg-muted hover:text-foreground"
+      tabIndex={tabIndex}
+      onClick={onClose}
+      aria-label="Close job details"
+      title="Close"
+    >
+      <X className="h-4 w-4" />
+    </Button>
+  );
+}
+
+/** The way to apply: the outside listing in a new tab, or the job's page here. */
+function ApplyButton({
+  m,
+  actions,
+  compact,
+  tabIndex,
+}: {
+  m: MatchedJob;
+  actions: MatchActions;
+  compact?: boolean;
+  tabIndex?: number;
+}) {
+  if (!m.url) return null;
+  const site = applySite(m);
+  const className = compact ? "h-8 shrink-0 rounded-full px-3" : "rounded-full";
+  return /^https?:\/\//.test(m.url) ? (
+    <Button asChild variant="coral" size={compact ? "sm" : undefined} className={className}>
+      <a href={m.url} target="_blank" rel="noopener noreferrer" onClick={actions.onTrack} tabIndex={tabIndex}>
+        {compact ? "Apply" : site ? `Apply on ${site}` : "Open the listing"} <ExternalLink className="h-4 w-4" />
+      </a>
+    </Button>
+  ) : (
+    <Button asChild variant="coral" size={compact ? "sm" : undefined} className={className}>
+      <Link to={m.url} tabIndex={tabIndex}>
+        {compact ? "Apply" : "View job and apply"}
+      </Link>
+    </Button>
+  );
+}
+
+function MatchDetails({
+  m,
+  actions,
+  save,
+  onClose,
+}: {
+  m: MatchedJob;
+  actions: MatchActions;
+  save: ReturnType<typeof useMatchSave>;
+  onClose: () => void;
+}) {
   const headingRef = useRef<HTMLHeadingElement>(null);
   const blocks = useMemo(() => jobTextBlocks(m.description), [m.description]);
   const posted = postedAgo(m.postedAt);
@@ -141,13 +267,15 @@ function MatchDetails({ m, actions }: { m: MatchedJob; actions: MatchActions }) 
     <div className="space-y-5 p-5 sm:p-6">
       <div className="flex items-center gap-3">
         <CompanyLogo company={m.company} src={m.logoUrl} className="h-11 w-11" />
-        <p className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{m.company}</p>
+        <p className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{m.company}</p>
         <SourceBadge source={m.source} publishedOn={m.publishedOn} />
+        <CloseButton onClose={onClose} />
       </div>
 
       <div>
         <h2
           ref={headingRef}
+          data-match-title
           tabIndex={-1}
           className="font-display text-xl font-bold leading-snug text-foreground outline-none"
         >
@@ -167,21 +295,10 @@ function MatchDetails({ m, actions }: { m: MatchedJob; actions: MatchActions }) 
 
       <div>
         <div className="flex flex-wrap items-center gap-2">
-          {m.url &&
-            (external ? (
-              <Button asChild variant="coral" className="rounded-full">
-                <a href={m.url} target="_blank" rel="noopener noreferrer" onClick={actions.onTrack}>
-                  {site ? `Apply on ${site}` : "Open the listing"} <ExternalLink className="h-4 w-4" />
-                </a>
-              </Button>
-            ) : (
-              <Button asChild variant="coral" className="rounded-full">
-                <Link to={m.url}>View job and apply</Link>
-              </Button>
-            ))}
+          <ApplyButton m={m} actions={actions} />
           <Button
             variant="outline"
-            className="rounded-full"
+            className="rounded-full border-gray-300 hover:bg-muted-foreground/15 hover:text-foreground"
             onClick={save.toggle}
             disabled={save.isPending}
             aria-pressed={save.isSaved}
@@ -189,7 +306,9 @@ function MatchDetails({ m, actions }: { m: MatchedJob; actions: MatchActions }) 
             {save.isSaved ? <BookmarkCheck className="h-4 w-4 text-coral" /> : <Bookmark className="h-4 w-4" />}
             {save.isSaved ? "Saved" : "Save"}
           </Button>
-          <Button variant="ghost" className="rounded-full text-muted-foreground" onClick={actions.onNotInterested}>
+          <Button variant="outline" className="rounded-full border-gray-300 hover:bg-muted-foreground/15 hover:text-foreground"
+            onClick={actions.onNotInterested}
+          >
             <EyeOff className="h-4 w-4" /> Not interested
           </Button>
         </div>
