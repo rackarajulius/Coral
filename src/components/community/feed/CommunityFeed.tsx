@@ -143,6 +143,7 @@ export function CommunityFeed() {
   // everything rather than an empty "Saved" that is nobody's.
   const requested = parseView(params.get("view"));
   const view = isPersonalView(requested) && !user && !authLoading ? null : requested;
+  const showHomeToolbar = requested === null;
   const viewKey = view ?? "all";
   // Following's suggestion tabs replace the posts with a list of people.
   const followingTab: FollowingTab = view === "following" ? parseFollowingTab(params.get("tab")) : "posts";
@@ -340,50 +341,52 @@ export function CommunityFeed() {
     <div className="mx-auto grid min-h-[calc(100vh-3.5rem)] w-full max-w-[1120px] gap-6 px-4 sm:px-6 xl:grid-cols-[minmax(0,1fr)_340px]">
       {/* The column spans the whole middle track so the search row's rule can
           run edge to edge; what is read inside it keeps a reading width. */}
-      <div className="w-full min-w-0 pb-6">
-        {/* Search and "New post" share the top row. Searching hands off to the
+      <div className={cn("w-full min-w-0 pb-6", !showHomeToolbar && "pt-6")}>
+        {/* Home's search and "New post" share the top row. Searching hands off to the
             search page, which already does posts, spaces and #tags. Sticky
             under the community's 3.5rem bar, so both stay put while the feed
             scrolls beneath; -mx reaches across the page's side padding so the
             rule below runs from the nav's border to the rail. */}
-        <div className="sticky top-14 z-20 -mx-4 mb-5 border-b border-border bg-background px-4 pb-5 pt-6 sm:-mx-6 sm:px-6">
-          <div className={cn(READING_WIDTH, "flex items-center gap-3")}>
-            <form
-              role="search"
-              onSubmit={(e) => {
-                e.preventDefault();
-                const q = searchInput.trim();
-                navigate(q ? `/community/search?q=${encodeURIComponent(q)}` : "/community/search");
-              }}
-              className="relative min-w-0 flex-1"
-            >
-              <Search
-                className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground"
-                aria-hidden="true"
-              />
-              <input
-                type="search"
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                placeholder="Search posts, spaces and #tags..."
-                aria-label="Search the community"
-                maxLength={60}
-                className="h-10 w-full rounded-full border border-border bg-card pl-12 pr-5 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-foreground/20"
-              />
-            </form>
-            {/* Offered signed out too: the click asks for a sign-in and then
-                opens the composer, rather than hiding the way in. */}
-            <Button
-              size="sm"
-              className="shrink-0 gap-1.5 rounded-full bg-coral px-5 text-white hover:bg-coral/90"
-              onClick={() => requireAuth(() => setComposeOpen(true))}
-            >
-              <PenSquare className="h-4 w-4" aria-hidden="true" />
-              <span className="hidden sm:inline">New post</span>
-              <span className="sr-only sm:hidden">New post</span>
-            </Button>
+        {showHomeToolbar && (
+          <div className="sticky top-14 z-20 -mx-4 mb-5 border-b border-border bg-background px-4 pb-5 pt-6 sm:-mx-6 sm:px-6">
+            <div className={cn(READING_WIDTH, "flex items-center gap-3")}>
+              <form
+                role="search"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const q = searchInput.trim();
+                  navigate(q ? `/community/search?q=${encodeURIComponent(q)}` : "/community/search");
+                }}
+                className="relative min-w-0 flex-1"
+              >
+                <Search
+                  className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground"
+                  aria-hidden="true"
+                />
+                <input
+                  type="search"
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  placeholder="Search posts, spaces and #tags..."
+                  aria-label="Search the community"
+                  maxLength={60}
+                  className="h-10 w-full rounded-full border border-border bg-card pl-12 pr-5 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-foreground/20"
+                />
+              </form>
+              {/* Offered signed out too: the click asks for a sign-in and then
+                  opens the composer, rather than hiding the way in. */}
+              <Button
+                size="sm"
+                className="shrink-0 gap-1.5 rounded-full bg-coral px-5 text-white hover:bg-coral/90"
+                onClick={() => requireAuth(() => setComposeOpen(true))}
+              >
+                <PenSquare className="h-4 w-4" aria-hidden="true" />
+                <span className="hidden sm:inline">New post</span>
+                <span className="sr-only sm:hidden">New post</span>
+              </Button>
+            </div>
           </div>
-        </div>
+        )}
 
         <div className={READING_WIDTH}>
           {/* Every slice but Home keeps a heading, so what you are looking at
@@ -429,7 +432,7 @@ export function CommunityFeed() {
             </div>
           )}
 
-          {/* No prompt bar here: the "New post" button above opens it. */}
+          {/* The dialog also serves Create links and empty-feed actions. */}
           <PostComposer
             spaceId={null}
             open={composeOpen}
